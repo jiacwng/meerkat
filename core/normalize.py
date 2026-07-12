@@ -20,6 +20,20 @@ be used as our ground truth for grading """
 COLUMNS = ["detector_source", "timestamp", "name", "host", "severity", "attack_window"]
 
 
+AMINER_HOST_BY_IP = {
+    "172.19.130.4":    "mail",
+    "10.143.2.4":      "intranet-server",
+    "172.19.130.106":  "cloud-share",
+    "192.168.231.254": "inet-dns",
+    "172.19.128.1":    "inet-firewall",
+    "192.168.231.164": "morris-mail",
+    "192.168.231.56":  "davey-mail",
+    "172.19.130.68":   "webserver",
+    "10.143.0.103":    "internal-share",
+    "172.19.131.174":  "vpn",
+}
+
+
 @dataclass
 class ExtractedFields:
     """Simple structure to simplify what the 3 detectors are supposed to produce"""
@@ -80,11 +94,10 @@ def extract_suricata_fields(record: dict) -> ExtractedFields:
 
 
 def extract_aminer_fields(record: dict) -> ExtractedFields:
-    name = record["AnalysisComponent"]["AnalysisComponentName"]
+    ip = record.get("AMiner", {}).get("ID")
     return ExtractedFields(
-        name = name,
-        # AMiner has no severity concept and no way to recover a hostname from the data
-        host = "unknown",
+        name = record["AnalysisComponent"]["AnalysisComponentName"],
+        host = AMINER_HOST_BY_IP.get(ip,ip) if ip else "unknown",
         severity = float("nan"),
     )
     
@@ -120,7 +133,9 @@ def normalize(alerts_path: Path, labels_path: Path, scenario: str = "russellmitc
             "attack_window": window,
             })
     
-    return pd.DataFrame(rows,columns=COLUMNS)
+    df = pd.DataFrame(rows,columns=COLUMNS)
+    return df.sort_values("timestamp", kind="stable").reset_index(drop=True)
+
 
 
 
