@@ -1,0 +1,33 @@
+# ============================================================
+# Data — raw AIT-ADS downloads stay local (see data/README.md
+# for how to regenerate data/ait_alerts.json from the source)
+# ============================================================
+data/raw/
+
+# Trained models
+*.pkl
+
+# Kept local — reference implementation + learning docs, not part of the published project
+project_local/
+*.local.md
+
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
