@@ -1,0 +1,32 @@
+{
+ "_comment": "Reviewed detector rule -> ATT&CK technique mappings. Keyed by stable rule identity (wazuh rule.id, suricata signature_id, aminer AnalysisComponentName). An EMPTY list means 'reviewed: maps to nothing' and suppresses native detector tags (routine-activity noise); an ABSENT rule falls through to native tags. Every technique ID is validated against data/attack_lookup.json at load.",
+ "wazuh": {
+  "31516": ["T1505.003"],
+  "31101": ["T1595.002"],
+  "30305": ["T1595.002"],
+  "2501":  ["T1110"],
+  "9705":  ["T1110"],
+  "9701":  [],
+  "5501":  [],
+  "5715":  [],
+  "5706":  ["T1595"]
+ },
+ "suricata": {
+  "2024364": ["T1595"]
+ },
+ "aminer": {
+  "AMiner: High entropy in DNS domain.": ["T1048.003"],
+  "AMiner: New characters in DNS domain.": ["T1048.003"],
+  "AMiner: New ip address in DNS logs.": ["T1048.003"],
+  "AMiner: New query record in DNS logs.": ["T1048.003"],
+  "AMiner: Unusual occurrence frequencies of DNS log events.": ["T1048.003"],
+  "AMiner: Unusual occurrence frequencies of DNS query IPs.": ["T1048.003"],
+  "AMiner: Unusual occurrence frequencies of DNS query records.": ["T1048.003"],
+  "AMiner: Unusual occurrence frequencies of query records in DNS logs.": ["T1048.003"],
+  "AMiner: New service_stop parameter combination in Audit logs.": ["T1489"],
+  "AMiner: New request method in Apache Access log.": ["T1595.002"],
+  "AMiner: New status code in Apache Access log.": ["T1595.002"],
+  "AMiner: New characters in Apache Access request.": ["T1595.002"],
+  "AMiner: Unusual occurrence frequencies of Apache Access request methods.": ["T1595.002"]
+ }
+}
