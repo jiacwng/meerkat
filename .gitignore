@@ -4,10 +4,8 @@
 # ============================================================
 data/raw/
 
-# Trained models
+# local
 *.pkl
-
-# Kept local — reference implementation + learning docs, not part of the published project
 project_local/
 *.local.md
 
@@ -31,3 +29,4 @@ Thumbs.db
 .idea/
 .vscode/
 
+/tests

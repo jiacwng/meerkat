@@ -1,3 +1,24 @@
+<p align="center">
+  <img
+    src="docs/assets/meerkat-analyst.png"
+    alt="Pixel-art meerkat security analyst reviewing an alert"
+    width="334"
+  >
+</p>
+
+<h1 align="center">Meerkat</h1>
+
+<p align="center">
+  <strong>From noisy security alerts to prioritized, explainable investigation context.</strong>
+</p>
+
+<p align="center">
+  Meerkat estimates attack risk, prioritizes alerts, and enriches them
+  with MITRE ATT&CK context.
+</p>
+
+
+
 # Meerkat
 
 Meerkat is a small tool that looks at real security alerts from three different
