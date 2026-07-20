@@ -1,10 +1,10 @@
-"""maps detector alerts to MITRE ATT&CK techniques and tactics, then builds attack timelines, coverage statistics, and Navigator exports.
+"""Map detector alerts to MITRE ATT&CK and build analyst context.
 
 Public API:
-    map_alert(name, native_technique_ids) -> AlertMapping
-    attack_story(df)                      -> per-host tactic timeline
-    alert_context(df, host, timestamp)     -> one alert's known tactic history
-    tactic_coverage(tactics)              -> counts across all tactics
+    map_alert(detector, rule_id, native_ids) -> AlertMapping
+    attack_story(df)                        -> per-host tactic timeline
+    alert_context(df, host, timestamp)      -> one alert's known tactic history
+    tactic_coverage(tactics)                -> counts across all tactics
 """
 
 from __future__ import annotations
@@ -83,16 +83,18 @@ def load_detection_mappings(path: Path) -> dict[str, dict[str, list[str]]]:
     mappings = {k: v for k, v in raw.items() if not k.startswith("_")}
 
     known = ATTACK_LOOKUP["techniques"]
-    unknown = sorted({
-        technique_id
-        for detector_rules in mappings.values()
-        for technique_ids in detector_rules.values()
-        for technique_id in technique_ids
-        if technique_id not in known
-    })
+    unknown = set()
+    for detector_rules in mappings.values():
+        for technique_ids in detector_rules.values():
+            for technique_id in technique_ids:
+                if technique_id not in known:
+                    unknown.add(technique_id)
+
     # Configured IDs must exist; detector IDs may be newer than our lookup
     if unknown:
-        raise ValueError(f"unknown configured ATT&CK techniques: {unknown}")
+        raise ValueError(
+            f"unknown configured ATT&CK techniques: {sorted(unknown)}"
+        )
     return mappings
 
 
@@ -213,7 +215,6 @@ def export_navigator_layer(technique_ids, path: Path,
 
 if __name__ == "__main__":
     from datetime import datetime, timezone
-    from pathlib import Path
 
     from core.normalize import normalize
 
