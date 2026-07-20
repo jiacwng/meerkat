@@ -12,7 +12,6 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-PRIORITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
 WINDOWS_S = (60.0, 600.0, 3600.0)   
 MIN_NAME_COUNT = 50                  # threshold for the rare names bucket, depends on the size and diversity of our data
 RARE_NAME = "other"
@@ -21,7 +20,6 @@ RARE_NAME = "other"
 @dataclass
 class FeatureMatrix:
     X: pd.DataFrame
-    y: pd.Series
     attack_window: pd.Series
     feature_names: list[str]
     kept_names: frozenset[str]   # fit-time artifact: names that keep their own one-hot column
@@ -52,20 +50,6 @@ def bucket_rare_names(names: pd.Series, kept_names: frozenset[str] | None = None
 def _counts_in_window(timestamps: np.ndarray, window: float) -> np.ndarray:
     starts = np.searchsorted(timestamps, timestamps - window, side="left")
     return np.arange(len(timestamps)) - starts
-
-def derive_priority(attack_window: pd.Series, urgency_tier: pd.Series) -> pd.Series:
-    labels = []
-    for window, tier in zip(attack_window, urgency_tier):
-        if window != "" and tier == 2:
-            labels.append("CRITICAL")
-        elif window != "":
-            labels.append("HIGH")
-        elif tier >= 1:
-            labels.append("MEDIUM")
-        else:
-            labels.append("LOW")
-    return pd.Series(labels, index=attack_window.index, name="priority")
-
 
 def add_context_features(df: pd.DataFrame) -> pd.DataFrame:
     # fail check on new data
@@ -160,7 +144,6 @@ def build_feature_matrix(df: pd.DataFrame,
 
     return FeatureMatrix(
         X=X,
-        y=derive_priority(df["attack_window"], tier),
         attack_window=df["attack_window"].copy(),
         feature_names=list(X.columns),
         kept_names=kept_names,
@@ -177,7 +160,6 @@ if __name__ == "__main__":
     fm = build_feature_matrix(normalize(Path("data/ait_alerts.json"), Path("data/labels.csv")))
     print(f"X: {fm.X.shape[0]} alerts x {fm.X.shape[1]} features")
     print(f"kept names: {len(fm.kept_names)}")
-    print(fm.y.value_counts())
     for c in ("host_alerts_last_60s", "host_alerts_last_3600s", "global_alerts_last_600s",
               "detector_alerts_last_600s", "seconds_since_last_alert", "first_time_on_host"):
         print(f"{c}: min {fm.X[c].min():.0f}  max {fm.X[c].max():.0f}")

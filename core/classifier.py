@@ -1,8 +1,12 @@
-"""Random Forest priority classifier with SOC-oriented evaluation.
+"""Random Forest attack-window risk model with SOC-oriented evaluation.
 
 Public API:
-    train(X, y, attack_window)   -> (model, Holdout)
+    train(X, attack_window)      -> (model, Holdout)
     evaluate(model, holdout)     -> EvalReport
+    threshold_curve(risk, attack_window) -> threshold operating points
+    select_threshold(curve)      -> validation-selected threshold
+    analyst_budget_curve(risk, attack_window) -> Recall@K table
+    phase_recall(risk, attack_window, threshold) -> per-phase table
     predict(model, X)            -> (labels, attack risks)
     explain_prediction(model, x_row, feature_names) -> top feature drivers
     save_model(model, path) / load_model(path)
@@ -17,9 +21,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, confusion_matrix
-
-ESCALATE = ("CRITICAL", "HIGH")
 
 
 @dataclass(frozen=True)
@@ -31,42 +32,47 @@ class RiskThresholds:
 
 DEFAULT_THRESHOLDS = RiskThresholds()
 
+# evaluation policy
+ANALYST_BUDGETS = (10, 50, 100, 250, 500, 1000)
+THRESHOLD_GRID = tuple(i / 20 for i in range(21))
+MINIMUM_WINDOW_RECALL = 0.95
+
 
 @dataclass
 class Holdout:
-    # For rows to stay aligned
+    # Keep each partition's rows and labels aligned.
+    X_validation: pd.DataFrame
+    attack_window_validation: pd.Series
     X_test: pd.DataFrame
-    y_test: pd.Series
     attack_window_test: pd.Series
 
 
 @dataclass
 class EvalReport:
-    accuracy: float
-    macro_f1: float
-    per_class: dict[str, dict[str, float]]
-    confusion: np.ndarray
-    labels: list[str]
-    attack_recall: float
-    false_alarm_rate: float
+    selected_threshold: float
+    reviewed_alerts: int
+    window_recall: float
+    outside_window_review_rate: float
+    workload_reduction: float
+    validation_curve: pd.DataFrame
+    budget_curve: pd.DataFrame
+    phase_recall: pd.DataFrame
 
 
 def train(
     X: pd.DataFrame,
-    y: pd.Series,
     attack_window: pd.Series,
-    # 80/20 split with 300 trees for now
+    validation_size: float = 0.2,
     test_size: float = 0.2,
     n_estimators: int = 300,
     seed: int = 0,
 ) -> tuple[RandomForestClassifier, Holdout]:
-    split_at = int(len(X) * (1 - test_size))
+    validation_at = int(len(X) * (1 - test_size - validation_size))
+    test_at = int(len(X) * (1 - test_size))
 
-    # normalize() sorts by time, so the final rows form a future holdout.
-    X_train, X_test = X.iloc[:split_at], X.iloc[split_at:]
-    y_test = y.iloc[split_at:]
-    window_train = attack_window.iloc[:split_at]
-    window_test = attack_window.iloc[split_at:]
+    # normalize() sorts by time, so validation and test contain later alerts.
+    X_train = X.iloc[:validation_at]
+    window_train = attack_window.iloc[:validation_at]
 
     model = RandomForestClassifier(
         n_estimators=n_estimators,
@@ -75,47 +81,150 @@ def train(
         n_jobs=-1,
     )
     model.fit(X_train, window_train.ne(""))
-    return model, Holdout(X_test, y_test, window_test)
+    return model, Holdout(
+        X_validation=X.iloc[validation_at:test_at],
+        attack_window_validation=attack_window.iloc[validation_at:test_at],
+        X_test=X.iloc[test_at:],
+        attack_window_test=attack_window.iloc[test_at:],
+    )
 
+
+def threshold_curve(
+    risk: np.ndarray,
+    attack_window: pd.Series,
+    thresholds: tuple[float, ...] = THRESHOLD_GRID,
+) -> pd.DataFrame:
+    risk = np.asarray(risk, dtype=float)
+    in_window = attack_window.ne("").to_numpy()
+    rows = []
+
+    for threshold in thresholds:
+        reviewed = risk >= threshold
+        window_recall = (
+            float(reviewed[in_window].mean())
+            if in_window.any()
+            else float("nan")
+        )
+        outside_window_review_rate = (
+            float(reviewed[~in_window].mean())
+            if (~in_window).any()
+            else float("nan")
+        )
+        rows.append({
+            "threshold": float(threshold),
+            "reviewed": int(reviewed.sum()),
+            "window_recall": window_recall,
+            "outside_window_review_rate": outside_window_review_rate,
+            "workload_reduction": float(1 - reviewed.mean()),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def select_threshold(
+    curve: pd.DataFrame,
+    minimum_window_recall: float = MINIMUM_WINDOW_RECALL,
+) -> float:
+    eligible = curve[curve["window_recall"] >= minimum_window_recall]
+    return float(eligible.iloc[-1]["threshold"])
+
+
+def analyst_budget_curve(
+    risk: np.ndarray,
+    attack_window: pd.Series,
+    budgets: tuple[int, ...] = ANALYST_BUDGETS,
+) -> pd.DataFrame:
+    risk = np.asarray(risk, dtype=float)
+    in_window = attack_window.ne("").to_numpy()
+    order = np.argsort(-risk, kind="stable")
+    window_total = int(in_window.sum())
+    rows = []
+
+    for budget in budgets:
+        reviewed = min(budget, len(risk))
+        chosen = order[:reviewed]
+        found = int(in_window[chosen].sum())
+        rows.append({
+            "budget": budget,
+            "reviewed": reviewed,
+            "window_alerts_found": found,
+            "window_alerts_total": window_total,
+            "recall_at_k": found / window_total if window_total else float("nan"),
+            "workload_reduction": 1 - reviewed / len(risk),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def phase_recall(
+    risk: np.ndarray,
+    attack_window: pd.Series,
+    threshold: float,
+) -> pd.DataFrame:
+    risk = np.asarray(risk, dtype=float)
+    windows = attack_window.reset_index(drop=True)
+    reviewed = risk >= threshold
+    phases = windows[windows.ne("")].drop_duplicates()
+    rows = []
+
+    for phase in phases:
+        phase_rows = windows.eq(phase).to_numpy()
+        rows.append({
+            "phase": phase,
+            "support": int(phase_rows.sum()),
+            "reviewed": int(reviewed[phase_rows].sum()),
+            "recall": float(reviewed[phase_rows].mean()),
+        })
+
+    return pd.DataFrame(rows, columns=["phase", "support", "reviewed", "recall"])
 
 
 def evaluate(
     model: RandomForestClassifier,
     holdout: Holdout,
-    thresholds: RiskThresholds = DEFAULT_THRESHOLDS,
+    budgets: tuple[int, ...] = ANALYST_BUDGETS,
+    thresholds: tuple[float, ...] = THRESHOLD_GRID,
+    minimum_window_recall: float = MINIMUM_WINDOW_RECALL,
 ) -> EvalReport:
-    predicted, _ = predict(model, holdout.X_test, thresholds)
-    labels = sorted(set(holdout.y_test))
-    report = classification_report(
-        holdout.y_test, predicted, labels=labels, output_dict=True, zero_division=0
+    validation_risk = model.predict_proba(holdout.X_validation)[:, 1]
+    validation_curve = threshold_curve(
+        validation_risk,
+        holdout.attack_window_validation,
+        thresholds,
     )
-    per_class = {}
-    for label in labels:
-        per_class[label] = {
-            "precision": report[label]["precision"],
-            "recall": report[label]["recall"],
-            "f1": report[label]["f1-score"],
-            "support": report[label]["support"],
-        }
+    selected_threshold = select_threshold(
+        validation_curve,
+        minimum_window_recall,
+    )
 
-    """2 additional metrics, we label the critical/high labeled predictions
-    as escalated, then measure 2 additional metrics :
-    attack_recall: recall inside a real attack window
-    false_alarm_rate: escalated predictions that are outside a real attack window"""
-    escalated = pd.Series(predicted).isin(ESCALATE).to_numpy()
-    in_window = holdout.attack_window_test.ne("").to_numpy()
-    attack_recall = escalated[in_window].mean()
-    false_alarm_rate = escalated[~in_window].mean()
+    test_risk = model.predict_proba(holdout.X_test)[:, 1]
+    operating_point = threshold_curve(
+        test_risk,
+        holdout.attack_window_test,
+        (selected_threshold,),
+    ).iloc[0]
 
     return EvalReport(
-            accuracy=report["accuracy"],
-            macro_f1=report["macro avg"]["f1-score"],
-            per_class=per_class,
-            confusion=confusion_matrix(holdout.y_test, predicted, labels=labels),
-            labels=labels,
-            attack_recall=attack_recall,
-            false_alarm_rate=false_alarm_rate,
-        )
+        selected_threshold=selected_threshold,
+        reviewed_alerts=int(operating_point["reviewed"]),
+        window_recall=float(operating_point["window_recall"]),
+        outside_window_review_rate=float(
+            operating_point["outside_window_review_rate"]
+        ),
+        workload_reduction=float(operating_point["workload_reduction"]),
+        validation_curve=validation_curve,
+        budget_curve=analyst_budget_curve(
+            test_risk,
+            holdout.attack_window_test,
+            budgets,
+        ),
+        phase_recall=phase_recall(
+            test_risk,
+            holdout.attack_window_test,
+            selected_threshold,
+        ),
+    )
+
 
 def priority_from_risk(
     risk: np.ndarray,
@@ -179,20 +288,28 @@ if __name__ == "__main__":
     from core.features import build_feature_matrix
     from core.normalize import normalize
 
-    fm = build_feature_matrix(normalize(Path("data/ait_alerts.json"), Path("data/labels.csv")))
-    model, holdout = train(fm.X, fm.y, fm.attack_window)
+    fm = build_feature_matrix(
+        normalize(Path("data/ait_alerts.json"), Path("data/labels.csv"))
+    )
+    model, holdout = train(fm.X, fm.attack_window)
     report = evaluate(model, holdout)
 
-    print(f"accuracy {report.accuracy:.1%}   macro-F1 {report.macro_f1:.3f}")
-    print(f"attack-window recall {report.attack_recall:.1%}   "
-          f"false alarm rate {report.false_alarm_rate:.2%}")
-    for label in report.labels:
-        m = report.per_class[label]
-        print(f"  {label:9s} precision {m['precision']:.3f}  recall {m['recall']:.3f}"
-              f"  f1 {m['f1']:.3f}  n={m['support']:.0f}")
+    print(f"selected threshold: {report.selected_threshold:.2f}")
+    print(f"reviewed alerts: {report.reviewed_alerts}")
+    print(f"window recall: {report.window_recall:.1%}")
+    print(f"outside-window review rate: {report.outside_window_review_rate:.2%}")
+    print(f"workload reduction: {report.workload_reduction:.1%}")
+    print("\nAnalyst budgets")
+    print(report.budget_curve.to_string(index=False))
+    print("\nPer-phase recall")
+    print(report.phase_recall.to_string(index=False))
 
     labels, risks = predict(model, holdout.X_test)
     first_critical = int(np.flatnonzero(labels == "CRITICAL")[0])
-    drivers = explain_prediction(model, holdout.X_test.iloc[first_critical], fm.feature_names)
+    drivers = explain_prediction(
+        model,
+        holdout.X_test.iloc[first_critical],
+        fm.feature_names,
+    )
     pretty = ", ".join(f"{name}={value:g}" for name, value, _ in drivers)
     print(f"sample CRITICAL ({risks[first_critical]:.0%} attack risk): {pretty}")
