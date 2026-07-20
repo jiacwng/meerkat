@@ -1,8 +1,10 @@
 """Random Forest attack-window risk model with SOC-oriented evaluation.
 
 Public API:
+    fit_model(X, attack_window)  -> fitted model
     train(X, attack_window)      -> (model, Holdout)
     evaluate(model, holdout)     -> EvalReport
+    evaluate_risk(validation_risk, test_risk, holdout) -> EvalReport
     threshold_curve(risk, attack_window) -> threshold operating points
     select_threshold(curve)      -> validation-selected threshold
     analyst_budget_curve(risk, attack_window) -> Recall@K table
@@ -52,11 +54,33 @@ class EvalReport:
     selected_threshold: float
     reviewed_alerts: int
     window_recall: float
+    window_precision: float
     outside_window_review_rate: float
     workload_reduction: float
+    true_positive: int
+    false_positive: int
+    true_negative: int
+    false_negative: int
     validation_curve: pd.DataFrame
     budget_curve: pd.DataFrame
     phase_recall: pd.DataFrame
+    test_risk: np.ndarray
+
+
+def fit_model(
+    X: pd.DataFrame,
+    attack_window: pd.Series,
+    n_estimators: int = 300,
+    seed: int = 0,
+) -> RandomForestClassifier:
+    model = RandomForestClassifier(
+        n_estimators=n_estimators,
+        class_weight="balanced",
+        random_state=seed,
+        n_jobs=-1,
+    )
+    model.fit(X, attack_window.ne(""))
+    return model
 
 
 def train(
@@ -74,13 +98,7 @@ def train(
     X_train = X.iloc[:validation_at]
     window_train = attack_window.iloc[:validation_at]
 
-    model = RandomForestClassifier(
-        n_estimators=n_estimators,
-        class_weight="balanced",
-        random_state=seed,
-        n_jobs=-1,
-    )
-    model.fit(X_train, window_train.ne(""))
+    model = fit_model(X_train, window_train, n_estimators, seed)
     return model, Holdout(
         X_validation=X.iloc[validation_at:test_at],
         attack_window_validation=attack_window.iloc[validation_at:test_at],
@@ -100,9 +118,18 @@ def threshold_curve(
 
     for threshold in thresholds:
         reviewed = risk >= threshold
+        true_positive = int((reviewed & in_window).sum())
+        false_positive = int((reviewed & ~in_window).sum())
+        true_negative = int((~reviewed & ~in_window).sum())
+        false_negative = int((~reviewed & in_window).sum())
         window_recall = (
             float(reviewed[in_window].mean())
             if in_window.any()
+            else float("nan")
+        )
+        window_precision = (
+            true_positive / int(reviewed.sum())
+            if reviewed.any()
             else float("nan")
         )
         outside_window_review_rate = (
@@ -114,8 +141,13 @@ def threshold_curve(
             "threshold": float(threshold),
             "reviewed": int(reviewed.sum()),
             "window_recall": window_recall,
+            "window_precision": window_precision,
             "outside_window_review_rate": outside_window_review_rate,
             "workload_reduction": float(1 - reviewed.mean()),
+            "true_positive": true_positive,
+            "false_positive": false_positive,
+            "true_negative": true_negative,
+            "false_negative": false_negative,
         })
 
     return pd.DataFrame(rows)
@@ -179,14 +211,16 @@ def phase_recall(
     return pd.DataFrame(rows, columns=["phase", "support", "reviewed", "recall"])
 
 
-def evaluate(
-    model: RandomForestClassifier,
+def evaluate_risk(
+    validation_risk: np.ndarray,
+    test_risk: np.ndarray,
     holdout: Holdout,
     budgets: tuple[int, ...] = ANALYST_BUDGETS,
     thresholds: tuple[float, ...] = THRESHOLD_GRID,
     minimum_window_recall: float = MINIMUM_WINDOW_RECALL,
 ) -> EvalReport:
-    validation_risk = model.predict_proba(holdout.X_validation)[:, 1]
+    validation_risk = np.asarray(validation_risk, dtype=float)
+    test_risk = np.asarray(test_risk, dtype=float)
     validation_curve = threshold_curve(
         validation_risk,
         holdout.attack_window_validation,
@@ -197,7 +231,6 @@ def evaluate(
         minimum_window_recall,
     )
 
-    test_risk = model.predict_proba(holdout.X_test)[:, 1]
     operating_point = threshold_curve(
         test_risk,
         holdout.attack_window_test,
@@ -208,10 +241,15 @@ def evaluate(
         selected_threshold=selected_threshold,
         reviewed_alerts=int(operating_point["reviewed"]),
         window_recall=float(operating_point["window_recall"]),
+        window_precision=float(operating_point["window_precision"]),
         outside_window_review_rate=float(
             operating_point["outside_window_review_rate"]
         ),
         workload_reduction=float(operating_point["workload_reduction"]),
+        true_positive=int(operating_point["true_positive"]),
+        false_positive=int(operating_point["false_positive"]),
+        true_negative=int(operating_point["true_negative"]),
+        false_negative=int(operating_point["false_negative"]),
         validation_curve=validation_curve,
         budget_curve=analyst_budget_curve(
             test_risk,
@@ -223,6 +261,26 @@ def evaluate(
             holdout.attack_window_test,
             selected_threshold,
         ),
+        test_risk=test_risk,
+    )
+
+
+def evaluate(
+    model: RandomForestClassifier,
+    holdout: Holdout,
+    budgets: tuple[int, ...] = ANALYST_BUDGETS,
+    thresholds: tuple[float, ...] = THRESHOLD_GRID,
+    minimum_window_recall: float = MINIMUM_WINDOW_RECALL,
+) -> EvalReport:
+    validation_risk = model.predict_proba(holdout.X_validation)[:, 1]
+    test_risk = model.predict_proba(holdout.X_test)[:, 1]
+    return evaluate_risk(
+        validation_risk,
+        test_risk,
+        holdout,
+        budgets,
+        thresholds,
+        minimum_window_recall,
     )
 
 
@@ -258,8 +316,7 @@ def explain_prediction(
     feature_names: list[str],
     top: int = 3,
 ) -> list[tuple[str, float, float]]:
-    """Return the top active features for this alert, sorted by model importance
-    we assume a prediction has already been made"""
+    """Return this alert's top non-zero features by model importance."""
     importances = model.feature_importances_
     active = []
     for position, name in enumerate(feature_names):
