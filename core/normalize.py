@@ -2,6 +2,7 @@
 
 Public API:
     normalize(alerts_path, labels_path, scenario="russellmitchell") -> pd.DataFrame
+    normalize_scenario(raw_dir, labels_path, scenario) -> pd.DataFrame
 """
 
 from __future__ import annotations
@@ -16,25 +17,18 @@ from pathlib import Path
 
 import pandas as pd
 
-""" We use those columns that will be processed and used as features for the model, only attack_window won't
-be used as our ground truth for grading """
-
 COLUMNS = ["detector_source", "timestamp", "name", "host", "severity", "attack_window",
            "native_technique_ids", "rule_id"]
 
 
 @dataclass
 class ExtractedFields:
-    """Simple structure to simplify what the 3 detectors are supposed to produce"""
+    """Fields that every detector must provide after normalization."""
     name: str
     host: str
     severity: float
     native_technique_ids: str = ""   # ";"-joined ATT&CK IDs, wazuh only
     rule_id: str = ""                # stable detector rule identity, for mapping config
-
-
-"""context : a label.csv file contains the attack windows of the simulation,
-    we need it for the ground truth"""
 
 def load_attack_windows(labels_path: Path, scenario: str) -> list[tuple[float, float, str]]:
     windows = []
@@ -52,40 +46,37 @@ def find_attack_window(timestamp: float, windows: list[tuple[float, float, str]]
             return phase
     
     return ""
-    
 
 
 def get_timestamp(record: dict, detector: str) -> float:
-    # Aminer already stores the timestamp, 
+    # AMiner already stores the timestamp;
     # wazuh/suricata store an ISO-8601 string ending in "Z" for UTC
     if detector == "aminer":
         return float(record["LogData"]["Timestamps"][0])
     return datetime.fromisoformat(record["@timestamp"]).timestamp()
-    
 
-""" Both Wazuh and Suricata have completely different conventions"""
 
 def extract_wazuh_fields(record: dict) -> ExtractedFields:
     rule = record["rule"]
     host = record.get("predecoder", {}).get("hostname") or record["agent"]["name"]
     mitre = rule.get("mitre") or {}
     return ExtractedFields(
-        name = rule["description"],
-        host = host,
-        severity = float(rule["level"]),
+        name=rule["description"],
+        host=host,
+        severity=float(rule["level"]),
         # mitre IDs fields have multiple values so we join them
         native_technique_ids=";".join(mitre.get("id") or []),
-        rule_id = str(rule.get("id", "")),
+        rule_id=str(rule.get("id", "")),
     )
     
 
 def extract_suricata_fields(record: dict) -> ExtractedFields:
     alert = record["data"]["alert"]
     return ExtractedFields(
-        name = alert["signature"],
-        host = record["agent"]["name"],
-        severity = float(alert["severity"]),
-        rule_id = str(alert.get("signature_id", "")),
+        name=alert["signature"],
+        host=record["agent"]["name"],
+        severity=float(alert["severity"]),
+        rule_id=str(alert.get("signature_id", "")),
     )
     
 
@@ -118,16 +109,16 @@ def discover_aminer_hosts(alerts_path: Path) -> dict[str, str]:
     with alerts_path.open(encoding="utf-8") as fh:
         for line in fh:
             record = json.loads(line)
-            if record["detector_source"] != "aminer":
+            if "AMiner" not in record:
                 continue
             ip = str(record["AMiner"]["ID"])
             candidates[ip].update(aminer_host_candidates(record))
 
-    return {
-        ip: next(iter(names))
-        for ip, names in candidates.items()
-        if len(names) == 1
-    }
+    hosts = {}
+    for ip, names in candidates.items():
+        if len(names) == 1:
+            hosts[ip] = next(iter(names))
+    return hosts
 
 
 def extract_aminer_fields(
@@ -137,47 +128,104 @@ def extract_aminer_fields(
     ip = str(record["AMiner"]["ID"])
     component = record["AnalysisComponent"]["AnalysisComponentName"]
     return ExtractedFields(
-        name = component,
-        host = host_by_ip[ip],
-        severity = float("nan"),
+        name=component,
+        host=host_by_ip.get(ip, ip),
+        severity=float("nan"),
         # aminer has no numeric rule ids; the analysis component IS its stable identity
-        rule_id = str(component),
+        rule_id=str(component),
     )
-    
 
 
-def normalize(alerts_path: Path, labels_path: Path, scenario: str = "russellmitchell") -> pd.DataFrame:
-    windows = load_attack_windows(labels_path,scenario)
+def classify_wazuh_record(record: dict) -> str:
+    if record.get("decoder", {}).get("name") == "snort":
+        return ""
+    if "alert" in record.get("data", {}):
+        return "suricata"
+    return "wazuh"
+
+
+def normalize_record(
+    record: dict,
+    detector: str,
+    windows: list[tuple[float, float, str]],
+    host_by_ip: dict[str, str],
+) -> dict:
+    if detector == "wazuh":
+        fields = extract_wazuh_fields(record)
+    elif detector == "suricata":
+        fields = extract_suricata_fields(record)
+    else:
+        fields = extract_aminer_fields(record, host_by_ip)
+
+    timestamp = get_timestamp(record, detector)
+    return {
+        "detector_source": detector,
+        "timestamp": timestamp,
+        "name": fields.name,
+        "host": fields.host,
+        "severity": fields.severity,
+        "attack_window": find_attack_window(timestamp, windows),
+        "native_technique_ids": fields.native_technique_ids,
+        "rule_id": fields.rule_id,
+    }
+
+
+def normalize(
+    alerts_path: Path,
+    labels_path: Path,
+    scenario: str = "russellmitchell",
+) -> pd.DataFrame:
+    windows = load_attack_windows(labels_path, scenario)
     aminer_hosts = discover_aminer_hosts(alerts_path)
     rows = []
 
     with alerts_path.open(encoding="utf-8") as fh:
         for line in fh:
             record = json.loads(line)
-            detector = record["detector_source"]
+            rows.append(normalize_record(
+                record,
+                record["detector_source"],
+                windows,
+                aminer_hosts,
+            ))
 
-            if detector == "wazuh":
-                fields = extract_wazuh_fields(record)
-            elif detector == "suricata":
-                fields = extract_suricata_fields(record)
-            elif detector == "aminer":
-                fields = extract_aminer_fields(record, aminer_hosts)
+    df = pd.DataFrame(rows, columns=COLUMNS)
+    return df.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
-            timestamp = get_timestamp(record, detector)
-            window = find_attack_window(timestamp, windows)
 
-            rows.append({
-            "detector_source": detector,
-            "timestamp": timestamp,
-            "name": fields.name,
-            "host": fields.host,
-            "severity": fields.severity,
-            "attack_window": window,
-            "native_technique_ids": fields.native_technique_ids,
-            "rule_id": fields.rule_id,
-            })
-    
-    df = pd.DataFrame(rows,columns=COLUMNS)
+def normalize_scenario(
+    raw_dir: Path,
+    labels_path: Path,
+    scenario: str,
+) -> pd.DataFrame:
+    aminer_path = raw_dir / f"{scenario}_aminer.json"
+    wazuh_path = raw_dir / f"{scenario}_wazuh.json"
+    windows = load_attack_windows(labels_path, scenario)
+    aminer_hosts = discover_aminer_hosts(aminer_path)
+    rows = []
+
+    with aminer_path.open(encoding="utf-8") as fh:
+        for line in fh:
+            rows.append(normalize_record(
+                json.loads(line),
+                "aminer",
+                windows,
+                aminer_hosts,
+            ))
+
+    with wazuh_path.open(encoding="utf-8") as fh:
+        for line in fh:
+            record = json.loads(line)
+            detector = classify_wazuh_record(record)
+            if detector:
+                rows.append(normalize_record(
+                    record,
+                    detector,
+                    windows,
+                    aminer_hosts,
+                ))
+
+    df = pd.DataFrame(rows, columns=COLUMNS)
     return df.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
 
