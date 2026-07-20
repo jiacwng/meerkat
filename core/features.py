@@ -12,8 +12,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-WINDOWS_S = (60.0, 600.0, 3600.0)   
-MIN_NAME_COUNT = 50                  # threshold for the rare names bucket, depends on the size and diversity of our data
+WINDOWS_S = (60.0, 600.0, 3600.0)
+MIN_NAME_COUNT = 50
 RARE_NAME = "other"
 
 
@@ -22,11 +22,10 @@ class FeatureMatrix:
     X: pd.DataFrame
     attack_window: pd.Series
     feature_names: list[str]
-    kept_names: frozenset[str]   # fit-time artifact: names that keep their own one-hot column
+    kept_names: frozenset[str]
 
 
 def compute_urgency_tier(df: pd.DataFrame) -> pd.Series:
-
     detector, severity = df["detector_source"], df["severity"]
     tier = pd.Series(0, index=df.index, name="urgency_tier")
 
@@ -39,7 +38,10 @@ def compute_urgency_tier(df: pd.DataFrame) -> pd.Series:
     return tier
 
 
-def bucket_rare_names(names: pd.Series, kept_names: frozenset[str] | None = None) -> tuple[pd.Series, frozenset[str]]:
+def bucket_rare_names(
+    names: pd.Series,
+    kept_names: frozenset[str] | None = None,
+) -> tuple[pd.Series, frozenset[str]]:
     if kept_names is None:
         counts = names.value_counts()
         kept_names = frozenset(counts[counts >= MIN_NAME_COUNT].index)
@@ -48,14 +50,14 @@ def bucket_rare_names(names: pd.Series, kept_names: frozenset[str] | None = None
 
 
 def _counts_in_window(timestamps: np.ndarray, window: float) -> np.ndarray:
+    # Vectorized counting keeps the global streams fast on millions of alerts.
     starts = np.searchsorted(timestamps, timestamps - window, side="left")
     return np.arange(len(timestamps)) - starts
 
+
 def add_context_features(df: pd.DataFrame) -> pd.DataFrame:
-    # fail check on new data
     assert df["timestamp"].is_monotonic_increasing, "normalize() must sort by time"
 
-    # Create a copy so our original df is not modified directly
     out = df.copy()
 
     for window_s in WINDOWS_S:
@@ -108,31 +110,42 @@ def add_context_features(df: pd.DataFrame) -> pd.DataFrame:
             per_detector[group.index.to_numpy()] = counts
         out[f"detector_alerts_last_{tag}"] = per_detector
 
-    out["seconds_since_last_alert"] = df.groupby("host")["timestamp"].diff().fillna(-1.0) # if no previous alert, defaults time to -1
-    out["times_name_seen_before"] = df.groupby("name").cumcount().astype(float) # The feature matrix will expect floats
-    out["first_time_on_host"] = (df.groupby(["host", "name"]).cumcount() == 0).astype(float)
+    out["seconds_since_last_alert"] = (
+        df.groupby("host")["timestamp"].diff().fillna(-1.0)
+    )
+    out["times_name_seen_before"] = (
+        df.groupby("name").cumcount().astype(float)
+    )
+    out["first_time_on_host"] = (
+        df.groupby(["host", "name"]).cumcount() == 0
+    ).astype(float)
     return out
 
 
 
-def build_feature_matrix(df: pd.DataFrame,
-                         kept_names: frozenset[str] | None = None) -> FeatureMatrix:
+def build_feature_matrix(
+    df: pd.DataFrame,
+    kept_names: frozenset[str] | None = None,
+    include_host_identity: bool = True,
+) -> FeatureMatrix:
     tier = compute_urgency_tier(df)
     context = add_context_features(df)
     # kept_names is computed here at training time, and passed
     # back in at prediction time so new data one-hot-encodes identically
     bucketed_names, kept_names = bucket_rare_names(df["name"], kept_names)
 
-    # one hot encoding for dummy variables (bucketed names, not raw)
     onehot_input = pd.DataFrame({
         "detector_source": df["detector_source"],
         "name": bucketed_names,
-        "host": df["host"],
     })
-    X = pd.get_dummies(onehot_input, prefix=["detector", "name", "host"], dtype=float)
+    prefixes = ["detector", "name"]
+    if include_host_identity:
+        onehot_input["host"] = df["host"]
+        prefixes.append("host")
+    X = pd.get_dummies(onehot_input, prefix=prefixes, dtype=float)
 
     X["urgency_tier"] = tier.astype(float)
-    # every column add_context_features created 
+    # Copy only the context columns added to the normalized table.
     for col in context.columns:
         if col not in df.columns:
             X[col] = context[col]
