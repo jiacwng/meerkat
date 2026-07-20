@@ -30,4 +30,26 @@ Random Forest classifier to help rank what matters. It's a learning project
 built to understand how SOC (Security Operations Center) triage actually
 works, end to end, on real data rather than a toy dataset.
 
+## Cross-Environment Evaluation
+
+Meerkat is evaluated with leave-one-scenario-out testing across all eight
+AIT-ADS simulated enterprise environments. For each fold, seven scenarios are
+used for training and validation, while the eighth remains completely unseen.
+The primary model excludes direct host-name identity to reduce environment
+memorization.
+
+With the 300-tree Random Forest, the scenario-macro results are:
+
+| Metric | Result |
+|---|---:|
+| Attack-window recall | 86.44% |
+| Workload reduction | 54.13% |
+| Outside-window review rate | 0.011% |
+
+Performance is uneven: recall falls to 44.70% on the weakest held-out
+scenario, and several sparse attack phases remain undetected. Also, an alert
+outside a simulated attack window is not necessarily benign, so the
+outside-window metric must not be interpreted as a confirmed false-positive
+rate.
+
 WIP
