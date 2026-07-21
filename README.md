@@ -52,4 +52,8 @@ outside a simulated attack window is not necessarily benign, so the
 outside-window metric must not be interpreted as a confirmed false-positive
 rate.
 
+Attack-window prevalence varies from 10.2% to 91.2% across the eight simulated
+scenarios. The workload-reduction number is therefore specific to this
+benchmark and should not be read as a production workload forecast.
+
 WIP
