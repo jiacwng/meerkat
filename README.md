@@ -9,51 +9,125 @@
 <h1 align="center">Meerkat</h1>
 
 <p align="center">
-  <strong>From noisy security alerts to prioritized, explainable investigation context.</strong>
+  <strong>Alert triage for multi-detector SOC data.</strong>
 </p>
 
-<p align="center">
-  Meerkat estimates attack risk, prioritizes alerts, and enriches them
-  with MITRE ATT&CK context.
-</p>
+## About
 
+Security detectors produce far more alerts than analysts can review. Detection
+has already happened by the time an alert exists, so the remaining question is
+which alerts a human should read first.
 
+Meerkat reads alerts from Suricata, Wazuh and AMiner, normalizes them into one
+common format, scores each alert with supervised models, maps it to MITRE
+ATT&CK techniques and tactics, and produces a fixed size daily review queue.
 
-# Meerkat
+Methods, experiments and measured results are documented in the technical
+report: **[Meerkat: Alert Triage for Multi-Detector Security Operations Data](docs/report/meerkat.pdf)**.
 
-Meerkat is a small tool that looks at real security alerts from three different
-detectors (Suricata, Wazuh, and AMiner) and tries to figure out which ones
-actually deserve a human's attention. Modern security teams get buried in
-thousands of alerts a day, and most of them are noise.
-This project combines a bit of rule-based context (mapping alerts to MITRE ATT&CK tactics) with a
-Random Forest classifier to help rank what matters. It's a learning project
-built to understand how SOC (Security Operations Center) triage actually
-works, end to end, on real data rather than a toy dataset.
+## Installation
 
-## Cross-Environment Evaluation
+```bash
+git clone https://github.com/jiacwng/meerkat.git
+cd meerkat
+pip install -r requirements.txt
+```
 
-Meerkat is evaluated with leave-one-scenario-out testing across all eight
-AIT-ADS simulated enterprise environments. For each fold, seven scenarios are
-used for training and validation, while the eighth remains completely unseen.
-The primary model excludes direct host-name identity to reduce environment
-memorization.
+Requires Python 3.11 or later.
 
-With the 300-tree Random Forest, the scenario-macro results are:
+## Dataset
 
-| Metric | Result |
-|---|---:|
-| Attack-window recall | 86.44% |
-| Workload reduction | 54.13% |
-| Outside-window review rate | 0.011% |
+Experiments use [AIT-ADS](https://zenodo.org/records/8263181) (Austrian
+Institute of Technology, CC BY 4.0): eight simulated enterprise environments
+monitored by Suricata, Wazuh and AMiner, each subjected to a scripted
+multi step attack.
 
-Performance is uneven: recall falls to 44.70% on the weakest held-out
-scenario, and several sparse attack phases remain undetected. Also, an alert
-outside a simulated attack window is not necessarily benign, so the
-outside-window metric must not be interpreted as a confirmed false-positive
-rate.
+One environment ships with the repository, so the single environment example
+below runs immediately after installation. The remaining data is optional:
 
-Attack-window prevalence varies from 10.2% to 91.2% across the eight simulated
-scenarios. The workload-reduction number is therefore specific to this
-benchmark and should not be read as a production workload forecast.
+| Task | Data required |
+|---|---|
+| Single environment training and evaluation | included (`data/ait_alerts.json`) |
+| Cross environment evaluation | `ait_ads.zip` from Zenodo, extracted to `data/raw/` |
+| Event label supervision and audit | `alerts_csv.zip` from the [project repository](https://github.com/ait-aecid/alert-data-set), extracted to `data/raw/alerts_csv/` |
 
-WIP
+Expected layout for the optional downloads:
+
+```
+data/raw/<scenario>_wazuh.json
+data/raw/<scenario>_aminer.json
+data/raw/alerts_csv/<scenario>_alerts.txt
+```
+
+## Usage
+
+The command line interface is in development. Current entry points are the
+library modules.
+
+Load alerts, build features and train a model on one environment:
+
+```python
+from pathlib import Path
+from core.normalize import normalize
+from core.features import build_feature_matrix
+from core.classifier import train, evaluate
+
+alerts = normalize(Path("data/ait_alerts.json"), Path("data/labels.csv"))
+matrix = build_feature_matrix(alerts)
+model, holdout = train(matrix.X, matrix.attack_window)
+report = evaluate(model, holdout)
+
+print(report.window_recall, report.workload_reduction)
+```
+
+Evaluate across all eight environments, training on seven and testing on the
+one held out:
+
+```python
+from core.scenario_eval import load_scenarios, evaluate_scenarios
+
+frames = load_scenarios(Path("data/raw"), Path("data/labels.csv"))
+report = evaluate_scenarios(frames)
+
+print(report.summary)
+```
+
+Map alerts to ATT&CK and export a layer file for the
+[ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/):
+
+```python
+from core.attack_mapping import map_alert, export_navigator_layer
+
+mapping = map_alert("wazuh", "31516", "T1055")
+print(mapping.technique_ids, mapping.tactics)
+```
+
+Verify the dataset labels before use:
+
+```bash
+python -m core.event_labels
+```
+
+## Modules
+
+| Module | Purpose |
+|---|---|
+| `core/normalize.py` | Maps three detector schemas onto one alert table |
+| `core/features.py` | Encodes alerts as numeric features |
+| `core/classifier.py` | Random Forest ranking models and evaluation |
+| `core/attack_mapping.py` | MITRE ATT&CK technique and tactic mapping |
+| `core/triage_policy.py` | Priority bands and daily queue construction |
+| `core/scenario_eval.py` | Leave one scenario out evaluation |
+| `core/event_labels.py` | Official per alert label loading and audit |
+
+## Status
+
+Evaluated across eight simulated environments. The current model reaches 28 of
+79 labelled attack windows and misses quiet attack phases; measured results and
+their limitations are reported in full in the technical report. Packaging and
+the command line interface are in progress.
+
+## License
+
+Code released under the MIT License. The AIT-ADS dataset is distributed
+separately by the Austrian Institute of Technology under CC BY 4.0.
