@@ -83,6 +83,35 @@ def fit_model(
     return model
 
 
+def category_weights(event_label: pd.Series) -> dict[str, float]:
+    """Give rare event categories more influence without extreme weights."""
+    counts = event_label[event_label.ne("")].value_counts().astype(float)
+    raw = (counts.max() / counts).pow(0.5).clip(upper=10.0)
+    scale = float((raw * counts).sum() / counts.sum())
+    return {category: float(weight / scale) for category, weight in raw.items()}
+
+
+def fit_event_model(
+    X: pd.DataFrame,
+    event_label: pd.Series,
+    weights: dict[str, float] | None = None,
+    n_estimators: int = 300,
+    seed: int = 0,
+) -> RandomForestClassifier:
+    """Train a forest to rank event-labeled alerts above unlabeled alerts."""
+    sample_weight = None
+    if weights is not None:
+        sample_weight = event_label.map(weights).fillna(1.0).to_numpy()
+    model = RandomForestClassifier(
+        n_estimators=n_estimators,
+        class_weight="balanced",
+        random_state=seed,
+        n_jobs=-1,
+    )
+    model.fit(X, event_label.ne(""), sample_weight=sample_weight)
+    return model
+
+
 def train(
     X: pd.DataFrame,
     attack_window: pd.Series,
