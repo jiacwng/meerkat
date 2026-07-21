@@ -36,7 +36,13 @@ class PreparedFold:
     attack_window_train: pd.Series
     holdout: Holdout
     feature_names: list[str]
+    event_feature_names: list[str]
     kept_names: frozenset[str]
+    event_train: pd.Series | None = None
+    event_validation: pd.Series | None = None
+    event_test: pd.Series | None = None
+    validation_scenarios: pd.Series | None = None
+    test_meta: pd.DataFrame | None = None
 
 
 @dataclass
@@ -50,9 +56,10 @@ def load_scenarios(
     raw_dir: Path,
     labels_path: Path,
     scenarios: tuple[str, ...] = SCENARIOS,
+    event_csv_dir: Path | None = None,
 ) -> dict[str, pd.DataFrame]:
     return {
-        scenario: normalize_scenario(raw_dir, labels_path, scenario)
+        scenario: normalize_scenario(raw_dir, labels_path, scenario, event_csv_dir)
         for scenario in scenarios
     }
 
@@ -63,7 +70,7 @@ def prepare_fold(
     validation_size: float = 0.2,
 ) -> PreparedFold:
     # Learn alert-name categories and feature columns from training data only,
-    # so the test scenario remains completely unseen.   
+    # so the test scenario remains completely unseen.
     training_frames = {
         name: frame for name, frame in frames.items() if name != test_scenario
     }
@@ -78,11 +85,16 @@ def prepare_fold(
     ], ignore_index=True)
     _, kept_names = bucket_rare_names(training_names)
 
+    has_events = all("event_label" in f.columns for f in frames.values())
+
     # Build each scenario separately so rolling context resets at its boundary.
     train_parts = []
     validation_parts = []
     validation_windows = []
     training_windows = []
+    event_train_parts = []
+    event_validation_parts = []
+    validation_scenario_parts = []
     for name, frame in training_frames.items():
         matrix = build_feature_matrix(
             frame,
@@ -94,9 +106,24 @@ def prepare_fold(
         training_windows.append(matrix.attack_window.iloc[:position])
         validation_parts.append(matrix.X.iloc[position:])
         validation_windows.append(matrix.attack_window.iloc[position:])
+        if has_events:
+            event_train_parts.append(frame["event_label"].iloc[:position])
+            event_validation_parts.append(frame["event_label"].iloc[position:])
+            validation_scenario_parts.append(
+                pd.Series(name, index=range(len(frame) - position))
+            )
 
     X_train = pd.concat(train_parts, ignore_index=True, sort=False).fillna(0.0)
     feature_names = list(X_train.columns)
+    event_feature_names = [
+        name for name in feature_names
+        if name == "urgency_tier"
+        or (
+            name.startswith("detector_")
+            and not name.startswith("detector_alerts_last_")
+        )
+        or name.startswith("name_")
+    ]
     # Validation and test data must use exactly the training columns.
     X_validation = pd.concat(
         validation_parts,
@@ -111,6 +138,7 @@ def prepare_fold(
     )
     X_test = test_matrix.X.reindex(columns=feature_names, fill_value=0.0)
 
+    test_frame = frames[test_scenario]
     return PreparedFold(
         X_train=X_train,
         attack_window_train=pd.concat(training_windows, ignore_index=True),
@@ -124,7 +152,31 @@ def prepare_fold(
             attack_window_test=test_matrix.attack_window.reset_index(drop=True),
         ),
         feature_names=feature_names,
+        event_feature_names=event_feature_names,
         kept_names=kept_names,
+        event_train=(
+            pd.concat(event_train_parts, ignore_index=True) if has_events else None
+        ),
+        event_validation=(
+            pd.concat(event_validation_parts, ignore_index=True)
+            if has_events else None
+        ),
+        event_test=(
+            test_frame["event_label"].reset_index(drop=True) if has_events else None
+        ),
+        validation_scenarios=(
+            pd.concat(validation_scenario_parts, ignore_index=True)
+            if has_events else None
+        ),
+        test_meta=test_frame[
+            [
+                "timestamp",
+                "host",
+                "detector_source",
+                "rule_id",
+                "native_technique_ids",
+            ]
+        ].reset_index(drop=True),
     )
 
 
