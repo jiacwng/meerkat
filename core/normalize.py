@@ -197,6 +197,7 @@ def normalize_scenario(
     raw_dir: Path,
     labels_path: Path,
     scenario: str,
+    event_csv_dir: Path | None = None,
 ) -> pd.DataFrame:
     aminer_path = raw_dir / f"{scenario}_aminer.json"
     wazuh_path = raw_dir / f"{scenario}_wazuh.json"
@@ -204,28 +205,44 @@ def normalize_scenario(
     aminer_hosts = discover_aminer_hosts(aminer_path)
     rows = []
 
+    # The official label CSV follows raw file order: Wazuh, then AMiner.
+    event_labels: list[str] | None = None
+    aminer_offset = 0
+    if event_csv_dir is not None:
+        from core.event_labels import load_scenario_labels
+        _, _, _, event_labels = load_scenario_labels(event_csv_dir, scenario)
+        with wazuh_path.open(encoding="utf-8") as fh:
+            aminer_offset = sum(1 for _ in fh)
+
     with aminer_path.open(encoding="utf-8") as fh:
-        for line in fh:
-            rows.append(normalize_record(
+        for position, line in enumerate(fh):
+            row = normalize_record(
                 json.loads(line),
                 "aminer",
                 windows,
                 aminer_hosts,
-            ))
+            )
+            if event_labels is not None:
+                row["event_label"] = event_labels[aminer_offset + position]
+            rows.append(row)
 
     with wazuh_path.open(encoding="utf-8") as fh:
-        for line in fh:
+        for position, line in enumerate(fh):
             record = json.loads(line)
             detector = classify_wazuh_record(record)
             if detector:
-                rows.append(normalize_record(
+                row = normalize_record(
                     record,
                     detector,
                     windows,
                     aminer_hosts,
-                ))
+                )
+                if event_labels is not None:
+                    row["event_label"] = event_labels[position]
+                rows.append(row)
 
-    df = pd.DataFrame(rows, columns=COLUMNS)
+    columns = COLUMNS + ["event_label"] if event_labels is not None else COLUMNS
+    df = pd.DataFrame(rows, columns=columns)
     return df.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
 
