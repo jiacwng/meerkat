@@ -151,7 +151,10 @@ def build_feature_matrix(
             X[col] = context[col]
 
     # the ground-truth column must never become a feature
-    leaked = [col for col in X.columns if "attack_window" in col]
+    leaked = [
+        col for col in X.columns
+        if "attack_window" in col or "event_label" in col
+    ]
     if leaked:
         raise AssertionError(f"label source leaked into features: {leaked}")
 
