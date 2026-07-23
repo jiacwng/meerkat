@@ -490,14 +490,15 @@ def normalize(
 
 def normalize_scenario(
     raw_dir: Path,
-    labels_path: Path,
+    labels_path: Path | None,
     scenario: str,
     inventory_path: Path,
     event_csv_dir: Path | None = None,
 ) -> pd.DataFrame:
     aminer_path = raw_dir / f"{scenario}_aminer.json"
     wazuh_path = raw_dir / f"{scenario}_wazuh.json"
-    windows = load_attack_windows(labels_path, scenario)
+    # an unseen company has no label file, so it simply carries no attack windows
+    windows = load_attack_windows(labels_path, scenario) if labels_path else []
     inventory = load_inventory(inventory_path)
     rows = []
 
@@ -549,9 +550,10 @@ def normalize_scenario(
 
 
 if __name__ == "__main__":
-    df = normalize(
-        Path("data/ait_alerts.json"),
+    df = normalize_scenario(
+        Path("data/raw"),
         Path("data/labels.csv"),
+        "russellmitchell",
         Path("data/raw/inventory/russellmitchell.json"),
     )
     print(f"{len(df)} alerts")

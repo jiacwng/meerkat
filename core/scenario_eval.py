@@ -93,7 +93,7 @@ def load_inventories(
     }
 
 
-def _add_window_ids(
+def add_window_ids(
     frame: pd.DataFrame,
     windows: list[tuple[float, float, str]],
 ) -> pd.DataFrame:
@@ -117,7 +117,7 @@ def prepare_sessions(
     # built once and reused, so every fold ranks the same review objects
     return {
         scenario: build_sessions(
-            _add_window_ids(frame, windows_by_scenario[scenario]),
+            add_window_ids(frame, windows_by_scenario[scenario]),
             scenario,
             inventories[scenario],
             gap_s,
@@ -398,6 +398,75 @@ def evaluate_scenarios(
         calibration=calibration,
         calibration_summary=_summarize_calibration(calibration),
     )
+
+
+@dataclass
+class TriageBundle:
+    forest: object
+    schema: SessionFeatureSchema
+    reranker: object
+    calibrator: object
+    training_scenarios: tuple[str, ...]
+    n_estimators: int
+    seed: int
+
+
+def build_bundle(
+    session_tables: dict[str, pd.DataFrame],
+    holdout: str | None = None,
+    n_estimators: int = 300,
+    seed: int = 0,
+) -> TriageBundle:
+    # Train on seven companies and save the models for the unseen-company demo.
+    training_scenarios = tuple(
+        scenario for scenario in session_tables if scenario != holdout
+    )
+    train = pd.concat(
+        [session_tables[scenario] for scenario in training_scenarios],
+        ignore_index=True,
+    )
+    schema = fit_session_feature_schema(train)
+    forest = fit_model(
+        build_session_feature_matrix(train, schema),
+        train["positive"],
+        n_estimators=n_estimators,
+        seed=seed,
+    )
+    training_families = _out_of_fold_families(
+        session_tables, training_scenarios, n_estimators, seed
+    )
+    calibration_families = _out_of_fold_reranker_scores(training_families)
+    calibrator = fit_calibrator(
+        calibration_families["ranking_score"].to_numpy(),
+        calibration_families["family_positive"].to_numpy(),
+    )
+    reranker = fit_family_reranker(training_families)
+    return TriageBundle(
+        forest=forest,
+        schema=schema,
+        reranker=reranker,
+        calibrator=calibrator,
+        training_scenarios=training_scenarios,
+        n_estimators=n_estimators,
+        seed=seed,
+    )
+
+
+def score_sessions(
+    bundle: TriageBundle,
+    session_table: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    scored = session_table.copy()
+    scored["ranking_score"] = predict_scores(
+        bundle.forest,
+        build_session_feature_matrix(scored, bundle.schema),
+    )
+    families = build_families(scored)
+    families["ranking_score"] = bundle.reranker.predict(families)
+    families["evidence_probability"] = bundle.calibrator.predict(
+        families["ranking_score"].to_numpy()
+    )
+    return scored, families
 
 
 def main() -> None:
