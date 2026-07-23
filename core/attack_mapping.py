@@ -20,7 +20,7 @@ import pandas as pd
 class AlertMapping:
     technique_ids: str        # ATT&CK IDs separated by semicolons
     tactics: tuple[str, ...]  # all tactics linked to all techniques in 1 alert
-    source: str               # Mapping source: rule, suppressed, native, or none
+    source: str               # mapping source: rule, suppressed, native, or none
 
 
 def build_attack_lookup(stix_path: Path, out_path: Path) -> dict:
@@ -78,7 +78,6 @@ TACTIC_ORDER = ATTACK_LOOKUP["tactic_order"]
 
 
 def load_detection_mappings(path: Path) -> dict[str, dict[str, list[str]]]:
-    """Load and validate rule-to-technique mappings."""
     raw = json.loads(path.read_text(encoding="utf-8"))
     mappings = {k: v for k, v in raw.items() if not k.startswith("_")}
 
@@ -90,7 +89,7 @@ def load_detection_mappings(path: Path) -> dict[str, dict[str, list[str]]]:
                 if technique_id not in known:
                     unknown.add(technique_id)
 
-    # Configured IDs must exist; detector IDs may be newer than our lookup
+    # configured IDs must exist, detector IDs may be newer than our lookup
     if unknown:
         raise ValueError(
             f"unknown configured ATT&CK techniques: {sorted(unknown)}"
@@ -111,7 +110,6 @@ def technique_name(technique_id: str) -> str:
 
 
 def tactics_for_techniques(technique_ids: str) -> tuple[str, ...]:
-    """Map semicolon-separated technique IDs to official tactics."""
     found: set[str] = set()
 
     for technique_id in technique_ids.split(";"):
@@ -126,7 +124,7 @@ def tactics_for_techniques(technique_ids: str) -> tuple[str, ...]:
         for tactic in entry.get("tactics", []):
             found.add(tactic)
 
-    # Keep tactics in ATT&CK matrix order
+    # keep tactics in ATT&CK matrix order
     ordered = []
     for tactic in TACTIC_ORDER:
         if tactic in found:
@@ -142,7 +140,7 @@ def map_alert(detector_source: str, rule_id: str, native_technique_ids: str) -> 
         if configured:
             joined = ";".join(configured)
             return AlertMapping(joined, tactics_for_techniques(joined), "rule")
-        # An empty mapping means this rule was reviewed and should have no ATT&CK tags
+        # an empty mapping means the rule was reviewed and maps to nothing
         return AlertMapping("", (), "suppressed")
 
     if native_technique_ids:
@@ -157,7 +155,7 @@ def attack_story(df: pd.DataFrame) -> dict[str, list[tuple[float, str]]]:
 
     for host, host_alerts in df.groupby("host", sort=False):
         rows_with_tactics = host_alerts[host_alerts["tactics"].map(bool)]
-        # Split multi-tactic alerts into one row per tactic
+        # split multi-tactic alerts into one row per tactic
         expanded = rows_with_tactics.explode("tactics")
         first_seen = expanded.groupby("tactics")["timestamp"].min()
 
@@ -165,7 +163,7 @@ def attack_story(df: pd.DataFrame) -> dict[str, list[tuple[float, str]]]:
         for tactic, timestamp in first_seen.items():
             timeline.append((float(timestamp), str(tactic)))
 
-        # Break timestamp ties using ATT&CK matrix order
+        # break timestamp ties using ATT&CK matrix order
         timeline.sort(key=lambda step: (step[0], TACTIC_ORDER.index(step[1])))
         story[host] = timeline
 
@@ -177,7 +175,7 @@ def alert_context(
     host: str,
     timestamp: float,
 ) -> list[tuple[float, str]]:
-    """Return only the host tactics known when this alert arrived."""
+    # only alerts up to this timestamp, a live analyst cannot see later ones
     known_rows = df[(df["host"] == host) & (df["timestamp"] <= timestamp)]
     return attack_story(known_rows).get(host, [])
 
@@ -218,7 +216,11 @@ if __name__ == "__main__":
 
     from core.normalize import normalize
 
-    df = normalize(Path("data/ait_alerts.json"), Path("data/labels.csv"))
+    df = normalize(
+        Path("data/ait_alerts.json"),
+        Path("data/labels.csv"),
+        Path("data/raw/inventory/russellmitchell.json"),
+    )
     mapped = [
         map_alert(detector, rule_id, technique_ids)
         for detector, rule_id, technique_ids in zip(
