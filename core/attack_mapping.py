@@ -214,11 +214,12 @@ def export_navigator_layer(technique_ids, path: Path,
 if __name__ == "__main__":
     from datetime import datetime, timezone
 
-    from core.normalize import normalize
+    from core.normalize import normalize_scenario
 
-    df = normalize(
-        Path("data/ait_alerts.json"),
+    df = normalize_scenario(
+        Path("data/raw"),
         Path("data/labels.csv"),
+        "russellmitchell",
         Path("data/raw/inventory/russellmitchell.json"),
     )
     mapped = [
