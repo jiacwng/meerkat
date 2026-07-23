@@ -1,7 +1,7 @@
 """Evaluate the session-to-family queue on unseen alert scenarios.
 
-Seven companies train the forest, the eighth is held out, and the calibrator is
-fitted inside the training seven so the held-out company stays untouched.
+Seven companies train the forest and family re-ranker, the eighth is held out,
+and calibration stays inside the training seven.
 
 Public API:
     load_scenarios(raw_dir, labels, inventory_dir) -> normalized alert tables
@@ -18,7 +18,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from core.classifier import fit_calibrator, fit_model, predict_scores
+from core.classifier import (
+    fit_calibrator,
+    fit_family_reranker,
+    fit_model,
+    predict_scores,
+)
 from core.features import (
     SessionFeatureSchema,
     build_session_feature_matrix,
@@ -96,9 +101,10 @@ def _add_window_ids(
     marked["window_id"] = -1
     for window_id, (start, end, attack) in enumerate(windows):
         inside = marked["timestamp"].between(start, end)
-        marked.loc[inside & marked["attack_window"].eq(attack), "window_id"] = (
-            window_id
-        )
+        marked.loc[
+            inside & marked["attack_window"].eq(attack),
+            "window_id",
+        ] = window_id
     return marked
 
 
@@ -178,6 +184,19 @@ def _out_of_fold_families(
     return pd.concat(parts, ignore_index=True)
 
 
+def _out_of_fold_reranker_scores(
+    families: pd.DataFrame,
+) -> pd.DataFrame:
+    parts = []
+    for scenario in families["scenario"].drop_duplicates():
+        train = families[~families["scenario"].eq(scenario)]
+        test = families[families["scenario"].eq(scenario)].copy()
+        reranker = fit_family_reranker(train)
+        test["ranking_score"] = reranker.predict(test)
+        parts.append(test)
+    return pd.concat(parts, ignore_index=True)
+
+
 def _ndcg(queue: pd.DataFrame, families: pd.DataFrame, k: int) -> float:
     scores = []
     for day, day_queue in queue.groupby("day", sort=False, observed=True):
@@ -202,8 +221,13 @@ def _queue_metrics(
     total_labelled_alerts: int,
     budget: int,
 ) -> dict[str, float | int]:
-    windows = (
+    strict_windows = (
         frozenset().union(*queue["labelled_windows"])
+        if len(queue)
+        else frozenset()
+    )
+    temporal_overlap_windows = (
+        frozenset().union(*queue["temporal_overlap_windows"])
         if len(queue)
         else frozenset()
     )
@@ -224,7 +248,8 @@ def _queue_metrics(
     return {
         "budget": budget,
         "queued": len(queue),
-        "exact_windows": len(windows),
+        "strict_windows": len(strict_windows),
+        "temporal_overlap_windows": len(temporal_overlap_windows),
         "precision": float(queue["family_positive"].mean()),
         "labelled_alert_coverage": float(
             queue["labelled_alert_count"].sum() / total_labelled_alerts
@@ -259,13 +284,17 @@ def _summarize(per_fold: pd.DataFrame) -> pd.DataFrame:
         median_child_sessions=("median_child_sessions", "median"),
         p90_child_sessions=("p90_child_sessions", "median"),
     )
-    totals = per_fold.groupby(["seed", "budget"], as_index=False)[
-        "exact_windows"
-    ].sum()
+    totals = per_fold.groupby(["seed", "budget"], as_index=False).agg(
+        strict_windows=("strict_windows", "sum"),
+        temporal_overlap_windows=("temporal_overlap_windows", "sum"),
+    )
     window_summary = totals.groupby("budget", as_index=False).agg(
-        windows_mean=("exact_windows", "mean"),
-        windows_min=("exact_windows", "min"),
-        windows_max=("exact_windows", "max"),
+        strict_windows_mean=("strict_windows", "mean"),
+        strict_windows_min=("strict_windows", "min"),
+        strict_windows_max=("strict_windows", "max"),
+        temporal_overlap_windows_mean=("temporal_overlap_windows", "mean"),
+        temporal_overlap_windows_min=("temporal_overlap_windows", "min"),
+        temporal_overlap_windows_max=("temporal_overlap_windows", "max"),
     )
     return window_summary.merge(averages, on="budget")
 
@@ -313,19 +342,24 @@ def evaluate_scenarios(
     for seed in seeds:
         for test_scenario in sessions:
             fold = prepare_fold(sessions, test_scenario)
-            calibration_families = _out_of_fold_families(
+            training_families = _out_of_fold_families(
                 sessions,
                 fold.training_scenarios,
                 n_estimators,
                 seed,
             )
+            calibration_families = _out_of_fold_reranker_scores(
+                training_families
+            )
             calibrator = fit_calibrator(
                 calibration_families["ranking_score"].to_numpy(),
                 calibration_families["family_positive"].to_numpy(),
             )
+            reranker = fit_family_reranker(training_families)
 
             scored, _, _ = score_fold(fold, n_estimators, seed)
             families = build_families(scored)
+            families["ranking_score"] = reranker.predict(families)
             families["evidence_probability"] = calibrator.predict(
                 families["ranking_score"].to_numpy()
             )

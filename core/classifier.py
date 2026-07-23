@@ -1,11 +1,12 @@
-"""Train the session ranker and calibrate family evidence scores.
+"""Train the session ranker, family re-ranker and evidence calibrator.
 
-The forest scores sessions. A family takes the highest score among its children,
-and the calibrator turns that raw score into a probability for display only.
+The forest scores sessions. The family re-ranker combines child scores and
+family context, and the calibrator turns that score into a display probability.
 
 Public API:
     fit_model(X, session_positive)            -> fitted forest
     predict_scores(model, X)                  -> raw ranking score per session
+    fit_family_reranker(families)             -> FamilyReranker
     fit_calibrator(family_scores, positive)   -> EvidenceCalibrator
     explain_session(model, feature_row)       -> active important features
     save_model(model, path) / load_model(path)
@@ -21,6 +22,25 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+
+FAMILY_NUMERIC_FEATURES = (
+    "child_score_max",
+    "child_score_mean",
+    "child_score_std",
+    "n_child_sessions",
+    "family_span_s",
+    "alert_count",
+    "detectors_on_entity",
+    "groups_on_entity",
+    "log_alerts_on_entity",
+    "detectors_nearby_10m",
+    "alert_category_count",
+    "technique_count",
+    "rule_group_count",
+)
 
 
 @dataclass
@@ -30,6 +50,49 @@ class EvidenceCalibrator:
     def predict(self, ranking_scores: np.ndarray) -> np.ndarray:
         scores = np.asarray(ranking_scores, dtype=float).reshape(-1, 1)
         return self.model.predict_proba(scores)[:, 1]
+
+
+@dataclass
+class FamilyReranker:
+    model: Pipeline
+    roles: tuple[str, ...]
+
+    def predict(self, families: pd.DataFrame) -> np.ndarray:
+        X = _family_feature_matrix(families, self.roles)
+        return self.model.predict_proba(X)[:, 1]
+
+
+def _family_feature_matrix(
+    families: pd.DataFrame,
+    roles: tuple[str, ...],
+) -> pd.DataFrame:
+    X = families[list(FAMILY_NUMERIC_FEATURES)].astype(float).copy()
+    for role in roles:
+        X[f"role_{role}"] = families["asset_roles"].map(
+            lambda asset_roles: float(role in asset_roles)
+        )
+    return X
+
+
+def fit_family_reranker(families: pd.DataFrame) -> FamilyReranker:
+    roles = tuple(sorted({
+        role
+        for asset_roles in families["asset_roles"]
+        for role in asset_roles
+    }))
+    X = _family_feature_matrix(families, roles)
+    model = Pipeline([
+        ("scale", StandardScaler()),
+        (
+            "model",
+            LogisticRegression(
+                class_weight="balanced",
+                max_iter=1000,
+            ),
+        ),
+    ])
+    model.fit(X, families["family_positive"])
+    return FamilyReranker(model=model, roles=roles)
 
 
 def fit_model(

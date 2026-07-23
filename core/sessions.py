@@ -2,7 +2,7 @@
 
 A session holds alerts from one entity, detector and rule until that stream goes
 quiet for more than ten minutes. A family joins same-day sessions sharing that
-identity, so the analyst makes one decision and can still open every child.
+identity and carries the aggregates used by the family re-ranker.
 
 Public API:
     assign_sessions(alerts, gap_s)              -> session number per alert
@@ -43,9 +43,39 @@ def _window_ids(values: pd.Series) -> frozenset[int]:
     return frozenset(int(value) for value in values if value >= 0)
 
 
+def _split_values(values: pd.Series) -> frozenset[str]:
+    found = set()
+    for value in values.fillna("").astype(str):
+        found.update(part for part in value.split(";") if part)
+    return frozenset(found)
+
+
 def _asset_roles(entity_id: str, inventory: Inventory) -> tuple[str, ...]:
     asset = inventory.assets_by_ip.get(entity_id)
     return asset.groups if asset else ()
+
+
+def _nearby_detector_count(
+    sessions: pd.DataFrame,
+    gap_s: float = SESSION_GAP_S,
+) -> pd.Series:
+    counts = np.ones(len(sessions), dtype=float)
+    for positions in sessions.groupby(
+        "entity_id", sort=False, observed=True
+    ).indices.values():
+        positions = np.asarray(positions)
+        entity_sessions = sessions.iloc[positions]
+        starts = entity_sessions["start"].to_numpy(dtype=float)
+        ends = entity_sessions["end"].to_numpy(dtype=float)
+        detectors = entity_sessions["detector_source"].astype(str).to_numpy()
+
+        for local_position, session_position in enumerate(positions):
+            nearby = (
+                (starts <= ends[local_position] + gap_s)
+                & (ends >= starts[local_position] - gap_s)
+            )
+            counts[session_position] = len(set(detectors[nearby]))
+    return pd.Series(counts, index=sessions.index, dtype=float)
 
 
 def build_sessions(
@@ -94,7 +124,11 @@ def build_sessions(
         positive=("_is_event", "any"),
         labelled_alert_count=("_is_event", "sum"),
         labelled_windows=("_labelled_window", _window_ids),
+        temporal_overlap_windows=("window_id", _window_ids),
         event_categories=("event_label", _nonempty),
+        alert_category_set=("alert_category", _split_values),
+        technique_id_set=("native_technique_ids", _split_values),
+        rule_group_set=("rule_groups", _split_values),
         asset_roles=("_asset_roles", "first"),
         alert_rows=("_alert_row", list),
     ).reset_index()
@@ -124,6 +158,7 @@ def build_sessions(
     ).reset_index()
     sessions = sessions.merge(entity_day, on=["day", "entity_id"], how="left")
     sessions["log_alerts_on_entity"] = np.log1p(sessions["alerts_on_entity"])
+    sessions["detectors_nearby_10m"] = _nearby_detector_count(sessions)
     sessions["order"] = np.arange(len(sessions))
     return sessions
 
@@ -134,6 +169,10 @@ def _union(values: pd.Series) -> frozenset:
 
 def _flatten(values: pd.Series) -> list:
     return [item for items in values for item in items]
+
+
+def _population_std(values: pd.Series) -> float:
+    return float(np.std(values.to_numpy(dtype=float)))
 
 
 def build_families(scored_sessions: pd.DataFrame) -> pd.DataFrame:
@@ -148,8 +187,11 @@ def build_families(scored_sessions: pd.DataFrame) -> pd.DataFrame:
     families = grouped.agg(
         scenario=("scenario", "first"),
         ranking_score=("ranking_score", "max"),
+        child_score_mean=("ranking_score", "mean"),
+        child_score_std=("ranking_score", _population_std),
         family_positive=("positive", "any"),
         labelled_windows=("labelled_windows", _union),
+        temporal_overlap_windows=("temporal_overlap_windows", _union),
         event_categories=("event_categories", _union),
         start=("start", "min"),
         end=("end", "max"),
@@ -159,11 +201,23 @@ def build_families(scored_sessions: pd.DataFrame) -> pd.DataFrame:
         labelled_alert_count=("labelled_alert_count", "sum"),
         alert_rows=("alert_rows", _flatten),
         asset_roles=("asset_roles", "first"),
+        detectors_on_entity=("detectors_on_entity", "first"),
+        groups_on_entity=("groups_on_entity", "first"),
+        log_alerts_on_entity=("log_alerts_on_entity", "first"),
+        detectors_nearby_10m=("detectors_nearby_10m", "max"),
+        alert_category_set=("alert_category_set", _union),
+        technique_id_set=("technique_id_set", _union),
+        rule_group_set=("rule_group_set", _union),
     )
     families["representative_session_id"] = representatives["session_id"]
     families["representative_score"] = representatives["ranking_score"]
     families["representative_order"] = representatives["order"]
     families = families.reset_index()
+    families["child_score_max"] = families["ranking_score"]
+    families["family_span_s"] = families["end"] - families["start"]
+    families["alert_category_count"] = families["alert_category_set"].map(len)
+    families["technique_count"] = families["technique_id_set"].map(len)
+    families["rule_group_count"] = families["rule_group_set"].map(len)
     families["family_id"] = (
         families["scenario"].astype(str)
         + "#"
