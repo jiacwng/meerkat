@@ -39,6 +39,13 @@ normalized alerts -> sessions -> families -> ranked daily queue
 - A **family** joins same-day sessions with the same host, detector and rule.
 - A **budget** is the number of families the analyst can review per day.
 
+Meerkat ranks families because the queue still needs an order, but ranking is
+the mechanism rather than the final objective. Offline evaluation asks how many
+different labelled attack windows are represented within the review budget,
+instead of rewarding a queue for repeatedly surfacing one high-volume phase.
+This models the practical Tier 1 question: with limited time, how many distinct
+suspicious activities did the queue expose?
+
 On the bundled example, Meerkat reduces 36,358 alerts to 1,487 sessions and 326
 families. With a budget of 10, it presents the top 10 families for each of the
 four days in the scenario.
@@ -67,6 +74,14 @@ company identifiers, and every evaluation fold learns its vocabulary without
 the unseen environment. This reduces dependence on one dataset or company, but
 does not make the tool universally detector-agnostic: each new alert source
 still needs a normalization adapter.
+
+The project was informed by related work on SOC alert prioritization, grouping
+and contextual analysis, including [TEQ](https://arxiv.org/abs/2302.06648),
+[AIP](https://arxiv.org/abs/2607.16963),
+[AlertBERT](https://arxiv.org/abs/2602.06534),
+[RAPID](https://research.ibm.com/publications/rapid-real-time-alert-investigation-with-context-aware-prioritization-for-efficient-threat-discovery),
+[AI2](https://people.csail.mit.edu/kalyan/AI2/) and
+[DeepCASE](https://doi.org/10.1109/SP46214.2022.9833671).
 
 ## Quick start
 
@@ -161,6 +176,12 @@ environments train the models and the eighth remains unseen. The training
 vocabulary, model features, re-ranker and calibrator are all fitted without the
 held-out environment.
 
+The primary metric is **attack-window coverage at a fixed daily budget**. It
+treats the selected queue as a set: ten near-identical families do not provide
+the same coverage as ten families representing different attack activity.
+Attack windows are known only during offline evaluation and never influence
+runtime grouping, features, scores or queue selection.
+
 AIT-ADS describes its scripted attack steps with labelled time windows. Meerkat
 counts a window as **strictly reached** only when the daily queue contains an
 officially event-labelled alert from that window.
@@ -207,6 +228,11 @@ Meerkat uses the
 simulated company environments monitored by Wazuh, Suricata and AMiner. The
 companion [AIT-ADS repository](https://github.com/ait-aecid/alert-data-set)
 provides the detector configuration, asset configuration and per-alert labels.
+
+The full experiment processes approximately **3.1 GB of source data** across
+eight environments: 2,655,821 raw alert records, 2,349,098 alerts after
+detector-duplicate removal, 1,817,250 event-labelled records and 79 scripted
+attack windows.
 
 The demo needs only the bundled `russellmitchell` raw files and pretrained
 model. Reproducing the full cross-environment evaluation requires all eight
