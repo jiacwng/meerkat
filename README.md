@@ -12,32 +12,39 @@
   <strong>Alert triage for multi-detector SOC data.</strong>
 </p>
 
-## About
+## What it does
 
-Security detectors produce far more alerts than analysts can review. Detection
-has already happened by the time an alert exists, so the remaining question is
-which alerts a human should read first.
+A SOC gets far more alerts than analysts can read. The detectors have already
+fired, so the job left is deciding which alerts to look at first.
 
-Meerkat reads alerts from Suricata, Wazuh and AMiner, normalizes them against a
-company asset inventory, and turns the flood into a fixed size daily review
-queue with MITRE ATT&CK context. The pipeline has four steps:
+Meerkat reads alerts from three detectors, groups them, ranks the groups, and
+prints a short daily queue with MITRE ATT&CK context. On the demo environment it
+turns 36,358 alerts into 326 groups, and the analyst reads the top 10 per day.
+
+## Key terms
+
+Read these five and the rest of the README makes sense.
+
+- **Alert** — one event from a detector (Suricata, Wazuh or AMiner).
+- **Session** — one rule firing on one host, until that host goes quiet for ten
+  minutes.
+- **Family** — a day's sessions that share the same host, detector and rule.
+  This is the group an analyst reviews as one case. "This rule fired 7,068 times
+  on this host today" is one decision, not 7,068.
+- **Budget** — how many families the analyst reads per day. The demo uses 10.
+- **Window** — a labelled time span in the dataset when one attack step happened
+  on one host. It is the ground truth. A window is *reached* when a family in the
+  queue holds an alert from inside it.
+
+The pipeline is these terms in order:
 
 ```
-alerts  ->  sessions  ->  families  ->  ranked daily queue
+alerts  ->  sessions  ->  families  ->  ranked queue (top budget per day)
 ```
 
-A **session** is one detector rule firing on one asset until that stream goes
-quiet for ten minutes. A **family** collects a day's sessions that share the
-same asset, detector and rule. The family is the unit an analyst actually
-adjudicates: deciding about "this rule fired 7,068 times on this host today" is
-one judgement, not 7,068 of them. On the demo environment this turns 36,358
-alerts into 1,487 sessions and 326 families, of which the analyst reviews the
-top 10 per day.
-
-A Random Forest scores each session, a learned re-ranker orders the families,
-and a calibrator attaches a display probability. Methods and full experiments
-are in the technical report:
-**[Meerkat: Ranking Alert Families for Capacity-Limited Triage](docs/report/meerkat.pdf)**.
+A Random Forest scores each session, a learned model orders the families, and a
+calibrator turns the score into a display percentage. The display percentage
+never changes the order; the raw score does.
 
 ## Quickstart
 
@@ -49,126 +56,113 @@ pip install -e .
 meerkat demo
 ```
 
-`meerkat demo` scores the held-out russellmitchell environment with the shipped
-model and prints the ranked queue. If you have not installed the package,
-`python -m meerkat demo` does the same thing.
+`meerkat demo` scores the held-out russellmitchell environment and prints the
+queue. Without installing, `python -m meerkat demo` does the same.
 
 ```
 $ meerkat demo
 run russellmitchell-...  |  company russellmitchell  |  budget 10  |  326 families
 Review queue (top 10 per day)
- handle  date         host           detector  finding                          alerts  score  evid%
- F001    2022-01-21   inet-firewall  AMiner    AMiner: Unusual occurrence ...         6   1.00     87
+ handle  date         host           detector  finding                       alerts  score  evid%
+ F212    2022-01-24   intranet-...   Suricata  ET SCAN Possible Nmap ...          6   1.00     87
+ F218    2022-01-24   intranet-...   Wazuh     Web server 400 error code.     7068   1.00     87
  ...
- F212    2022-01-24   intranet-...   Suricata  ET SCAN Possible Nmap User-...        6   1.00     87
- F218    2022-01-24   intranet-...   Wazuh     Web server 400 error code.         7068   1.00     87
 ```
 
-Open one family, drill into a session, read the raw source event:
+Open a family, drill into a session, read the raw event:
 
 ```bash
-meerkat inspect F212                       # panels, ATT&CK context, related families
-meerkat inspect F218 --distinct http_status
-meerkat inspect F218 --where http_status=403 --alerts 5
-meerkat inspect F218 S1 --raw --alerts 1   # the original detector event
+meerkat inspect F212                          # panels, ATT&CK context, related families
+meerkat inspect F218 --distinct http_status   # count values in the family
+meerkat inspect F218 --where http_status=403  # keep only matching alerts
+meerkat inspect F218 S1 --raw --alerts 1      # the original detector event
 meerkat review F212 escalate --note "Nmap user agent, confirmed scan"
-meerkat export navigator                   # ATT&CK Navigator layer of observed techniques
+meerkat export navigator                      # ATT&CK Navigator layer
 ```
 
 ## Results
 
-Evaluated by leave-one-environment-out testing across eight simulated
-companies: seven train the model, the eighth is held out, and calibration stays
-inside the training seven. A window counts as reached when a queued family holds
-a labelled alert inside that window.
+Tested leave-one-environment-out: seven companies train the model, the eighth is
+held out. A window counts as reached when a queued family holds a labelled alert
+from inside it.
 
-| Reviews per day | 5 | 10 | 25 |
+| Families read per day | 5 | 10 | 25 |
 |---|---:|---:|---:|
-| **Windows reached (learned re-ranker)** | **52** | **58** | **58** |
+| **Windows reached** | **52** | **58** | **58** |
 
-Out of 60 reachable attack windows, summed across the eight held-out companies
-(three seeds, 200 trees). Precision at these budgets sits on the measured data
-ceiling, so the queue is close to the best any ranker could do at this workload,
-not merely better than a baseline.
+The dataset has 79 labelled windows; 60 of them contain an alert a family could
+hold, so 60 is the ceiling. Reading 10 families a day reaches 58 of those 60,
+summed over the eight held-out companies (three seeds, 200 trees). Reading more
+than 10 adds nothing here, which is why 10 and 25 tie.
 
-Calibration lowers the pooled Brier score from 0.0301 to 0.0202 and improves
-every one of the 24 held-out folds. The displayed probability never changes the
-queue order; the raw ranking score decides the analyst's day.
+Grouping into families is what makes this work. Ranking single alerts instead of
+families is beaten by simply sorting on the detector's own severity. Two attack
+steps stay out of reach at any budget: a one-off service stop, and network scans
+against a host already flagged for other reasons.
 
-The change of unit does most of the work. Ranking individual alerts, rather than
-families, is beaten by sorting on native detector severity. Two attack phases
-stay hard to reach at any budget, single-window service stops and network scans
-against a host already under investigation for other reasons; the report keeps
-every negative result unchanged.
+The calibrator lowers the Brier score from 0.0301 to 0.0202 and improves all 24
+held-out folds. Full method and every negative result are in the report:
+**[Meerkat: Ranking Alert Families for Capacity-Limited Triage](docs/report/meerkat.pdf)**.
 
-## CLI reference
+## Commands
 
-Analyst commands work a saved run. Support commands set it up.
+Analyst commands work on a saved run. Support commands set it up.
 
-| Command | Role | What it does |
-|---|---|---|
-| `meerkat triage --company C --input DIR --inventory FILE` | analyst | score a company into a run directory and the queue |
-| `meerkat queue` | analyst | reopen the latest run's queue (`--all`, `--host`, `--detector`, `--rule`, `--review-state`) |
-| `meerkat inspect F003 [S1]` | analyst | open a family or session: panels, ATT&CK, related families |
-| `meerkat review F003 escalate --note "..."` | analyst | record a decision (`escalate`, `benign`, `false-positive`) |
-| `meerkat train --holdout C` | support | fit and save the model |
-| `meerkat export navigator` | support | write an ATT&CK Navigator layer of the run's techniques |
-| `meerkat demo` | support | run the bundled russellmitchell example end to end |
+| Command | What it does |
+|---|---|
+| `meerkat triage --company C --input DIR --inventory FILE` | score a company into a run and its queue |
+| `meerkat queue` | reopen the latest queue (`--all`, `--host`, `--detector`, `--rule`, `--review-state`) |
+| `meerkat inspect F003 [S1]` | open a family or session: panels, ATT&CK, related families |
+| `meerkat review F003 escalate --note "..."` | record a decision (`escalate`, `benign`, `false-positive`) |
+| `meerkat train --holdout C` | fit and save the model |
+| `meerkat export navigator` | write an ATT&CK Navigator layer of the run's techniques |
+| `meerkat demo` | run the bundled russellmitchell example |
 
-A run is written once by `triage` and reopened by the rest without scoring
-again. `--run ID` selects an older run; the default is the latest successful
-one. Session views filter with exact operations only (`--where field=value`,
-`--exclude field=value`, `--distinct field`, `--alerts N`, `--raw`), validated
-against the normalized schema.
+`triage` writes a run once; the other commands reopen it and never score again.
+Session views filter with exact matches only: `--where field=value`,
+`--exclude field=value`, `--distinct field`, `--alerts N`, `--raw`.
 
-Evidence panels follow one fixed order (Finding, Identity, Process, Network,
-HTTP, DNS, TLS, Provenance) and appear only when a normalized field carries a
-value, so the layout depends on what the alert contains rather than which
-detector produced it.
+Evidence panels appear in a fixed order (Finding, Identity, Process, Network,
+HTTP, DNS, TLS, Provenance) and show only when a field has a value, so the layout
+follows what the alert contains, not which detector sent it.
 
 ## Platforms
 
-The CLI runs the same on Linux, WSL and Windows.
+Same commands on Linux, WSL and Windows.
 
 ```bash
-# Linux / WSL / macOS
-meerkat demo
-
-# Windows PowerShell, no install needed
-python -m meerkat demo
+meerkat demo            # after pip install -e .
+python -m meerkat demo  # no install, Windows / WSL / Linux
 ```
 
-On Windows, use Windows Terminal or the VS Code terminal so the box-drawing
-renders; Meerkat forces UTF-8 output so the tables do not garble on a legacy
-code page. `pip install -e .` also creates a `meerkat` command on Windows.
+On Windows use Windows Terminal or the VS Code terminal so the tables draw
+correctly; Meerkat sets UTF-8 output to avoid garbled characters.
 
 ## Dataset
 
 Experiments use [AIT-ADS](https://zenodo.org/records/8263181) (Austrian
-Institute of Technology, CC BY 4.0): eight simulated enterprise environments
-monitored by Suricata, Wazuh and AMiner, each subjected to a scripted multi step
-attack.
+Institute of Technology, CC BY 4.0): eight simulated companies watched by
+Suricata, Wazuh and AMiner, each hit by a scripted multi-step attack.
 
-One environment (russellmitchell) ships with the repository through Git LFS, so
-the demo runs immediately. The rest is optional and only needed to retrain or to
-reproduce the cross-environment evaluation:
+One company (russellmitchell) ships with the repo through Git LFS, so the demo
+runs right away. The rest is optional:
 
 | Task | Data required |
 |---|---|
-| The bundled demo | included through Git LFS (`data/raw/russellmitchell_*.json`) |
+| The demo | included through Git LFS (`data/raw/russellmitchell_*.json`) |
 | Retrain or cross-environment evaluation | `ait_ads.zip` from Zenodo, extracted to `data/raw/` |
-| Event label supervision and audit | `alerts_csv.zip` from the [project repository](https://github.com/ait-aecid/alert-data-set), extracted to `data/raw/alerts_csv/` |
+| Event label supervision | `alerts_csv.zip` from the [project repo](https://github.com/ait-aecid/alert-data-set), extracted to `data/raw/alerts_csv/` |
 
 Expected layout for the optional downloads:
 
 ```
-data/raw/<scenario>_wazuh.json
-data/raw/<scenario>_aminer.json
-data/raw/alerts_csv/<scenario>_alerts.txt
-data/raw/inventory/<scenario>.json
+data/raw/<company>_wazuh.json
+data/raw/<company>_aminer.json
+data/raw/alerts_csv/<company>_alerts.txt
+data/raw/inventory/<company>.json
 ```
 
-Generate the local AIT inventories from the official `server_configs` folder:
+Build the local inventories from the official `server_configs` folder:
 
 ```bash
 python -m pip install PyYAML
@@ -178,9 +172,9 @@ python -m core.inventory ../alert-data-set/server_configs data/raw/inventory
 ## Repository layout
 
 ```
-core/       the pipeline as a library (detector-agnostic once alerts are normalized)
-meerkat/    the analyst command line over that library
-data/       labels, ATT&CK lookup, detection mappings, and the LFS demo alerts
+core/       the pipeline as a library
+meerkat/    the analyst command line (one file)
+data/       labels, ATT&CK lookup, and the LFS demo alerts
 tests/      unittest suite
 docs/       the technical report
 ```
@@ -189,56 +183,47 @@ docs/       the technical report
 |---|---|
 | `normalize.py` | maps three detector schemas onto one alert table |
 | `inventory.py` | loads the company asset inventory |
-| `features.py` | encodes sessions as numeric features |
+| `features.py` | turns sessions into numbers |
 | `sessions.py` | builds sessions and daily families |
 | `classifier.py` | the forest, family re-ranker and calibrator |
-| `scenario_eval.py` | leave-one-scenario-out evaluation and the trained bundle |
+| `scenario_eval.py` | held-out evaluation and the trained model bundle |
 | `attack_mapping.py` | MITRE ATT&CK technique and tactic mapping |
 | `triage_policy.py` | the daily top-K queue |
-| `event_labels.py` | official per alert label loading and audit |
+| `event_labels.py` | official per-alert labels and audit |
 
 ## How machines are identified
 
-Alert grouping only works if two detectors agree on which machine they are
-describing. Meerkat takes an asset inventory as an input, supplied before any
-alert is read, and separates three identities:
+Grouping only works if two detectors agree on which machine an alert is about.
+Meerkat takes an asset inventory as input, before reading any alert, and keeps
+three identities apart:
 
 | Field | Meaning |
 |---|---|
-| `entity_id` | the machine the alert is about, always an address the detector reported |
-| `observer_id` | the sensor or collector that produced the alert |
+| `entity_id` | the machine the alert is about |
+| `observer_id` | the sensor that produced the alert |
 | `entity_in_inventory` | whether that machine belongs to the company |
 
-The inventory is used for membership and asset role. Display names come from the
-detector, because the official AIT configuration disagrees with Wazuh's own
-hostnames on 80,183 alerts, all of them permutations of external mail server
-names within one environment.
+The inventory decides membership and asset role. Display names come from the
+detector, because the official config disagrees with Wazuh's own hostnames on
+80,183 alerts.
 
 ## Future plans
 
-- **Web interface.** A browser view over the same run directory and model, so
-  the queue, drill-down and review capture the CLI already produces get a
-  point-and-click front end.
-- **More detectors.** The model works on normalized fields, not detector names,
-  so a new source needs only a parser and a severity range. A written adapter
-  contract and per-detector severity config will turn that into a small config
-  change rather than a code change.
-- **GUIDE integration.** Fold the AIT GUIDE anomaly component into the same
-  normalized table as a fourth source.
-- **Streaming.** Carry session state across fetches so the queue updates through
-  the day instead of running as one daily batch.
+- **Web interface.** A browser view over the same run and model.
+- **More detectors.** The model reads normalized fields, not detector names, so a
+  new source needs only a parser and a severity range.
+- **GUIDE.** Add the AIT GUIDE anomaly component as a fourth source.
+- **Streaming.** Update the queue through the day instead of once per batch.
 
-The report PDF is being brought up to date on the final numbers alongside this
-work.
+The report PDF is being updated to the current numbers.
 
 ## Status
 
-The pipeline, the CLI and the cross-environment evaluation are built and tested.
-Results come from eight simulated environments generated by one testbed with a
-shared attack script, so they are development evidence rather than a claim about
-production performance.
+The pipeline, the CLI and the evaluation are built and tested. The results come
+from one testbed with a shared attack script, so they are development evidence,
+not a claim about production.
 
 ## License
 
-Code released under the MIT License. The AIT-ADS dataset is distributed
-separately by the Austrian Institute of Technology under CC BY 4.0.
+Code under the MIT License. The AIT-ADS dataset is distributed separately by the
+Austrian Institute of Technology under CC BY 4.0.
