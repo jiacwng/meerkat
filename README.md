@@ -61,6 +61,13 @@ This prevents the model from simply memorizing one of the training companies.
 An inventory is still used outside the model to identify the affected machine,
 distinguish it from the observing sensor and attach asset roles.
 
+The design separates detector-specific parsing from ranking. Once alerts share
+the normalized schema, the models use portable measurements rather than raw
+company identifiers, and every evaluation fold learns its vocabulary without
+the unseen environment. This reduces dependence on one dataset or company, but
+does not make the tool universally detector-agnostic: each new alert source
+still needs a normalization adapter.
+
 ## Quick start
 
 Meerkat requires Python 3.11 or newer and Git LFS for the demo alerts.
@@ -109,6 +116,20 @@ meerkat export navigator
 | `meerkat train --holdout C` | train and save a reusable model bundle |
 | `meerkat demo` | run the bundled held-out-company example |
 
+A complete batch-to-review workflow looks like this:
+
+```bash
+meerkat triage --company russellmitchell --input data/raw --inventory data/raw/inventory/russellmitchell.json --budget 10
+meerkat queue
+meerkat inspect F003
+meerkat inspect F003 S1 --raw --alerts 1
+meerkat review F003 escalate --note "Unexpected service change"
+```
+
+The first command normalizes and ranks the new batch, then saves the run. The
+remaining commands reopen that run, inspect one selected family and record the
+analyst's decision without running the models again.
+
 Useful queue filters include:
 
 ```bash
@@ -143,6 +164,20 @@ held-out environment.
 AIT-ADS describes its scripted attack steps with labelled time windows. Meerkat
 counts a window as **strictly reached** only when the daily queue contains an
 officially event-labelled alert from that window.
+
+```text
+time -------------------------------------------------------------->
+
+attack window            [=========================]
+family F023         |-----------------------------------|
+sessions             [ S1 ]       [ S2 ]        [ S3 ]
+labelled alert                         *
+```
+
+The family groups related activity for one analyst decision. Its sessions split
+that activity at quiet gaps. The family may extend beyond the attack window, but
+strict coverage requires its labelled alert (`*`) to fall inside the window;
+time overlap alone does not count.
 
 | Families reviewed per day | 5 | 10 | 25 |
 |---|---:|---:|---:|
@@ -211,6 +246,16 @@ models/               pretrained demo bundle
 docs/                 report and project assets
 ```
 
+## Future work
+
+- Evaluate the ranking pipeline on
+  [Microsoft GUIDE](https://www.kaggle.com/datasets/Microsoft/microsoft-security-incident-prediction/data)
+  as a second benchmark. Its real-world incident evidence and analyst triage
+  labels can test whether Meerkat transfers beyond AIT-ADS without replacing
+  the current multi-detector evaluation.
+- Add a browser interface over the same saved runs. The ranking and evaluation
+  code will remain independent of the presentation layer.
+
 ## Scope and limitations
 
 Meerkat is an experimental batch-triage tool. It does not replace a SIEM or
@@ -225,9 +270,6 @@ case-management platform.
   needs a parser that maps its fields and severity scale into Meerkat's schema.
 - ATT&CK mappings provide investigation context. They do not prove that several
   observations belong to one attack campaign.
-
-A browser interface over the same saved runs is planned. The ranking and
-evaluation code remain independent of the presentation layer.
 
 ## License
 
