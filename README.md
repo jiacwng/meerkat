@@ -12,19 +12,20 @@
   <strong>ML-assisted alert triage for multi-detector SOC data.</strong>
 </p>
 
-## What I built
+## Overview
 
-I built Meerkat to explore a practical SOC question: when several detectors
-produce more alerts than an analyst can review, which ones should appear first?
+Security operations centres can receive more alerts than analysts have time to
+review. Once a detector has raised an alert, the next problem is deciding which
+activity deserves attention first.
 
 Meerkat reads alerts from Wazuh, Suricata and AMiner, normalizes their different
-formats, groups repeated activity and ranks the resulting cases. The output is a
-small daily review queue with the original evidence and MITRE ATT&CK context
-still attached.
+formats, groups repeated activity and ranks the resulting cases. It produces a
+bounded daily review queue while keeping the original evidence and MITRE ATT&CK
+context available for investigation.
 
-The main idea is to rank **families**, not isolated alerts. For example, one
+Instead of ranking isolated alerts, Meerkat ranks **families**. For example, one
 Wazuh rule firing 7,068 times on the same host during one day becomes one family
-to investigate, rather than 7,068 separate decisions.
+to investigate rather than 7,068 separate decisions.
 
 ```text
 detector alerts
@@ -212,8 +213,8 @@ docs/                 report and project assets
 
 ## Scope and limitations
 
-Meerkat is a student research project, not a replacement for a SIEM or case
-management platform.
+Meerkat is an experimental batch-triage tool. It does not replace a SIEM or
+case-management platform.
 
 - The results come from one simulated testbed whose environments share an attack
   script. They do not establish production performance.
@@ -225,8 +226,8 @@ management platform.
 - ATT&CK mappings provide investigation context. They do not prove that several
   observations belong to one attack campaign.
 
-The next product step is a browser interface over the same saved runs. The
-ranking and evaluation code remain independent of that interface.
+A browser interface over the same saved runs is planned. The ranking and
+evaluation code remain independent of the presentation layer.
 
 ## License
 
