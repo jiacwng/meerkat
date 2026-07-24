@@ -340,6 +340,40 @@ def fmt_span(seconds: float) -> str:
     return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
 
 
+def _http_outcome(alert_slice: pd.DataFrame) -> str:
+    # the question an analyst is actually asking is whether anything got
+    # through, so lead with that and keep the codes as supporting detail. Only
+    # HTTP carries success semantics in the normalized schema today; there is no
+    # equivalent for authentication, process execution or AMiner anomalies, so
+    # this line simply does not render for them.
+    if "http_status" not in alert_slice.columns:
+        return ""
+    statuses = pd.to_numeric(
+        alert_slice["http_status"], errors="coerce"
+    ).dropna().astype(int)
+    if statuses.empty:
+        return ""
+
+    succeeded = statuses[statuses.between(200, 399)]
+    total = len(statuses)
+    noun = "request" if total == 1 else "requests"
+
+    def codes(values) -> str:
+        return ", ".join(str(code) for code in sorted(set(values)))
+
+    if total == 1:
+        verdict = "succeeded" if len(succeeded) else "failed"
+        return f"1 {noun}, {verdict} ({codes(statuses)})"
+    if not len(succeeded):
+        return f"{total} {noun}, none succeeded ({codes(statuses)})"
+    if len(succeeded) == total:
+        return f"{total} {noun}, all succeeded ({codes(statuses)})"
+    return (
+        f"{total} {noun}, {len(succeeded)} succeeded "
+        f"({codes(succeeded)}) of {codes(statuses)}"
+    )
+
+
 def _values(alert_slice: pd.DataFrame, field: str, cap: int = 6) -> str | None:
     if field not in alert_slice.columns:
         return None
@@ -475,11 +509,14 @@ def render_family(
     family: pd.Series,
     reviews: dict[str, dict],
 ) -> None:
+    alert_slice = run.family_alerts(family)
     console.print(f"\n[bold]{family_heading(family)}[/bold]")
     console.print(f"[dim]family_id {family['family_id']}[/dim]")
     console.print(f"[dim]run {run.run_id}[/dim]\n")
     console.print("[bold cyan]Overview[/bold cyan]")
     console.print(f"  entity        : {family['entity_id']}")
+    if family["asset_roles"]:
+        console.print(f"  asset         : {', '.join(family['asset_roles'])}")
     console.print(f"  rule          : {family['rule_id']}")
     console.print(
         f"  window        : {fmt_time(family['start'])}"
@@ -489,10 +526,29 @@ def render_family(
         f"  ranking score : {family['ranking_score']:.3f}"
         f"   probability {family['evidence_probability'] * 100:.0f}%"
     )
+    rule_peers = run.families[
+        run.families["detector_source"].eq(family["detector_source"])
+        & run.families["rule_id"].eq(family["rule_id"])
+        & run.families["family_id"].ne(family["family_id"])
+    ]
+    volume_comparison = ""
+    if len(rule_peers) >= 3:
+        median = float(rule_peers["alert_count"].median())
+        ratio = int(family["alert_count"]) / median
+        ratio_text = f"{ratio:.1f}".rstrip("0").rstrip(".")
+        volume_comparison = (
+            f", {ratio_text}x the median for this rule in this run"
+        )
+    alerts_n = int(family["alert_count"])
+    sessions_n = int(family["n_child_sessions"])
     console.print(
-        f"  volume        : {int(family['alert_count'])} alerts, "
-        f"{int(family['n_child_sessions'])} session(s)"
+        f"  volume        : {alerts_n} alert{'' if alerts_n == 1 else 's'}, "
+        f"{sessions_n} session{'' if sessions_n == 1 else 's'}"
+        f"{volume_comparison}"
     )
+    outcome = _http_outcome(alert_slice)
+    if outcome:
+        console.print(f"  outcome       : {outcome}")
     techniques = sorted(family["technique_id_set"])
     if techniques:
         named = ", ".join(f"{tid} {technique_name(tid)}" for tid in techniques)
@@ -507,7 +563,6 @@ def render_family(
 
     _render_why(family)
 
-    alert_slice = run.family_alerts(family)
     handles = run.session_handles(family)
     if len(handles) == 1:
         # one session, so its evidence is the family's evidence, no extra drill
@@ -580,6 +635,9 @@ def render_session(
         f"  volume : {int(session['size'])} alerts, "
         f"score {session['ranking_score']:.2f}"
     )
+    outcome = _http_outcome(alert_slice)
+    if outcome:
+        console.print(f"  outcome: {outcome}")
     console.print()
     _render_panels(alert_slice)
 
