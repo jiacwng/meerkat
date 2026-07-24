@@ -63,7 +63,18 @@ def build_attack_lookup(stix_path: Path, out_path: Path) -> dict:
             "deprecated": bool(obj.get("revoked") or obj.get("x_mitre_deprecated")),
         }
 
-    lookup = {"tactic_order": tactic_order, "techniques": techniques}
+    # record which ATT&CK release these names came from, so an exported
+    # Navigator layer can declare the matrix it was actually built against
+    version = next(
+        (obj.get("x_mitre_version", "") for obj in objects
+         if obj["type"] == "x-mitre-collection"),
+        "",
+    )
+    lookup = {
+        "attack_version": version,
+        "tactic_order": tactic_order,
+        "techniques": techniques,
+    }
     out_path.write_text(json.dumps(lookup, indent=1), encoding="utf-8")
     return lookup
 
@@ -75,6 +86,9 @@ def load_attack_lookup(path: Path) -> dict:
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ATTACK_LOOKUP = load_attack_lookup(PROJECT_ROOT / "data" / "attack_lookup.json")
 TACTIC_ORDER = ATTACK_LOOKUP["tactic_order"]
+# the bundled lookup is Enterprise ATT&CK 19.1, which is where the tactic names
+# come from; older lookups predate the field and fall back to the same release
+ATTACK_VERSION = str(ATTACK_LOOKUP.get("attack_version") or "19").split(".")[0]
 
 
 def load_detection_mappings(path: Path) -> dict[str, dict[str, list[str]]]:
@@ -197,7 +211,11 @@ def export_navigator_layer(technique_ids, path: Path,
 
     layer = {
         "name": name,
-        "versions": {"attack": "14", "navigator": "4.9.1", "layer": "4.5"},
+        "versions": {
+            "attack": ATTACK_VERSION,
+            "navigator": "4.9.1",
+            "layer": "4.5",
+        },
         "domain": "enterprise-attack",
         "description": "Alert counts per observed ATT&CK technique (Meerkat)",
         "techniques": [
