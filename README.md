@@ -38,18 +38,18 @@ to investigate rather than 7,068 separate decisions.
 - A **session** contains one detector rule firing on one host until that stream
   stays quiet for more than ten minutes.
 - A **family** joins same-day sessions with the same host, detector and rule.
-- A **budget** is the number of families the analyst can review per day.
+- A **budget** is how many families an analyst reviews per day. It is a capacity
+  setting a team chooses, not a property of the data. Results are reported at 5,
+  10 and 25; 10 is the working example here.
 
-Meerkat ranks families because the queue still needs an order, but ranking is
-the mechanism rather than the final objective. Offline evaluation asks how many
-different labelled attack windows are represented within the review budget,
-instead of rewarding a queue for repeatedly surfacing one high-volume phase.
-This models the practical Tier 1 question: with limited time, how many distinct
-suspicious activities did the queue expose?
+Ranking is the mechanism rather than the goal. Evaluation asks how many different
+labelled attack windows appear within the review budget, instead of rewarding a
+queue that surfaces one high-volume phase repeatedly. This models the practical
+Tier 1 question: with limited time, how many distinct suspicious activities did
+the queue expose?
 
 On the bundled example, Meerkat reduces 36,358 alerts to 1,487 sessions and 326
-families. With a budget of 10, it presents the top 10 families for each of the
-four days in the scenario.
+families, and presents the top 10 families for each of the four days.
 
 ## How it works
 
@@ -111,17 +111,6 @@ The demo uses a model trained on seven AIT-ADS environments and ranks
 The queue covers four days; the image shows the ten families selected for the
 day the scripted attack runs.
 
-The queue is saved as a run, so investigation commands do not score the data
-again:
-
-```bash
-meerkat queue
-meerkat inspect F003
-meerkat inspect F003 S1
-meerkat review F003 escalate --note "Unexpected service change"
-meerkat export navigator
-```
-
 ## Analyst workflow
 
 | Command | Purpose |
@@ -144,9 +133,8 @@ meerkat inspect F003 S1 --raw --alerts 1
 meerkat review F003 escalate --note "Unexpected service change"
 ```
 
-The first command normalizes and ranks the new batch, then saves the run. The
-remaining commands reopen that run, inspect one selected family and record the
-analyst's decision without running the models again.
+The first command normalizes and ranks the batch and saves the run. The rest
+reopen that run without invoking the models again.
 
 Useful queue filters include:
 
@@ -199,7 +187,9 @@ ATT&CK 19.1.
   >
 </p>
 
-The spread across the kill chain is the useful signal here. The mapping supplies
+The spread across the kill chain is the useful signal. The figure groups
+techniques by order of magnitude so that all twelve stay legible, while the layer
+file itself stores each technique's raw alert count. The mapping supplies
 investigation context and does not assert that these observations belong to a
 single campaign.
 
@@ -237,20 +227,21 @@ time overlap alone does not count.
 | Ranking method | 5 | 10 | 25 |
 |---|---:|---:|---:|
 | **Learned family re-ranker** | **52** | **58** | **58** |
-| Max child-session score | 44 | 53 | 58 |
+| Best single session in the family | 44 | 53 | 58 |
 | Family size (alert count) | 29 | 30 | 39 |
 | Rule rarity, rarest first | 23 | 32 | 47 |
 | Native detector severity | 19 | 33 | 46 |
 | Random order | 17 | 29 | 43 |
 
-The two model rows are totals across the eight held-out environments, averaged
-over three random seeds with 200 trees. The four lower rows are unsupervised
-orderings of exactly the same families under the same daily budget and the same
-strict counting rule; they require no training, so every environment is scored
-directly. Random order is averaged over three seeds.
+Every row orders exactly the same families under the same budget and the same
+strict counting rule; only the ordering signal changes. The second row scores a
+family by its best single session and ignores everything else about the group, so
+the gap to the first row is what the family-level view is worth: eight windows at
+a budget of five, which is where an analyst's day is decided.
 
-Ranking by raw volume, rarity or the detectors' own severity is far behind at a
-budget of five, which is where an analyst's day is actually decided.
+The top two rows are totals across the eight held-out environments, averaged over
+three seeds with 200 trees. The lower four need no training and are scored
+directly, with random order averaged over three seeds.
 
 The dataset contains 79 attack windows. Only 60 contain at least one official
 event-labelled alert, so strict coverage cannot exceed 60 with this supervision.
