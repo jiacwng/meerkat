@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -680,6 +681,31 @@ def render_distinct(alert_slice: pd.DataFrame, field: str) -> None:
 # shared command helpers
 # --------------------------------------------------------------------------
 
+def _load_bundle(path: Path):
+    """Load the saved model, reporting a version mismatch once and plainly.
+
+    The shipped bundle is a pickle, so scikit-learn warns for every estimator
+    inside it when the installed version differs from the one that wrote it.
+    The estimators load correctly; the noise is what is unhelpful.
+    """
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        bundle = load_model(path)
+    mismatched = [
+        w for w in caught
+        if "InconsistentVersionWarning" in type(w.message).__name__
+    ]
+    if mismatched:
+        import sklearn
+        console.print(
+            f"[yellow]note[/yellow] the bundled model was trained with a "
+            f"different scikit-learn than the installed {sklearn.__version__}. "
+            "It loads and scores normally; retrain with `meerkat train` to "
+            "silence this."
+        )
+    return bundle
+
+
 def _load_run(args) -> RunState:
     try:
         return load_run(args.runs_dir, args.run)
@@ -796,7 +822,7 @@ def cmd_triage(args) -> None:
     _require(args.inventory, "inventory")
     _require(args.input / f"{args.company}_wazuh.json", "wazuh alerts")
     _require(args.input / f"{args.company}_aminer.json", "aminer alerts")
-    bundle = load_model(args.model)
+    bundle = _load_bundle(args.model)
     console.print(f"scoring {args.company} with {args.model}")
     scored_sessions, families, alerts = _score_company(
         bundle, args.input, args.company, args.inventory,
@@ -1108,15 +1134,21 @@ def cmd_demo(args) -> None:
             f"(holdout {DEMO_COMPANY})[/yellow]"
         )
         cmd_train(argparse.Namespace(
-            holdout=DEMO_COMPANY, raw_dir=args.raw_dir, labels=DEFAULT_LABELS,
-            inventory_dir=DEFAULT_INVENTORY_DIR, event_csv_dir=DEFAULT_EVENT_CSV,
+            holdout=DEMO_COMPANY, raw_dir=args.raw_dir,
+            labels=DEFAULT_LABELS,
+            inventory_dir=DEFAULT_INVENTORY_DIR,
+            event_csv_dir=DEFAULT_EVENT_CSV,
             trees=300, seed=0, model=args.model,
         ))
 
+    # the event-label CSVs are evaluation ground truth and are not shipped, so
+    # a clone triages without them and simply reports no window coverage
+    labels = DEFAULT_LABELS if DEFAULT_LABELS.exists() else None
+    event_csv = DEFAULT_EVENT_CSV if DEFAULT_EVENT_CSV.exists() else None
     cmd_triage(argparse.Namespace(
         model=args.model, input=args.raw_dir, company=DEMO_COMPANY,
         inventory=DEFAULT_INVENTORY_DIR / f"{DEMO_COMPANY}.json",
-        labels=DEFAULT_LABELS, event_csv_dir=DEFAULT_EVENT_CSV,
+        labels=labels, event_csv_dir=event_csv,
         budget=args.budget, runs_dir=args.runs_dir,
     ))
     console.print(
