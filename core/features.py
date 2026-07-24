@@ -16,7 +16,6 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-
 SESSION_NUMERIC_FEATURES = (
     "log_size",
     "duration_s",

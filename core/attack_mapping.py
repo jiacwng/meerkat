@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC
 from pathlib import Path
 
 import pandas as pd
@@ -230,7 +231,7 @@ def export_navigator_layer(technique_ids, path: Path,
 
 
 if __name__ == "__main__":
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from core.normalize import normalize_scenario
 
@@ -263,7 +264,7 @@ if __name__ == "__main__":
     print("\nattack story (in-window alerts):")
     for host, steps in attack_story(df[in_window]).items():
         chain = " -> ".join(
-            f"{tactic}({datetime.fromtimestamp(ts, tz=timezone.utc):%H:%M})"
+            f"{tactic}({datetime.fromtimestamp(ts, tz=UTC):%H:%M})"
             for ts, tactic in steps
         ) or "no mapped ATT&CK tactic"
         print(f"  {host}: {chain}")

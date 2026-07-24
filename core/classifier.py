@@ -25,7 +25,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-
 FAMILY_NUMERIC_FEATURES = (
     "child_score_max",
     "child_score_mean",

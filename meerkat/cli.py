@@ -13,7 +13,7 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -40,7 +40,6 @@ from core.scenario_eval import (
 from core.sessions import build_sessions
 from core.triage_policy import daily_queue, enrich_alerts
 from meerkat import __version__
-
 
 DEFAULT_MODEL = Path("models/meerkat_bundle.joblib")
 DEFAULT_RUNS = Path("runs")
@@ -70,11 +69,11 @@ def detector_label(detector_source: str) -> str:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def new_run_id(company: str) -> str:
-    return f"{company}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
+    return f"{company}-{datetime.now(UTC):%Y%m%d-%H%M%S}"
 
 
 def _family_label(alert_slice: pd.DataFrame) -> str:
@@ -320,13 +319,13 @@ PANEL_FIELDS = {field for _, rows in EVIDENCE_PANELS for _, field in rows}
 
 
 def fmt_time(timestamp: float) -> str:
-    return datetime.fromtimestamp(float(timestamp), tz=timezone.utc).strftime(
+    return datetime.fromtimestamp(float(timestamp), tz=UTC).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
 
 
 def fmt_date(day: int) -> str:
-    return datetime.fromtimestamp(int(day) * 86400, tz=timezone.utc).strftime(
+    return datetime.fromtimestamp(int(day) * 86400, tz=UTC).strftime(
         "%Y-%m-%d"
     )
 

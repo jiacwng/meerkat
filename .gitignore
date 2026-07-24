@@ -30,5 +30,8 @@ Thumbs.db
 .idea/
 .vscode/
 
-/tests
 docs/report/meerkat.tex
+
+# experiment harnesses for the milestone studies; they exercise scripts in
+# project_local/, which is not published, so they cannot run from a clone
+tests/test_m8_*.py

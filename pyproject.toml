@@ -20,3 +20,13 @@ meerkat = "meerkat.cli:main"
 
 [tool.setuptools]
 packages = ["core", "meerkat"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+# pycodestyle errors, pyflakes, import order, modern syntax and comprehensions.
+# Rules that would force verbose idioms into hand-written code are left out.
+select = ["E", "F", "I", "UP", "C4"]
+ignore = ["E501"]   # long lines are hand-wrapped to match the surrounding code

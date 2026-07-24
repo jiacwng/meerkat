@@ -18,7 +18,6 @@ import pandas as pd
 from core.features import standardize_severity
 from core.inventory import Inventory
 
-
 SECONDS_PER_DAY = 86400.0
 SESSION_GAP_S = 600.0
 SESSION_KEY = ("entity_id", "detector_source", "rule_id")
