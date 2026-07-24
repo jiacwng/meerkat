@@ -39,6 +39,7 @@ from core.scenario_eval import (
 )
 from core.sessions import build_sessions
 from core.triage_policy import daily_queue, enrich_alerts
+from meerkat import __version__
 
 
 DEFAULT_MODEL = Path("models/meerkat_bundle.joblib")
@@ -442,6 +443,9 @@ def render_queue(
     table.add_column("score", justify="right", no_wrap=True)
     table.add_column("prob%", justify="right", no_wrap=True)
     table.add_column("review", no_wrap=True)
+    if not len(families):
+        console.print(f"[dim]{title}: no families match[/dim]")
+        return
     for _, family in families.iterrows():
         review = reviews.get(family["family_id"], {})
         table.add_row(
@@ -456,8 +460,6 @@ def render_queue(
             review.get("decision", ""),
         )
     console.print(table)
-    if not len(families):
-        console.print("[dim]no families match[/dim]")
 
 
 def family_heading(family: pd.Series) -> str:
@@ -643,6 +645,14 @@ def _is_lfs_pointer(path: Path) -> bool:
         return file.read(64).startswith(b"version https://git-lfs")
 
 
+def _require(path: Path, what: str) -> None:
+    # checked up front, so a missing file reports itself instead of surfacing as
+    # a traceback halfway through normalization
+    if not path.exists():
+        console.print(f"[red]{what} not found:[/red] {path}")
+        raise SystemExit(1)
+
+
 def _score_company(
     bundle,
     input_dir: Path,
@@ -726,6 +736,9 @@ def cmd_triage(args) -> None:
             f"[red]no model at {args.model}[/red]  run `meerkat train` first"
         )
         raise SystemExit(1)
+    _require(args.inventory, "inventory")
+    _require(args.input / f"{args.company}_wazuh.json", "wazuh alerts")
+    _require(args.input / f"{args.company}_aminer.json", "aminer alerts")
     bundle = load_model(args.model)
     console.print(f"scoring {args.company} with {args.model}")
     scored_sessions, families, alerts = _score_company(
@@ -765,11 +778,23 @@ def cmd_triage(args) -> None:
 # queue
 # --------------------------------------------------------------------------
 
-def _select_families(run, show_all, host, detector, rule, review_state):
+def _select_families(
+    run, show_all, host, detector, rule, review_state, day=None
+):
     # a filter narrows the whole run, not only the day's top-K, so "show me
-    # everything on this host" reaches families below the queue line too
+    # everything on this host" reaches families below the queue line too. --day
+    # is a different thing: it picks one day and keeps that day's top-K.
     full_scope = show_all or any([host, detector, rule, review_state])
     families = run.families if full_scope else run.families[run.families["in_queue"]]
+    if day:
+        dates = families["day"].map(fmt_date)
+        if day not in set(dates):
+            console.print(
+                f"[red]no day {day} in this run[/red]  available: "
+                + ", ".join(sorted(set(run.families["day"].map(fmt_date))))
+            )
+            raise SystemExit(1)
+        families = families[dates.eq(day)]
     if host:
         families = families[
             families["host_label"].astype(str).eq(host)
@@ -792,24 +817,56 @@ def _select_families(run, show_all, host, detector, rule, review_state):
     return families
 
 
-def _print_queue(run, show_all, host, detector, rule, review_state) -> None:
+def _print_queue(
+    run, show_all, host, detector, rule, review_state, day=None
+) -> None:
     _announce_run(run)
     families = _select_families(
-        run, show_all, host, detector, rule, review_state
+        run, show_all, host, detector, rule, review_state, day
     )
     reviews = current_reviews(run.directory)
     if show_all or any([host, detector, rule, review_state]):
         scope = "all scored families"
     else:
         scope = f"top {run.meta['budget']} per day"
+    if day:
+        scope += f", {day}"
     render_queue(families, reviews, f"Review queue ({scope})")
 
 
 def cmd_queue(args) -> None:
     run = _load_run(args)
     _print_queue(
-        run, args.all, args.host, args.detector, args.rule, args.review_state
+        run, args.all, args.host, args.detector, args.rule, args.review_state,
+        args.day,
     )
+
+
+def cmd_runs(args) -> None:
+    latest = latest_run_id(args.runs_dir)
+    directories = sorted(
+        d for d in args.runs_dir.glob("*") if (d / "run.json").exists()
+    ) if args.runs_dir.exists() else []
+    if not directories:
+        console.print(f"[dim]no runs in {args.runs_dir}[/dim]")
+        return
+    table = Table(title="Saved runs", title_justify="left", header_style="bold")
+    table.add_column("run")
+    table.add_column("company")
+    table.add_column("budget", justify="right")
+    table.add_column("families", justify="right")
+    table.add_column("saved")
+    for directory in directories:
+        meta = json.loads((directory / "run.json").read_text(encoding="utf-8"))
+        marker = "  [green](latest)[/green]" if directory.name == latest else ""
+        table.add_row(
+            directory.name + marker,
+            str(meta.get("company", "")),
+            str(meta.get("budget", "")),
+            str(meta.get("families", "")),
+            str(meta.get("saved_at", "")),
+        )
+    console.print(table)
 
 
 # --------------------------------------------------------------------------
@@ -889,14 +946,14 @@ def cmd_inspect(args) -> None:
     try:
         family = run.family_by_handle(args.handle)
     except KeyError as error:
-        console.print(f"[red]{error}[/red]")
+        console.print(f"[red]{error.args[0]}[/red]")
         raise SystemExit(1)
 
     if args.session:
         try:
             session = run.session_by_handle(family, args.session)
         except KeyError as error:
-            console.print(f"[red]{error}[/red]")
+            console.print(f"[red]{error.args[0]}[/red]")
             raise SystemExit(1)
         alert_slice = run.session_alerts(session)
     else:
@@ -933,7 +990,7 @@ def cmd_review(args) -> None:
     try:
         family = run.family_by_handle(args.handle)
     except KeyError as error:
-        console.print(f"[red]{error}[/red]")
+        console.print(f"[red]{error.args[0]}[/red]")
         raise SystemExit(1)
     entry = append_review(
         run.directory, run.run_id, family["family_id"], family["handle"],
@@ -1015,6 +1072,13 @@ def cmd_demo(args) -> None:
 # argument parsing
 # --------------------------------------------------------------------------
 
+def _positive(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be 1 or more")
+    return number
+
+
 def _add_run_selector(parser) -> None:
     parser.add_argument("--run", help="run id (default: latest successful)")
     parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
@@ -1029,6 +1093,9 @@ def build_parser() -> argparse.ArgumentParser:
             "support commands: train, export navigator, demo"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"meerkat {__version__}"
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -1063,8 +1130,13 @@ def build_parser() -> argparse.ArgumentParser:
     queue.add_argument("--detector", help="filter by detector source")
     queue.add_argument("--rule", help="filter by rule id substring")
     queue.add_argument("--review-state", choices=REVIEW_DECISIONS)
+    queue.add_argument("--day", metavar="YYYY-MM-DD", help="one day's queue")
     _add_run_selector(queue)
     queue.set_defaults(func=cmd_queue)
+
+    runs = sub.add_parser("runs", help="list saved runs")
+    runs.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
+    runs.set_defaults(func=cmd_runs)
 
     inspect = sub.add_parser("inspect", help="open a family or session")
     inspect.add_argument("handle", help="family handle, e.g. F003")
@@ -1072,7 +1144,7 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--where", action="append", metavar="field=value")
     inspect.add_argument("--exclude", action="append", metavar="field=value")
     inspect.add_argument("--distinct", metavar="field")
-    inspect.add_argument("--alerts", type=int, metavar="N")
+    inspect.add_argument("--alerts", type=_positive, metavar="N")
     inspect.add_argument("--raw", action="store_true")
     inspect.add_argument("--raw-dir", type=Path, default=DEFAULT_RAW)
     _add_run_selector(inspect)
