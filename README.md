@@ -155,9 +155,11 @@ meerkat queue --review-state escalate
 scored family, including those below the queue line. `meerkat runs` lists the
 saved runs, and `--run ID` opens an older one.
 
-Inspection starts with a summary rather than a raw alert dump. Evidence is
-shown in consistent sections such as finding, identity, process, network, HTTP,
-DNS, TLS and provenance. Empty sections are hidden.
+Inspection starts with a summary rather than a raw alert dump. The overview
+answers what usually ends a triage: which asset was involved, whether the volume
+is unusual for that rule, and whether anything actually succeeded. Evidence then
+follows in consistent sections such as finding, identity, process, network,
+HTTP, DNS, TLS and provenance. Empty sections are hidden.
 
 <p align="center">
   <img
@@ -268,8 +270,8 @@ all 24 held-out environment and seed combinations. It improves how the displayed
 percentage matches observed outcomes; it does not change the ranking.
 
 The full experimental method, including rejected feature bundles and negative
-results, is documented in
-**[Meerkat: Ranking Alert Families for Capacity-Limited Triage](docs/report/meerkat.pdf)**.
+results, is written up in a technical report that is being rewritten against
+these numbers and will be linked here once it is current.
 
 ## Dataset
 
