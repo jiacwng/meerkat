@@ -111,9 +111,10 @@ The demo uses a model trained on seven AIT-ADS environments and ranks
 </p>
 
 `meerkat queue` prints every day in the run; `--day` narrows it to one, which is
-what the image shows. `score` is what orders the queue. `prob%` is that score
-turned into a probability, learned from the seven training environments; it is
-shown to the analyst and never changes the order.
+what the image shows. `score` orders the queue. `conf%` is that score calibrated
+against the seven training environments, so 87% means families scoring this high
+turned out to be genuine about 87% of the time. It is display only and never
+changes the order.
 
 ## Analyst workflow
 
@@ -341,7 +342,7 @@ case-management platform.
 
 - The results come from one simulated testbed whose environments share an attack
   script. They do not establish production performance.
-- Meerkat ranks by likelihood, not risk. `prob%` estimates how often comparable
+- Meerkat ranks by likelihood, not risk. `conf%` estimates how often comparable
   families turned out to be genuine and carries no asset-impact term, so a
   critical server and a spare workstation showing identical activity receive the
   same figure.

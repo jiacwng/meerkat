@@ -475,7 +475,7 @@ def render_queue(
     table.add_column("finding", no_wrap=True, max_width=40, overflow="ellipsis")
     table.add_column("alerts", justify="right", no_wrap=True)
     table.add_column("score", justify="right", no_wrap=True)
-    table.add_column("prob%", justify="right", no_wrap=True)
+    table.add_column("conf%", justify="right", no_wrap=True)
     table.add_column("review", no_wrap=True)
     if not len(families):
         console.print(f"[dim]{title}: no families match[/dim]")
@@ -524,7 +524,7 @@ def render_family(
     )
     console.print(
         f"  ranking score : {family['ranking_score']:.3f}"
-        f"   probability {family['evidence_probability'] * 100:.0f}%"
+        f"   confidence {family['evidence_probability'] * 100:.0f}%"
     )
     rule_peers = run.families[
         run.families["detector_source"].eq(family["detector_source"])
