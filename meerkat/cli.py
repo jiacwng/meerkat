@@ -440,7 +440,7 @@ def render_queue(
     table.add_column("finding", no_wrap=True, max_width=40, overflow="ellipsis")
     table.add_column("alerts", justify="right", no_wrap=True)
     table.add_column("score", justify="right", no_wrap=True)
-    table.add_column("evid%", justify="right", no_wrap=True)
+    table.add_column("prob%", justify="right", no_wrap=True)
     table.add_column("review", no_wrap=True)
     for _, family in families.iterrows():
         review = reviews.get(family["family_id"], {})
@@ -485,7 +485,7 @@ def render_family(
     )
     console.print(
         f"  ranking score : {family['ranking_score']:.3f}"
-        f"   evidence probability {family['evidence_probability'] * 100:.0f}%"
+        f"   probability {family['evidence_probability'] * 100:.0f}%"
     )
     console.print(
         f"  volume        : {int(family['alert_count'])} alerts, "
