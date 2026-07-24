@@ -1,0 +1,320 @@
+{
+  "company": "fox",
+  "assets": [
+    {
+      "hostname": "internal-share",
+      "ip_addresses": [
+        "10.35.33.111"
+      ],
+      "groups": [
+        "beatservers",
+        "intranet",
+        "servers",
+        "share"
+      ]
+    },
+    {
+      "hostname": "remote-employee-1",
+      "ip_addresses": [
+        "192.168.128.107"
+      ],
+      "groups": [
+        "employee",
+        "internet",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-0",
+      "ip_addresses": [
+        "192.168.130.84"
+      ],
+      "groups": [
+        "employee",
+        "internet",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-2",
+      "ip_addresses": [
+        "192.168.129.254"
+      ],
+      "groups": [
+        "employee",
+        "internet",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-3",
+      "ip_addresses": [
+        "192.168.128.152"
+      ],
+      "groups": [
+        "employee",
+        "internet",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "jonesmorgan-mail",
+      "ip_addresses": [
+        "192.168.128.170"
+      ],
+      "groups": [
+        "ext_mail",
+        "internet",
+        "mailserver"
+      ]
+    },
+    {
+      "hostname": "ext-user-5",
+      "ip_addresses": [
+        "192.168.131.165"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "taylorcruz-mail",
+      "ip_addresses": [
+        "192.168.128.195"
+      ],
+      "groups": [
+        "ext_mail",
+        "internet",
+        "mailserver"
+      ]
+    },
+    {
+      "hostname": "ext-user-0",
+      "ip_addresses": [
+        "192.168.131.118"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "miller-mail",
+      "ip_addresses": [
+        "192.168.129.212"
+      ],
+      "groups": [
+        "ext_mail",
+        "internet",
+        "mailserver"
+      ]
+    },
+    {
+      "hostname": "ext-user-3",
+      "ip_addresses": [
+        "192.168.131.234"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "ext-user-6",
+      "ip_addresses": [
+        "192.168.131.156"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "whittaker-mail",
+      "ip_addresses": [
+        "192.168.131.228"
+      ],
+      "groups": [
+        "ext_mail",
+        "internet",
+        "mailserver"
+      ]
+    },
+    {
+      "hostname": "ext-user-4",
+      "ip_addresses": [
+        "192.168.131.15"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "ext-user-1",
+      "ip_addresses": [
+        "192.168.129.209"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "ext-user-2",
+      "ip_addresses": [
+        "192.168.130.110"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "internal-employee-4",
+      "ip_addresses": [
+        "10.35.33.116"
+      ],
+      "groups": [
+        "employee",
+        "internal_employee",
+        "intranet"
+      ]
+    },
+    {
+      "hostname": "mail",
+      "ip_addresses": [
+        "172.17.131.81"
+      ],
+      "groups": [
+        "dmz",
+        "dnat",
+        "mailserver",
+        "proxied",
+        "servers"
+      ]
+    },
+    {
+      "hostname": "vpn",
+      "ip_addresses": [
+        "172.17.130.196"
+      ],
+      "groups": [
+        "dmz",
+        "dnat",
+        "servers"
+      ]
+    },
+    {
+      "hostname": "webserver",
+      "ip_addresses": [
+        "172.17.130.37"
+      ],
+      "groups": [
+        "dmz",
+        "dnat",
+        "servers"
+      ]
+    },
+    {
+      "hostname": "internal-employee-0",
+      "ip_addresses": [
+        "10.35.32.164"
+      ],
+      "groups": [
+        "employee",
+        "internal_employee",
+        "intranet"
+      ]
+    },
+    {
+      "hostname": "internal-employee-2",
+      "ip_addresses": [
+        "10.35.35.118"
+      ],
+      "groups": [
+        "employee",
+        "internal_employee",
+        "intranet"
+      ]
+    },
+    {
+      "hostname": "cloud-share",
+      "ip_addresses": [
+        "172.17.129.140"
+      ],
+      "groups": [
+        "dmz",
+        "proxied",
+        "servers"
+      ]
+    },
+    {
+      "hostname": "internal-employee-3",
+      "ip_addresses": [
+        "10.35.35.202"
+      ],
+      "groups": [
+        "employee",
+        "internal_employee",
+        "intranet"
+      ]
+    },
+    {
+      "hostname": "monitoring",
+      "ip_addresses": [
+        "10.35.35.204"
+      ],
+      "groups": [
+        "intranet",
+        "servers"
+      ]
+    },
+    {
+      "hostname": "internal-employee-1",
+      "ip_addresses": [
+        "10.35.33.144"
+      ],
+      "groups": [
+        "employee",
+        "internal_employee",
+        "intranet"
+      ]
+    },
+    {
+      "hostname": "intranet-server",
+      "ip_addresses": [
+        "10.35.35.206"
+      ],
+      "groups": [
+        "beatservers",
+        "intranet",
+        "servers"
+      ]
+    },
+    {
+      "hostname": "inet-firewall",
+      "ip_addresses": [
+        "10.35.32.1",
+        "192.168.128.4",
+        "172.17.128.1"
+      ],
+      "groups": [
+        "dnsservers",
+        "firewall",
+        "servers"
+      ]
+    },
+    {
+      "hostname": "inet-dns",
+      "ip_addresses": [
+        "192.168.255.254"
+      ],
+      "groups": [
+        "dnsservers",
+        "internet"
+      ]
+    }
+  ]
+}

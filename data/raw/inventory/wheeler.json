@@ -1,0 +1,385 @@
+{
+  "company": "wheeler",
+  "assets": [
+    {
+      "hostname": "fischer-mail",
+      "ip_addresses": [
+        "172.27.183.191"
+      ],
+      "groups": [
+        "ext_mail",
+        "internet",
+        "mailserver"
+      ]
+    },
+    {
+      "hostname": "remote-employee-3",
+      "ip_addresses": [
+        "172.27.180.248"
+      ],
+      "groups": [
+        "employee",
+        "internet",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-2",
+      "ip_addresses": [
+        "172.27.180.13"
+      ],
+      "groups": [
+        "employee",
+        "internet",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-0",
+      "ip_addresses": [
+        "172.27.182.90"
+      ],
+      "groups": [
+        "employee",
+        "internet",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-4",
+      "ip_addresses": [
+        "172.27.182.172"
+      ],
+      "groups": [
+        "employee",
+        "internet",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-5",
+      "ip_addresses": [
+        "172.27.182.162"
+      ],
+      "groups": [
+        "employee",
+        "internet",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-1",
+      "ip_addresses": [
+        "172.27.181.43"
+      ],
+      "groups": [
+        "employee",
+        "internet",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "internal-employee-5",
+      "ip_addresses": [
+        "192.168.0.242"
+      ],
+      "groups": [
+        "employee",
+        "internal_employee",
+        "intranet"
+      ]
+    },
+    {
+      "hostname": "internal-employee-6",
+      "ip_addresses": [
+        "192.168.0.133"
+      ],
+      "groups": [
+        "employee",
+        "internal_employee",
+        "intranet"
+      ]
+    },
+    {
+      "hostname": "internal-employee-2",
+      "ip_addresses": [
+        "192.168.2.157"
+      ],
+      "groups": [
+        "employee",
+        "internal_employee",
+        "intranet"
+      ]
+    },
+    {
+      "hostname": "internal-employee-7",
+      "ip_addresses": [
+        "192.168.2.226"
+      ],
+      "groups": [
+        "employee",
+        "internal_employee",
+        "intranet"
+      ]
+    },
+    {
+      "hostname": "webserver",
+      "ip_addresses": [
+        "10.38.243.24"
+      ],
+      "groups": [
+        "dmz",
+        "dnat",
+        "servers"
+      ]
+    },
+    {
+      "hostname": "internal-employee-1",
+      "ip_addresses": [
+        "192.168.0.91"
+      ],
+      "groups": [
+        "employee",
+        "internal_employee",
+        "intranet"
+      ]
+    },
+    {
+      "hostname": "internal-employee-3",
+      "ip_addresses": [
+        "192.168.1.213"
+      ],
+      "groups": [
+        "employee",
+        "internal_employee",
+        "intranet"
+      ]
+    },
+    {
+      "hostname": "internal-employee-4",
+      "ip_addresses": [
+        "192.168.3.138"
+      ],
+      "groups": [
+        "employee",
+        "internal_employee",
+        "intranet"
+      ]
+    },
+    {
+      "hostname": "internal-employee-0",
+      "ip_addresses": [
+        "192.168.0.60"
+      ],
+      "groups": [
+        "employee",
+        "internal_employee",
+        "intranet"
+      ]
+    },
+    {
+      "hostname": "ext-user-2",
+      "ip_addresses": [
+        "172.27.182.236"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "internal-share",
+      "ip_addresses": [
+        "192.168.3.116"
+      ],
+      "groups": [
+        "beatservers",
+        "intranet",
+        "servers",
+        "share"
+      ]
+    },
+    {
+      "hostname": "ext-user-4",
+      "ip_addresses": [
+        "172.27.180.42"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "ext-user-1",
+      "ip_addresses": [
+        "172.27.183.160"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "ext-user-0",
+      "ip_addresses": [
+        "172.27.182.207"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "ext-user-5",
+      "ip_addresses": [
+        "172.27.183.104"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "ext-user-7",
+      "ip_addresses": [
+        "172.27.183.56"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "ext-user-3",
+      "ip_addresses": [
+        "172.27.182.155"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "ext-user-6",
+      "ip_addresses": [
+        "172.27.183.131"
+      ],
+      "groups": [
+        "ext_user",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "khanwood-mail",
+      "ip_addresses": [
+        "172.27.181.253"
+      ],
+      "groups": [
+        "ext_mail",
+        "internet",
+        "mailserver"
+      ]
+    },
+    {
+      "hostname": "sanchez-mail",
+      "ip_addresses": [
+        "172.27.181.174"
+      ],
+      "groups": [
+        "ext_mail",
+        "internet",
+        "mailserver"
+      ]
+    },
+    {
+      "hostname": "williams-mail",
+      "ip_addresses": [
+        "172.27.182.4"
+      ],
+      "groups": [
+        "ext_mail",
+        "internet",
+        "mailserver"
+      ]
+    },
+    {
+      "hostname": "vpn",
+      "ip_addresses": [
+        "10.38.243.125"
+      ],
+      "groups": [
+        "dmz",
+        "dnat",
+        "servers"
+      ]
+    },
+    {
+      "hostname": "mail",
+      "ip_addresses": [
+        "10.38.242.195"
+      ],
+      "groups": [
+        "dmz",
+        "dnat",
+        "mailserver",
+        "proxied",
+        "servers"
+      ]
+    },
+    {
+      "hostname": "intranet-server",
+      "ip_addresses": [
+        "192.168.2.114"
+      ],
+      "groups": [
+        "beatservers",
+        "intranet",
+        "servers"
+      ]
+    },
+    {
+      "hostname": "monitoring",
+      "ip_addresses": [
+        "192.168.1.116"
+      ],
+      "groups": [
+        "intranet",
+        "servers"
+      ]
+    },
+    {
+      "hostname": "cloud-share",
+      "ip_addresses": [
+        "10.38.242.230"
+      ],
+      "groups": [
+        "dmz",
+        "proxied",
+        "servers"
+      ]
+    },
+    {
+      "hostname": "inet-dns",
+      "ip_addresses": [
+        "172.27.183.254"
+      ],
+      "groups": [
+        "dnsservers",
+        "internet"
+      ]
+    },
+    {
+      "hostname": "inet-firewall",
+      "ip_addresses": [
+        "172.27.180.4",
+        "192.168.0.1",
+        "10.38.242.1"
+      ],
+      "groups": [
+        "dnsservers",
+        "firewall",
+        "servers"
+      ]
+    }
+  ]
+}
