@@ -108,8 +108,10 @@ The demo uses a model trained on seven AIT-ADS environments and ranks
   >
 </p>
 
-The queue covers four days; the image shows the ten families selected for the
-day the scripted attack runs.
+The queue covers four days and the image shows one of them. `score` is the
+re-ranker's raw ordering value. `evid%` is that score calibrated against how often
+families scoring as high turned out to be genuine, so it is the figure to read as
+a probability; it is shown to the analyst and never changes the order.
 
 ## Analyst workflow
 
