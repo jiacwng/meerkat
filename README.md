@@ -108,10 +108,10 @@ The demo uses a model trained on seven AIT-ADS environments and ranks
   >
 </p>
 
-The queue covers four days and the image shows one of them. `score` is the
-re-ranker's raw ordering value. `evid%` is that score calibrated against how often
-families scoring as high turned out to be genuine, so it is the figure to read as
-a probability; it is shown to the analyst and never changes the order.
+The queue covers four days and the image shows one of them. `score` is what
+orders the queue. `prob%` is that score turned into a probability, learned from
+the seven training environments; it is shown to the analyst and never changes
+the order.
 
 ## Analyst workflow
 
@@ -207,6 +207,11 @@ treats the selected queue as a set: ten near-identical families do not provide
 the same coverage as ten families representing different attack activity.
 Attack windows are known only during offline evaluation and never influence
 runtime grouping, features, scores or queue selection.
+
+That separation is checked rather than assumed. Triaging the demo environment
+with the label files supplied and again with them withheld produces identical
+scores and an identical queue; the only columns that change are the evaluation
+ones, which no model reads.
 
 AIT-ADS describes its scripted attack steps with labelled time windows. Meerkat
 counts a window as **strictly reached** only when the daily queue contains an
@@ -326,6 +331,10 @@ case-management platform.
 
 - The results come from one simulated testbed whose environments share an attack
   script. They do not establish production performance.
+- Meerkat ranks by likelihood, not risk. `prob%` estimates how often comparable
+  families turned out to be genuine and carries no asset-impact term, so a
+  critical server and a spare workstation showing identical activity receive the
+  same figure.
 - Triage is currently batch-based rather than streaming.
 - Review state is local and single-user. There is no authentication, ownership
   assignment or multi-analyst locking.

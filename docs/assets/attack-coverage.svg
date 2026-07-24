@@ -1,57 +1,57 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 462" width="920" height="462" font-family="Segoe UI, Roboto, Helvetica Neue, Helvetica, Arial, sans-serif">
-<rect x="0" y="0" width="920" height="462" fill="#ffffff"/>
-<text x="16" y="28" font-size="14" font-weight="600" fill="#1f2328">ATT and CK techniques Meerkat observed, by tactic</text>
-<text x="16" y="48" font-size="11" fill="#656d76">12 techniques across 9 tactics on the russellmitchell demo. Shading and the trailing number are how many alerts mapped to each technique.</text>
-<text x="16" y="95" font-size="11.5" font-weight="600" fill="#1f2328">Reconnaissance</text>
-<rect x="200" y="78" width="260" height="24" rx="6" fill="#1c5cab" stroke="#5598e7"/>
-<text x="209" y="94" font-size="11" fill="#ffffff">T1595.002  Vulnerability Scanning  10,982</text>
-<rect x="468" y="78" width="171" height="24" rx="6" fill="#86b6ef" stroke="#5598e7"/>
-<text x="477" y="94" font-size="11" fill="#1f2328">T1595  Active Scanning  37</text>
-<text x="16" y="129" font-size="11.5" font-weight="600" fill="#1f2328">Initial Access</text>
-<rect x="200" y="112" width="272" height="24" rx="6" fill="#b7d3f6" stroke="#5598e7"/>
-<text x="209" y="128" font-size="11" fill="#1f2328">T1190  Exploit Public-Facing Application  3</text>
-<rect x="480" y="112" width="160" height="24" rx="6" fill="#b7d3f6" stroke="#5598e7"/>
-<text x="489" y="128" font-size="11" fill="#1f2328">T1078  Valid Accounts  1</text>
-<text x="16" y="163" font-size="11.5" font-weight="600" fill="#1f2328">Persistence</text>
-<rect x="200" y="146" width="154" height="24" rx="6" fill="#b7d3f6" stroke="#5598e7"/>
-<text x="209" y="162" font-size="11" fill="#1f2328">T1505.003  Web Shell  6</text>
-<rect x="362" y="146" width="160" height="24" rx="6" fill="#b7d3f6" stroke="#5598e7"/>
-<text x="371" y="162" font-size="11" fill="#1f2328">T1078  Valid Accounts  1</text>
-<text x="16" y="197" font-size="11.5" font-weight="600" fill="#1f2328">Privilege Escalation</text>
-<rect x="200" y="180" width="177" height="24" rx="6" fill="#b7d3f6" stroke="#5598e7"/>
-<text x="209" y="196" font-size="11" fill="#1f2328">T1055  Process Injection  2</text>
-<rect x="385" y="180" width="224" height="24" rx="6" fill="#b7d3f6" stroke="#5598e7"/>
-<text x="394" y="196" font-size="11" fill="#1f2328">T1548.003  Sudo and Sudo Caching  2</text>
-<rect x="618" y="180" width="160" height="24" rx="6" fill="#b7d3f6" stroke="#5598e7"/>
-<text x="627" y="196" font-size="11" fill="#1f2328">T1078  Valid Accounts  1</text>
-<text x="16" y="231" font-size="11.5" font-weight="600" fill="#1f2328">Stealth</text>
-<rect x="200" y="214" width="177" height="24" rx="6" fill="#b7d3f6" stroke="#5598e7"/>
-<text x="209" y="230" font-size="11" fill="#1f2328">T1055  Process Injection  2</text>
-<rect x="385" y="214" width="160" height="24" rx="6" fill="#b7d3f6" stroke="#5598e7"/>
-<text x="394" y="230" font-size="11" fill="#1f2328">T1078  Valid Accounts  1</text>
-<text x="16" y="265" font-size="11.5" font-weight="600" fill="#1f2328">Credential Access</text>
-<rect x="200" y="248" width="154" height="24" rx="6" fill="#3987e5" stroke="#5598e7"/>
-<text x="209" y="264" font-size="11" fill="#1f2328">T1110  Brute Force  126</text>
-<rect x="362" y="248" width="207" height="24" rx="6" fill="#86b6ef" stroke="#5598e7"/>
-<text x="371" y="264" font-size="11" fill="#1f2328">T1110.001  Password Guessing  15</text>
-<text x="16" y="299" font-size="11.5" font-weight="600" fill="#1f2328">Discovery</text>
-<rect x="200" y="282" width="242" height="24" rx="6" fill="#b7d3f6" stroke="#5598e7"/>
-<text x="209" y="298" font-size="11" fill="#1f2328">T1083  File and Directory Discovery  2</text>
-<text x="16" y="333" font-size="11.5" font-weight="600" fill="#1f2328">Exfiltration</text>
-<rect x="200" y="316" width="378" height="24" rx="6" fill="#3987e5" stroke="#5598e7"/>
-<text x="209" y="332" font-size="11" fill="#1f2328">T1048.003  Exfiltration Over Unencrypted Non-C2 Protocol  123</text>
-<text x="16" y="367" font-size="11.5" font-weight="600" fill="#1f2328">Impact</text>
-<rect x="200" y="350" width="154" height="24" rx="6" fill="#86b6ef" stroke="#5598e7"/>
-<text x="209" y="366" font-size="11" fill="#1f2328">T1489  Service Stop  25</text>
-<line x1="16" y1="390" x2="904" y2="390" stroke="#d0d7de"/>
-<text x="16" y="420" font-size="10.5" fill="#656d76">alerts mapped</text>
-<rect x="116" y="408" width="16" height="16" rx="3" fill="#b7d3f6" stroke="#5598e7"/>
-<text x="138" y="420" font-size="10.5" fill="#1f2328">1-9</text>
-<rect x="176" y="408" width="16" height="16" rx="3" fill="#86b6ef" stroke="#5598e7"/>
-<text x="198" y="420" font-size="10.5" fill="#1f2328">10-99</text>
-<rect x="248" y="408" width="16" height="16" rx="3" fill="#3987e5" stroke="#5598e7"/>
-<text x="270" y="420" font-size="10.5" fill="#1f2328">100-999</text>
-<rect x="332" y="408" width="16" height="16" rx="3" fill="#1c5cab" stroke="#5598e7"/>
-<text x="354" y="420" font-size="10.5" fill="#1f2328">1,000+</text>
-<text x="16" y="448" font-size="11" fill="#1f2328">Rendered from the layer that meerkat export navigator writes. The same file opens in the MITRE ATT and CK Navigator.</text>
+<rect x="0" y="0" width="920" height="462" fill="#292929"/>
+<text x="16" y="28" font-size="14" font-weight="600" fill="#e6e6e6">ATT and CK techniques Meerkat observed, by tactic</text>
+<text x="16" y="48" font-size="11" fill="#9aa0a6">12 techniques across 9 tactics on the russellmitchell demo. Shading and the trailing number are how many alerts mapped to each technique.</text>
+<text x="16" y="95" font-size="11.5" font-weight="600" fill="#e6e6e6">Reconnaissance</text>
+<rect x="200" y="78" width="260" height="24" rx="6" fill="#9ec5f4" stroke="#5598e7"/>
+<text x="209" y="94" font-size="11" fill="#14202e">T1595.002  Vulnerability Scanning  10,982</text>
+<rect x="468" y="78" width="171" height="24" rx="6" fill="#256abf" stroke="#5598e7"/>
+<text x="477" y="94" font-size="11" fill="#e6e6e6">T1595  Active Scanning  37</text>
+<text x="16" y="129" font-size="11.5" font-weight="600" fill="#e6e6e6">Initial Access</text>
+<rect x="200" y="112" width="272" height="24" rx="6" fill="#184f95" stroke="#5598e7"/>
+<text x="209" y="128" font-size="11" fill="#e6e6e6">T1190  Exploit Public-Facing Application  3</text>
+<rect x="480" y="112" width="160" height="24" rx="6" fill="#184f95" stroke="#5598e7"/>
+<text x="489" y="128" font-size="11" fill="#e6e6e6">T1078  Valid Accounts  1</text>
+<text x="16" y="163" font-size="11.5" font-weight="600" fill="#e6e6e6">Persistence</text>
+<rect x="200" y="146" width="154" height="24" rx="6" fill="#184f95" stroke="#5598e7"/>
+<text x="209" y="162" font-size="11" fill="#e6e6e6">T1505.003  Web Shell  6</text>
+<rect x="362" y="146" width="160" height="24" rx="6" fill="#184f95" stroke="#5598e7"/>
+<text x="371" y="162" font-size="11" fill="#e6e6e6">T1078  Valid Accounts  1</text>
+<text x="16" y="197" font-size="11.5" font-weight="600" fill="#e6e6e6">Privilege Escalation</text>
+<rect x="200" y="180" width="177" height="24" rx="6" fill="#184f95" stroke="#5598e7"/>
+<text x="209" y="196" font-size="11" fill="#e6e6e6">T1055  Process Injection  2</text>
+<rect x="385" y="180" width="224" height="24" rx="6" fill="#184f95" stroke="#5598e7"/>
+<text x="394" y="196" font-size="11" fill="#e6e6e6">T1548.003  Sudo and Sudo Caching  2</text>
+<rect x="618" y="180" width="160" height="24" rx="6" fill="#184f95" stroke="#5598e7"/>
+<text x="627" y="196" font-size="11" fill="#e6e6e6">T1078  Valid Accounts  1</text>
+<text x="16" y="231" font-size="11.5" font-weight="600" fill="#e6e6e6">Stealth</text>
+<rect x="200" y="214" width="177" height="24" rx="6" fill="#184f95" stroke="#5598e7"/>
+<text x="209" y="230" font-size="11" fill="#e6e6e6">T1055  Process Injection  2</text>
+<rect x="385" y="214" width="160" height="24" rx="6" fill="#184f95" stroke="#5598e7"/>
+<text x="394" y="230" font-size="11" fill="#e6e6e6">T1078  Valid Accounts  1</text>
+<text x="16" y="265" font-size="11.5" font-weight="600" fill="#e6e6e6">Credential Access</text>
+<rect x="200" y="248" width="154" height="24" rx="6" fill="#5598e7" stroke="#5598e7"/>
+<text x="209" y="264" font-size="11" fill="#14202e">T1110  Brute Force  126</text>
+<rect x="362" y="248" width="207" height="24" rx="6" fill="#256abf" stroke="#5598e7"/>
+<text x="371" y="264" font-size="11" fill="#e6e6e6">T1110.001  Password Guessing  15</text>
+<text x="16" y="299" font-size="11.5" font-weight="600" fill="#e6e6e6">Discovery</text>
+<rect x="200" y="282" width="242" height="24" rx="6" fill="#184f95" stroke="#5598e7"/>
+<text x="209" y="298" font-size="11" fill="#e6e6e6">T1083  File and Directory Discovery  2</text>
+<text x="16" y="333" font-size="11.5" font-weight="600" fill="#e6e6e6">Exfiltration</text>
+<rect x="200" y="316" width="378" height="24" rx="6" fill="#5598e7" stroke="#5598e7"/>
+<text x="209" y="332" font-size="11" fill="#14202e">T1048.003  Exfiltration Over Unencrypted Non-C2 Protocol  123</text>
+<text x="16" y="367" font-size="11.5" font-weight="600" fill="#e6e6e6">Impact</text>
+<rect x="200" y="350" width="154" height="24" rx="6" fill="#256abf" stroke="#5598e7"/>
+<text x="209" y="366" font-size="11" fill="#e6e6e6">T1489  Service Stop  25</text>
+<line x1="16" y1="390" x2="904" y2="390" stroke="#4a4a4a"/>
+<text x="16" y="420" font-size="10.5" fill="#9aa0a6">alerts mapped</text>
+<rect x="116" y="408" width="16" height="16" rx="3" fill="#184f95" stroke="#5598e7"/>
+<text x="138" y="420" font-size="10.5" fill="#e6e6e6">1-9</text>
+<rect x="176" y="408" width="16" height="16" rx="3" fill="#256abf" stroke="#5598e7"/>
+<text x="198" y="420" font-size="10.5" fill="#e6e6e6">10-99</text>
+<rect x="248" y="408" width="16" height="16" rx="3" fill="#5598e7" stroke="#5598e7"/>
+<text x="270" y="420" font-size="10.5" fill="#e6e6e6">100-999</text>
+<rect x="332" y="408" width="16" height="16" rx="3" fill="#9ec5f4" stroke="#5598e7"/>
+<text x="354" y="420" font-size="10.5" fill="#e6e6e6">1,000+</text>
+<text x="16" y="448" font-size="11" fill="#e6e6e6">Rendered from the layer that meerkat export navigator writes. The same file opens in the MITRE ATT and CK Navigator.</text>
 </svg>
