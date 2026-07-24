@@ -27,12 +27,13 @@ Instead of ranking isolated alerts, Meerkat ranks **families**. For example, one
 Wazuh rule firing 7,068 times on the same host during one day becomes one family
 to investigate rather than 7,068 separate decisions.
 
-```text
-detector alerts
-      |
-      v
-normalized alerts -> sessions -> families -> ranked daily queue
-```
+<p align="center">
+  <img
+    src="docs/assets/pipeline.svg"
+    alt="36,358 alerts group into 1,487 sessions, collapse into 326 families, and are ranked into a queue of 10 reviewed per day"
+    width="100%"
+  >
+</p>
 
 - A **session** contains one detector rule firing on one host until that stream
   stays quiet for more than ten minutes.
@@ -99,14 +100,16 @@ meerkat demo
 The demo uses a model trained on seven AIT-ADS environments and ranks
 `russellmitchell` as the unseen eighth environment.
 
-```text
-run russellmitchell-... | company russellmitchell | budget 10 | 326 families
+<p align="center">
+  <img
+    src="docs/assets/queue.svg"
+    alt="Review queue for one day of the demo, listing ten ranked families with host, detector, finding, alert count and score"
+    width="100%"
+  >
+</p>
 
-handle  date        host           detector  finding                         alerts
-F001    2022-01-21  inet-firewall  AMiner    Unusual DNS query frequencies        6
-F002    2022-01-21  inet-firewall  AMiner    New service_start combination        1
-F003    2022-01-21  inet-firewall  AMiner    New service_stop combination         1
-```
+The queue covers four days; the image shows the ten families selected for the
+day the scripted attack runs.
 
 The queue is saved as a run, so investigation commands do not score the data
 again:
@@ -158,6 +161,17 @@ Inspection starts with a summary rather than a raw alert dump. Evidence is
 shown in consistent sections such as finding, identity, process, network, HTTP,
 DNS, TLS and provenance. Empty sections are hidden.
 
+<p align="center">
+  <img
+    src="docs/assets/inspect.svg"
+    alt="Inspecting one family: overview, ranking signals, evidence panels, related ATT&CK observations and other families on the same host"
+    width="100%"
+  >
+</p>
+
+The view also lists other families on the same host and flags those raised by a
+different detector, which is how corroborating activity is found.
+
 ```bash
 meerkat inspect F218 --distinct http_status
 meerkat inspect F218 --where http_status=403
@@ -168,6 +182,26 @@ meerkat inspect F218 S1 --raw --alerts 1
 Reviews are appended to `reviews.jsonl` inside the run directory. The most
 recent entry is the current decision, while earlier entries remain available as
 a small audit trail.
+
+### ATT&CK context
+
+`meerkat export navigator` writes the observed techniques as a layer file that
+opens directly in the
+[MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/). On
+the demo run it covers 12 techniques across 9 tactics, built against Enterprise
+ATT&CK 19.1.
+
+<p align="center">
+  <img
+    src="docs/assets/attack-coverage.svg"
+    alt="Observed ATT&CK techniques grouped by tactic, from reconnaissance through credential access, discovery, exfiltration and impact"
+    width="100%"
+  >
+</p>
+
+The spread across the kill chain is the useful signal here. The mapping supplies
+investigation context and does not assert that these observations belong to a
+single campaign.
 
 ## Evaluation
 
@@ -200,13 +234,23 @@ that activity at quiet gaps. The family may extend beyond the attack window, but
 strict coverage requires its labelled alert (`*`) to fall inside the window;
 time overlap alone does not count.
 
-| Families reviewed per day | 5 | 10 | 25 |
+| Ranking method | 5 | 10 | 25 |
 |---|---:|---:|---:|
-| Max child-session score | 44 | 53 | 58 |
 | **Learned family re-ranker** | **52** | **58** | **58** |
+| Max child-session score | 44 | 53 | 58 |
+| Family size (alert count) | 29 | 30 | 39 |
+| Rule rarity, rarest first | 23 | 32 | 47 |
+| Native detector severity | 19 | 33 | 46 |
+| Random order | 17 | 29 | 43 |
 
-These values are totals across the eight held-out environments, averaged over
-three random seeds with 200 trees.
+The two model rows are totals across the eight held-out environments, averaged
+over three random seeds with 200 trees. The four lower rows are unsupervised
+orderings of exactly the same families under the same daily budget and the same
+strict counting rule; they require no training, so every environment is scored
+directly. Random order is averaged over three seeds.
+
+Ranking by raw volume, rarity or the detectors' own severity is far behind at a
+budget of five, which is where an analyst's day is actually decided.
 
 The dataset contains 79 attack windows. Only 60 contain at least one official
 event-labelled alert, so strict coverage cannot exceed 60 with this supervision.
