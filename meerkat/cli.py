@@ -421,7 +421,7 @@ def _render_why(family: pd.Series) -> None:
         signals.append(
             f"maps to {int(family['technique_count'])} ATT&CK technique(s)"
         )
-    console.print("[bold cyan]Why this ranks where it does[/bold cyan]")
+    console.print("[bold cyan]Ranking signals[/bold cyan]")
     for signal in signals:
         console.print(f"  - {signal}")
     console.print()
