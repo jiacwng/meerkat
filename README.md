@@ -6,7 +6,7 @@
   >
 </p>
 
-<h1 align="center">Meerkat</h1>
+<h1 align="center">meerkat</h1>
 
 <p align="center">
   <strong>ML-assisted alert triage for multi-detector SOC data.</strong>
