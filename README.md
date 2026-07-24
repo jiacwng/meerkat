@@ -44,9 +44,11 @@ to investigate rather than 7,068 separate decisions.
 
 Ranking is the mechanism rather than the goal. Evaluation asks how many different
 labelled attack windows appear within the review budget, instead of rewarding a
-queue that surfaces one high-volume phase repeatedly. This models the practical
-Tier 1 question: with limited time, how many distinct suspicious activities did
-the queue expose?
+queue that surfaces one high-volume phase repeatedly. It measures the question a
+Tier 1 analyst actually faces:
+
+> **With limited time, how many distinct suspicious activities did the queue
+> expose?**
 
 On the bundled example, Meerkat reduces 36,358 alerts to 1,487 sessions and 326
 families, and presents the top 10 families for each of the four days.
@@ -108,10 +110,10 @@ The demo uses a model trained on seven AIT-ADS environments and ranks
   >
 </p>
 
-The queue covers four days and the image shows one of them. `score` is what
-orders the queue. `prob%` is that score turned into a probability, learned from
-the seven training environments; it is shown to the analyst and never changes
-the order.
+`meerkat queue` prints every day in the run; `--day` narrows it to one, which is
+what the image shows. `score` is what orders the queue. `prob%` is that score
+turned into a probability, learned from the seven training environments; it is
+shown to the analyst and never changes the order.
 
 ## Analyst workflow
 
@@ -119,6 +121,7 @@ the order.
 |---|---|
 | `meerkat triage --company C --input DIR --inventory FILE` | normalize and score one company's alert batch |
 | `meerkat queue` | reopen the latest queue or filter all scored families |
+| `meerkat runs` | list the saved runs |
 | `meerkat inspect F003 [S1]` | inspect a family, one session or its original alerts |
 | `meerkat review F003 escalate --note "..."` | record an escalation, benign finding or false positive |
 | `meerkat export navigator` | export observed techniques as an ATT&CK Navigator layer |
@@ -141,11 +144,16 @@ reopen that run without invoking the models again.
 Useful queue filters include:
 
 ```bash
+meerkat queue --day 2022-01-21
 meerkat queue --all
 meerkat queue --host intranet-server
 meerkat queue --detector wazuh
 meerkat queue --review-state escalate
 ```
+
+`--day` keeps the daily budget and shows one day. The other filters search every
+scored family, including those below the queue line. `meerkat runs` lists the
+saved runs, and `--run ID` opens an older one.
 
 Inspection starts with a summary rather than a raw alert dump. Evidence is
 shown in consistent sections such as finding, identity, process, network, HTTP,
