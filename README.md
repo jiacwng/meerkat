@@ -12,6 +12,14 @@
   <strong>ML-assisted alert triage for multi-detector SOC data.</strong>
 </p>
 
+<p align="center">
+  <a href="docs/report/meerkat.pdf"><strong>Read the technical report</strong></a>
+  &nbsp;&middot;&nbsp;
+  <a href="#quick-start">Quick start</a>
+  &nbsp;&middot;&nbsp;
+  <a href="#evaluation">Results</a>
+</p>
+
 ## Overview
 
 Security operations centres can receive more alerts than analysts have time to
@@ -40,7 +48,10 @@ to investigate rather than 7,068 separate decisions.
 - A **family** joins same-day sessions with the same host, detector and rule.
 - A **budget** is how many families an analyst reviews per day. It is a capacity
   setting a team chooses, not a property of the data. Results are reported at 5,
-  10 and 25; 10 is the working example here.
+  10 and 25; 10 is the working example here. Note that a budget of ten families
+  is not a budget of ten alerts: the median queued family holds 41 alerts and
+  the largest holds 7,068. The claim that each is still one decision is argued
+  in the report and was never measured on a real analyst.
 
 Ranking is the mechanism rather than the goal. Evaluation asks how many different
 labelled attack windows appear within the review budget, instead of rewarding a
@@ -270,9 +281,9 @@ Calibration reduces the pooled Brier score from 0.0301 to 0.0202 and improves
 all 24 held-out environment and seed combinations. It improves how the displayed
 percentage matches observed outcomes; it does not change the ranking.
 
-The full experimental method, including rejected feature bundles and negative
-results, is written up in a technical report that is being rewritten against
-these numbers and will be linked here once it is current.
+The full method, including the designs that failed, the feature bundles that
+were rejected and the limitations of the evaluation itself, is documented in the
+[technical report](docs/report/meerkat.pdf).
 
 ## Dataset
 
@@ -342,6 +353,10 @@ case-management platform.
 
 - The results come from one simulated testbed whose environments share an attack
   script. They do not establish production performance.
+- The family unit has a known failure mode. An attack that trips the same rule
+  as the noise around it, at the same severity and interleaved in time, leaves
+  no trace in the aggregates the model reads. Two such cases occur in the demo
+  environment and neither reaches the queue.
 - Meerkat ranks by likelihood, not risk. `conf%` estimates how often comparable
   families turned out to be genuine and carries no asset-impact term, so a
   critical server and a spare workstation showing identical activity receive the
