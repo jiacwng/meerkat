@@ -13,6 +13,15 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml">
+    <img src="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml/badge.svg" alt="CI status">
+  </a>
+  <img src="https://img.shields.io/badge/tests-97%20passing-brightgreen" alt="97 tests passing">
+  <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 to 3.13">
+  <img src="https://img.shields.io/badge/license-MIT-informational" alt="MIT license">
+</p>
+
+<p align="center">
   <a href="docs/report/meerkat.pdf"><strong>Read the technical report</strong></a>
   &nbsp;&middot;&nbsp;
   <a href="#quick-start">Quick start</a>
@@ -368,6 +377,23 @@ case-management platform.
   needs a parser that maps its fields and severity scale into Meerkat's schema.
 - ATT&CK mappings provide investigation context. They do not prove that several
   observations belong to one attack campaign.
+
+## Development
+
+```bash
+python -m pip install -e .
+python -m unittest discover -s tests -p "test_*.py"    # 97 tests
+python -m pip install ruff && ruff check core meerkat tests
+```
+
+The suite covers normalization, session and family construction, the feature
+schema, the ranking models, ATT&CK mapping, the queue policy and the CLI,
+including a check that the screenshots in this file still reproduce the output
+of the commands they claim to show. Tests that need the raw AIT alerts skip
+themselves, since those files live in Git LFS and are not fetched in CI.
+
+GitHub Actions runs the suite on Python 3.11, 3.12 and 3.13, plus a lint pass,
+on every push and pull request.
 
 ## License
 
