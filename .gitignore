@@ -35,3 +35,8 @@ docs/report/meerkat.tex
 # experiment harnesses for the milestone studies; they exercise scripts in
 # project_local/, which is not published, so they cannot run from a clone
 tests/test_m8_*.py
+# only the demo company ships; the other seven stay local
+data/raw/*
+!data/raw/russellmitchell_wazuh.json
+!data/raw/russellmitchell_aminer.json
+!data/raw/inventory/
