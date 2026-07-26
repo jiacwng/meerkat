@@ -11,6 +11,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.roles import canonicalize
+
 
 @dataclass(frozen=True)
 class Asset:
@@ -24,9 +26,18 @@ class Inventory:
     company: str
     assets_by_ip: dict[str, Asset]
     ip_by_hostname: dict[str, str]
+    # names outside CANONICAL_ROLES, reported rather than fatal
+    unknown_roles: tuple[str, ...] = ()
 
     def __contains__(self, ip: str) -> bool:
         return ip in self.assets_by_ip
+
+    def assets_without_roles(self) -> tuple[str, ...]:
+        return tuple(sorted({
+            asset.hostname
+            for asset in self.assets_by_ip.values()
+            if not asset.groups
+        }))
 
 
 def load_inventory(path: Path) -> Inventory:
@@ -34,12 +45,21 @@ def load_inventory(path: Path) -> Inventory:
     assets_by_ip = {}
     ip_by_hostname = {}
 
+    unknown_roles: set[str] = set()
     for item in config["assets"]:
-        groups = tuple(str(group) for group in item.get("groups", []))
+        # "roles" is the documented key, "groups" is what AIT and Wazuh use
+        raw_groups = tuple(
+            str(group) for group in (item.get("roles") or item.get("groups") or [])
+        )
         # the attacker machine never enters the inventory, grouping alerts on it
         # would be reading the answer
-        if "attacker" in groups:
+        if "attacker" in raw_groups:
             continue
+
+        # only names the model was trained on can score, so translate and keep
+        # track of anything unplaced
+        groups, unplaced = canonicalize(raw_groups)
+        unknown_roles.update(unplaced)
 
         asset = Asset(
             hostname=str(item["hostname"]),
@@ -48,12 +68,16 @@ def load_inventory(path: Path) -> Inventory:
         )
         for ip in asset.ip_addresses:
             assets_by_ip[ip] = asset
-        ip_by_hostname[asset.hostname.casefold()] = asset.ip_addresses[0]
+        # `meerkat inventory` emits address-less assets and only warns, so the
+        # loader has to survive its own scaffolding
+        if asset.ip_addresses:
+            ip_by_hostname[asset.hostname.casefold()] = asset.ip_addresses[0]
 
     return Inventory(
         company=str(config["company"]),
         assets_by_ip=assets_by_ip,
         ip_by_hostname=ip_by_hostname,
+        unknown_roles=tuple(sorted(unknown_roles)),
     )
 
 

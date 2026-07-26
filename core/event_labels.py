@@ -12,6 +12,7 @@ Public API:
 from __future__ import annotations
 
 import csv
+import io
 import json
 from pathlib import Path
 
@@ -59,7 +60,6 @@ def audit_scenario(
     labels_path: Path,
     scenario: str,
 ) -> dict:
-    """Assert the positional join is safe; return the label counts."""
     csv_times, names, time_labels, event_labels = load_scenario_labels(
         csv_dir, scenario
     )
@@ -113,7 +113,9 @@ def audit_scenario(
                         counts["unexplained_time_label_mismatches"] += 1
             position += 1
 
-    with aminer_path.open(encoding="utf-8") as fh:
+    # this audit only runs against AIT ground truth, which ships both files, but
+    # the miner is optional everywhere else
+    with (aminer_path.open(encoding="utf-8") if aminer_path.exists() else io.StringIO()) as fh:
         for line in fh:
             record = json.loads(line)
             if not _csv_name_matches(names[position], record, "aminer"):
@@ -145,18 +147,3 @@ def audit_scenario(
     if counts["dropped_snort_event_positive"]:
         raise AssertionError(f"{scenario}: dedup would drop event positives {counts}")
     return counts
-
-
-if __name__ == "__main__":
-    raw_dir = Path("data/raw")
-    csv_dir = Path("data/raw/alerts_csv")
-    labels = Path("data/labels.csv")
-    total_positive = 0
-    total_retained = 0
-    for scenario in ("fox", "harrison", "russellmitchell", "santos",
-                     "shaw", "wardbeck", "wheeler", "wilson"):
-        result = audit_scenario(raw_dir, csv_dir, labels, scenario)
-        total_positive += result["event_positive_retained"]
-        total_retained += result["retained"]
-        print(result)
-    print(f"retained {total_retained}, event-positive {total_positive}")

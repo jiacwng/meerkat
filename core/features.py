@@ -29,6 +29,7 @@ SESSION_NUMERIC_FEATURES = (
     "log_alerts_on_entity",
 )
 SUPPORTED_DETECTOR_ORDER = ("wazuh", "suricata", "aminer")
+SCHEMA_INDEX_NAMES = ("detector_source", "rule_id")
 
 
 @dataclass(frozen=True)
@@ -64,10 +65,18 @@ def standardize_severity(
 
 
 def fit_session_feature_schema(sessions: pd.DataFrame) -> SessionFeatureSchema:
-    rule_counts = sessions.groupby(
-        ["detector_source", "rule_id"], observed=True
-    )["size"].sum()
-    seen_detectors = set(sessions["detector_source"].astype(str).unique())
+    # counted over a session's actual alerts rather than its carried key, so the
+    # schema is the same whether or not the key happens to separate detectors
+    counts: dict[tuple[str, str], int] = {}
+    for pairs in sessions["pair_counts"]:
+        for pair, count in pairs:
+            counts[pair] = counts.get(pair, 0) + count
+    index = (
+        pd.MultiIndex.from_tuples(list(counts), names=SCHEMA_INDEX_NAMES) if counts
+        else pd.MultiIndex.from_arrays([[], []], names=SCHEMA_INDEX_NAMES)
+    )
+    rule_counts = pd.Series(list(counts.values()), index=index, dtype="int64")
+    seen_detectors = {detector for detector, _ in counts}
     detectors = tuple(
         detector
         for detector in SUPPORTED_DETECTOR_ORDER
@@ -87,19 +96,30 @@ def build_session_feature_matrix(
 ) -> pd.DataFrame:
     X = sessions[list(SESSION_NUMERIC_FEATURES)].astype(float).copy()
 
-    for detector in schema.detectors:
-        X[f"detector_{detector}"] = (
-            sessions["detector_source"].eq(detector).astype(float)
-        )
+    # every alert votes with its own share of the session. A key that separates
+    # detectors gives one pair per session, so each of these collapses to the
+    # one-hot and the single lookup it replaces.
+    known = schema.rule_counts.to_dict()
+    shares = {detector: np.zeros(len(sessions)) for detector in schema.detectors}
+    rarity = np.zeros(len(sessions))
+    unseen = np.zeros(len(sessions))
+    for row, pairs in enumerate(sessions["pair_counts"]):
+        total = float(sum(count for _, count in pairs)) or 1.0
+        for pair, count in pairs:
+            weight = count / total
+            if pair[0] in shares:
+                shares[pair[0]][row] += weight
+            # a rule missing from training is unseen, not merely quiet, so it gets
+            # its own flag rather than a count of zero
+            if pair in known:
+                rarity[row] -= weight * np.log1p(float(known[pair]))
+            else:
+                unseen[row] += weight
 
-    rule_index = pd.MultiIndex.from_frame(
-        sessions[["detector_source", "rule_id"]].astype(object)
-    )
-    seen = schema.rule_counts.reindex(rule_index).to_numpy(dtype=float)
-    # a rule missing from training is unseen, not merely quiet, so it gets its
-    # own flag rather than a count of zero
-    X["log_rarity"] = -np.log1p(np.nan_to_num(seen, nan=0.0))
-    X["is_unseen_rule"] = np.isnan(seen).astype(float)
+    for detector in schema.detectors:
+        X[f"detector_{detector}"] = shares[detector]
+    X["log_rarity"] = rarity
+    X["is_unseen_rule"] = unseen
 
     for role in schema.roles:
         X[f"role_{role}"] = sessions["asset_roles"].map(

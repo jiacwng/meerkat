@@ -29,6 +29,8 @@ def alerts() -> pd.DataFrame:
 
 class SessionTests(unittest.TestCase):
     def test_session_closes_only_after_more_than_600_seconds_of_silence(self):
+        # the gap is a strict greater-than, so alerts exactly 600 s apart stay
+        # one burst and the 601 s step up to 1201.0 is what opens a new one
         sessions = build_sessions(alerts(), "demo", inventory(), gap_s=600.0)
 
         self.assertEqual(len(sessions), 3)
@@ -36,6 +38,8 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(list(sessions["start"]), [0.0, 1201.0, 1300.0])
 
     def test_session_keeps_labels_roles_and_alert_provenance_out_of_features(self):
+        # the CLI slices the alert table by alert_rows and evaluation counts
+        # labelled_windows, so both ride on the session beside the features
         sessions = build_sessions(alerts(), "demo", inventory())
         first = sessions.iloc[0]
 
@@ -46,6 +50,8 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(first["alert_rows"], [0, 1])
 
     def test_session_keeps_temporal_windows_without_calling_them_strict(self):
+        # an alert inside an attack window with no event_label is only a time
+        # overlap, so window 1 lands there and labelled_windows stays empty
         marked_alerts = alerts()
         marked_alerts.loc[2, "window_id"] = 1
 
@@ -60,6 +66,8 @@ class SessionTests(unittest.TestCase):
         )
 
     def test_live_unlabelled_alerts_can_still_be_grouped(self):
+        # a client feed has no event_label or window_id column at all, so
+        # build_sessions fills both in rather than raising a KeyError
         live_alerts = alerts().drop(columns=["event_label", "window_id"])
 
         sessions = build_sessions(live_alerts, "live-batch", inventory())
@@ -72,6 +80,8 @@ class SessionTests(unittest.TestCase):
         )
 
     def test_categorical_entity_ids_keep_inventory_roles(self):
+        # normalize hands entity_id back as a category to save memory, and the
+        # inventory is keyed on plain strings, so roles survive that dtype
         normalized = alerts()
         normalized["entity_id"] = normalized["entity_id"].astype("category")
 
@@ -84,6 +94,8 @@ class SessionTests(unittest.TestCase):
         )
 
     def test_session_keeps_observable_family_metadata(self):
+        # alert_category_count, technique_count and rule_group_count all feed
+        # the re-ranker, so the semicolon-joined strings split into sets first
         sessions = build_sessions(alerts(), "demo", inventory())
         first = sessions.iloc[0]
 
@@ -102,6 +114,8 @@ class SessionTests(unittest.TestCase):
         self.assertTrue(sessions["detectors_nearby_10m"].eq(1.0).all())
 
     def test_nearby_detector_count_uses_the_same_entity(self):
+        # two detectors on one host inside ten minutes is the corroboration the
+        # re-ranker leans on, counted per entity so a busy neighbour is ignored
         mixed = pd.concat(
             [
                 alerts(),
@@ -133,6 +147,8 @@ class SessionTests(unittest.TestCase):
 
 class FamilyTests(unittest.TestCase):
     def test_family_uses_max_child_score_and_keeps_every_child(self):
+        # a family ranks on its best child and still lists the quieter burst as
+        # S2, and the spread is a population std so two children give 0.25
         sessions = build_sessions(alerts(), "demo", inventory())
         sessions["ranking_score"] = [0.4, 0.9, 0.7]
 
@@ -153,6 +169,8 @@ class FamilyTests(unittest.TestCase):
         self.assertEqual(rule_100["rule_group_count"], 2)
 
     def test_family_unions_temporal_windows_from_all_children(self):
+        # coverage is scored on the family an analyst opens, so a child that
+        # only overlaps window 1 still contributes it to the parent
         marked_alerts = alerts()
         marked_alerts.loc[2, "window_id"] = 1
         sessions = build_sessions(marked_alerts, "demo", inventory())

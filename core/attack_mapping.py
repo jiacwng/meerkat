@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC
 from pathlib import Path
 
 import pandas as pd
@@ -224,50 +223,7 @@ def export_navigator_layer(technique_ids, path: Path,
             for tid, n in sorted(counts.items())
         ],
         "gradient": {"colors": ["#ffe766", "#ff6666"],
-                     "minValue": 0, "maxValue": max(counts.values())},
+                     "minValue": 0, "maxValue": max(counts.values(), default=1)},
     }
     path.write_text(json.dumps(layer, indent=1), encoding="utf-8")
     return len(counts)
-
-
-if __name__ == "__main__":
-    from datetime import datetime
-
-    from core.normalize import normalize_scenario
-
-    df = normalize_scenario(
-        Path("data/raw"),
-        Path("data/labels.csv"),
-        "russellmitchell",
-        Path("data/raw/inventory/russellmitchell.json"),
-    )
-    mapped = [
-        map_alert(detector, rule_id, technique_ids)
-        for detector, rule_id, technique_ids in zip(
-            df["detector_source"], df["rule_id"], df["native_technique_ids"]
-        )
-    ]
-    df["technique_ids"] = [m.technique_ids for m in mapped]
-    df["tactics"] = [m.tactics for m in mapped]
-    df["map_source"] = [m.source for m in mapped]
-
-    in_window = df["attack_window"] != ""
-    has_technique = df["technique_ids"] != ""
-    has_tactic = df["tactics"].map(bool)
-    print(f"technique coverage: {has_technique.mean():.1%} ({int(has_technique.sum())})")
-    print(f"tactic coverage: {has_tactic.mean():.1%} overall | "
-          f"{has_tactic[in_window].mean():.1%} in-window | "
-          f"{has_tactic[~in_window].mean():.1%} outside")
-    print("source counts:", df["map_source"].value_counts().to_dict())
-    print("tactic counts:", {k: v for k, v in tactic_coverage(df["tactics"]).items() if v})
-
-    print("\nattack story (in-window alerts):")
-    for host, steps in attack_story(df[in_window]).items():
-        chain = " -> ".join(
-            f"{tactic}({datetime.fromtimestamp(ts, tz=UTC):%H:%M})"
-            for ts, tactic in steps
-        ) or "no mapped ATT&CK tactic"
-        print(f"  {host}: {chain}")
-
-    n = export_navigator_layer(df["technique_ids"], Path("docs/navigator_layer.json"))
-    print(f"\nnavigator layer: {n} distinct techniques exported to docs/")

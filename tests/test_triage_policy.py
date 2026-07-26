@@ -7,6 +7,8 @@ from core.triage_policy import daily_queue, enrich_alerts
 
 class QueueTests(unittest.TestCase):
     def test_queue_takes_plain_top_k_families_per_day(self):
+        # the budget is spent per day, so one loud day cannot swallow the slots
+        # the next day needs and each day gets its own two picks
         families = pd.DataFrame({
             "day": [1, 1, 1, 2, 2],
             "ranking_score": [0.7, 0.9, 0.8, 0.2, 0.6],
@@ -22,6 +24,8 @@ class QueueTests(unittest.TestCase):
         )
 
     def test_display_probability_does_not_control_queue_order(self):
+        # evidence_probability is Platt output for display, so retuning the
+        # calibrator can never reorder what an analyst opens first
         families = pd.DataFrame({
             "day": [1, 1],
             "ranking_score": [0.9, 0.8],
@@ -35,6 +39,8 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(queue.iloc[0]["representative_session_id"], "raw-first")
 
     def test_ties_use_start_then_session_id(self):
+        # a forest voting over 300 trees produces equal scores often, so the
+        # order has to be fully determined or two runs print different queues
         families = pd.DataFrame({
             "day": [1, 1, 1],
             "ranking_score": [0.5, 0.5, 0.5],
@@ -49,6 +55,8 @@ class QueueTests(unittest.TestCase):
 
 class EnrichmentTests(unittest.TestCase):
     def test_batch_enrichment_adds_attack_mapping(self):
+        # the batch path applies the same rule override map_alert does, so
+        # wazuh 31516 lands on T1505.003 though the alert carries native T1055
         frame = pd.DataFrame({
             "detector_source": ["wazuh"],
             "rule_id": ["31516"],

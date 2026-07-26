@@ -54,6 +54,8 @@ def write_company_inventory(
 
 class InventoryTests(unittest.TestCase):
     def test_loader_excludes_attacker_assets(self):
+        # the AIT testbed lists the attacker machine in the same inventory, and
+        # scoring it would teach the forest to rank the attack host itself
         self.assertIsNotNone(inventory)
         config = {
             "company": "demo",
@@ -82,6 +84,8 @@ class InventoryTests(unittest.TestCase):
         self.assertNotIn("attacker-0", loaded.ip_by_hostname)
 
     def test_loader_requires_an_inventory_file(self):
+        # asset role is the largest feature block, so a missing inventory stops
+        # the run rather than quietly scoring every host as roleless
         self.assertIsNotNone(inventory)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "missing.json"
@@ -94,6 +98,8 @@ class InventoryTests(unittest.TestCase):
         "AIT importer requires PyYAML",
     )
     def test_ait_importer_writes_runtime_json_without_attacker(self):
+        # the testbed YAML is converted once into the runtime JSON, so the
+        # attacker filter has to survive that conversion too
         source = (
             "server_a:\n"
             "  hostname: server-a\n"
@@ -125,6 +131,8 @@ class InventoryTests(unittest.TestCase):
 
 class EntityAttributionTests(unittest.TestCase):
     def test_wazuh_separates_observer_and_entity(self):
+        # the agent name describes the collector, so host comes from
+        # predecoder.hostname and entity_id stays the address sessions key on
         record = {
             "rule": {"description": "Login failed", "level": 8},
             "predecoder": {"hostname": "server-a"},
@@ -140,6 +148,8 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertTrue(fields.entity_in_inventory)
 
     def test_suricata_known_destination_wins(self):
+        # both endpoints are managed here, and taking the destination puts the
+        # session on the machine being attacked
         record = {
             "data": {
                 "alert": {"signature": "Lateral alert", "severity": 2},
@@ -160,6 +170,8 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertTrue(fields.entity_in_inventory)
 
     def test_suricata_known_source_wins_over_external_destination(self):
+        # outbound traffic to an unmanaged address still has to attach to the
+        # managed source, or every exfil alert lands on an entity nobody owns
         record = {
             "data": {
                 "alert": {"signature": "Outbound alert", "severity": 2},
@@ -176,6 +188,8 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertTrue(fields.entity_in_inventory)
 
     def test_suricata_unknown_endpoints_use_destination(self):
+        # neither endpoint is in the inventory, so the destination is still a
+        # stable key and entity_in_inventory stays False for the features
         record = {
             "data": {
                 "alert": {"signature": "Unknown alert", "severity": 2},
@@ -192,6 +206,8 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertFalse(fields.entity_in_inventory)
 
     def test_aminer_forwarded_log_uses_source_entity(self):
+        # logstash forwards other machines' logs to one AMiner box, so the
+        # /var/log/logstash/<host>/ path decides which host owns the anomaly
         record = aminer_record(
             "10.143.0.35",
             json.dumps({"host": {"name": "intranet-server"}}),
@@ -212,6 +228,8 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertTrue(fields.entity_in_inventory)
 
     def test_aminer_syslog_hostname_does_not_change_entity(self):
+        # a syslog line can name any host in its text, so only a logstash path
+        # moves the entity and a local /var/log/auth.log leaves it alone
         record = aminer_record(
             "192.168.98.239",
             "Jan 19 02:45:26 walker-mail dhclient[408]: DHCPREQUEST",
@@ -231,6 +249,8 @@ class EntityAttributionTests(unittest.TestCase):
 
 class NativeMappingTests(unittest.TestCase):
     def test_wazuh_native_technique_ids_are_preserved(self):
+        # rule.mitre.id arrives as a list and travels as a semicolon string,
+        # since the mapping layer needs the native ids to fall back on
         record = {
             "rule": {
                 "description": "Authentication failed",
@@ -248,6 +268,8 @@ class NativeMappingTests(unittest.TestCase):
 
 class RawScenarioTests(unittest.TestCase):
     def test_wazuh_preserves_privilege_evidence(self):
+        # alice becoming root with a command and a working directory is what
+        # the Process / System panel shows, so all five fields are carried
         record = {
             "rule": {"description": "Successful sudo", "level": 8},
             "data": {
@@ -271,6 +293,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.working_directory, "/srv/app")
 
     def test_wazuh_preserves_detector_taxonomy_and_network_evidence(self):
+        # rule_groups feeds the re-ranker's rule_group_count, and a numeric
+        # data.id on a web rule is really the status, so 404 is an http_status
         record = {
             "rule": {
                 "description": "Web request",
@@ -301,6 +325,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.rule_fired_times, 7.0)
 
     def test_wazuh_keeps_non_http_native_event_id(self):
+        # apache writes AH01630 into that same data.id field, so a non-numeric
+        # id stays a native event id and http_status is left missing
         record = {
             "rule": {"description": "Apache denied request", "level": 5},
             "data": {"id": "AH01630"},
@@ -313,6 +339,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertTrue(pd.isna(fields.http_status))
 
     def test_suricata_preserves_network_and_http_evidence(self):
+        # the Network and Network / HTTP panels read normalized names, so a
+        # suricata alert has to unpack its nested data.flow and data.http
         record = {
             "data": {
                 "alert": {
@@ -358,6 +386,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.http_status, 200.0)
 
     def test_suricata_uses_known_source_when_destination_is_not_managed(self):
+        # the entity choice also picks the host label, so an outbound alert
+        # reads as webserver rather than the external address it reached
         record = {
             "data": {
                 "alert": {"signature": "Outbound alert", "severity": 2},
@@ -376,6 +406,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.host, "webserver")
 
     def test_aminer_preserves_affected_web_request(self):
+        # AMiner reports the anomalous value under AffectedLogAtomValues, and
+        # /model/fm/request/request is where a suspicious URL turns up
         record = aminer_record("10.0.0.1", "apache access line")
         record["AnalysisComponent"].update({
             "AffectedLogAtomPaths": ["/model/fm/request/request"],
@@ -387,6 +419,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.web_request, "/shell.php?command=id%20-a")
 
     def test_aminer_preserves_detector_state_and_log_structure(self):
+        # an AMiner detection has no severity, so the threshold and critical
+        # value are the only numbers saying how far off the model a line was
         record = aminer_record("10.0.0.1", "dns log line")
         record["AnalysisComponent"].update({
             "AnalysisComponentType": "EntropyDetector",
@@ -415,6 +449,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.probability_threshold, 0.05)
 
     def test_aminer_missing_training_state_remains_unknown(self):
+        # TrainingMode absent stays NaN, since folding it to False would claim
+        # the detector was live when nothing in the record said so
         fields = normalize.extract_aminer_fields(
             aminer_record("10.0.0.1", "plain log line"),
             company_inventory(),
@@ -423,6 +459,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertTrue(pd.isna(fields.training_mode))
 
     def test_aminer_preserves_metricbeat_cpu_values_as_percentages(self):
+        # metricbeat reports cpu as a 0-1 fraction and the panel prints a
+        # percent, so the scale is fixed once here rather than in the renderer
         raw = json.dumps({
             "host": {"name": "server-a"},
             "system": {
@@ -442,6 +480,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.cpu_nice_pct, 93.62)
 
     def test_aminer_preserves_sudo_evidence(self):
+        # the sudo line is free text in RawLogData, so alice, root, /srv/app
+        # and id are parsed out into the same fields a wazuh alert fills
         raw = (
             "Feb  8 08:36:54 server-a sudo: alice : TTY=pts/0 ; "
             "PWD=/srv/app ; USER=root ; COMMAND=id"
@@ -458,6 +498,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.command, "id")
 
     def test_aminer_preserves_su_user_change(self):
+        # su reports the pair the other way round, so www-data is the source
+        # and alice the target, matching how sudo fills those two fields
         raw = (
             "Jan 18 13:14:31 server-a su[28816]: "
             "Successful su for alice by www-data"
@@ -472,6 +514,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.target_user, "alice")
 
     def test_classifies_raw_wazuh_records(self):
+        # the AIT wazuh file carries every suricata alert twice, decoded once
+        # as json and once as snort, so the snort copy is dropped
         wazuh = {"decoder": {"name": "sshd"}, "data": {}}
         suricata = {"decoder": {"name": "json"}, "data": {"alert": {}}}
         duplicate = {"decoder": {"name": "snort"}, "data": {"alert": {}}}
@@ -481,6 +525,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(normalize.classify_wazuh_record(duplicate), "")
 
     def test_normalize_scenario_combines_raw_files_and_skips_duplicate(self):
+        # source_file and source_position are how `meerkat inspect --raw` finds
+        # a line again, so dropping the snort copy must not renumber the rest
         aminer = aminer_record(
             "10.0.0.1",
             "Jan 21 00:00:00 mail app: event",
@@ -542,7 +588,67 @@ class RawScenarioTests(unittest.TestCase):
             ["demo_aminer.json", "demo_wazuh.json", "demo_wazuh.json"],
         )
 
+    def test_normalize_scenario_runs_without_a_log_anomaly_miner(self):
+        # most companies run no log anomaly miner, so a missing
+        # demo_aminer.json costs coverage and still produces a scored table
+        wazuh = {
+            "@timestamp": "1970-01-01T00:00:02+00:00",
+            "decoder": {"name": "sshd"},
+            "data": {},
+            "rule": {"description": "Login failed", "level": 8, "id": "1"},
+            "predecoder": {"hostname": "mail"},
+            "agent": {"name": "mail"},
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "raw"
+            raw.mkdir()
+            labels = root / "labels.csv"
+            labels.write_text("scenario,attack,start,end\n", encoding="utf-8")
+            (raw / "demo_wazuh.json").write_text(
+                json.dumps(wazuh) + "\n",
+                encoding="utf-8",
+            )
+            inventory_path = write_company_inventory(
+                root / "company.json",
+                ("mail", "10.0.0.1", ("servers",)),
+            )
+
+            result = normalize.normalize_scenario(
+                raw,
+                labels,
+                "demo",
+                inventory_path,
+            )
+
+        self.assertEqual(list(result["detector_source"]), ["wazuh"])
+        self.assertEqual(list(result["source_file"]), ["demo_wazuh.json"])
+
+    def test_normalize_scenario_names_both_files_when_neither_is_present(self):
+        # a typo in --company surfaces here first, so the error names both
+        # filenames it looked for
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "raw"
+            raw.mkdir()
+            labels = root / "labels.csv"
+            labels.write_text("scenario,attack,start,end\n", encoding="utf-8")
+            inventory_path = write_company_inventory(
+                root / "company.json",
+                ("mail", "10.0.0.1", ("servers",)),
+            )
+
+            with self.assertRaises(FileNotFoundError) as caught:
+                normalize.normalize_scenario(raw, labels, "demo", inventory_path)
+
+        message = str(caught.exception)
+        self.assertIn("demo_wazuh.json", message)
+        self.assertIn("demo_aminer.json", message)
+
     def test_normalize_scenario_resolves_wazuh_file_alert_from_agent_ip(self):
+        # a web accesslog alert carries no predecoder hostname, so the agent ip
+        # is resolved through the inventory and both detectors say server-a
         aminer = aminer_record(
             "10.0.0.1",
             "Jan 21 00:00:00 server-a app: event",
@@ -585,6 +691,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(list(result["host"]), ["server-a", "server-a"])
 
     def test_label_audit_rejects_shift_hidden_by_repeated_names(self):
+        # labels attach to raw records by position, and a repeated alert name
+        # lets a one-row shift pass the name check, so times are compared too
         first = {
             "@timestamp": "1970-01-01T00:00:01+00:00",
             "decoder": {"name": "sshd"},
@@ -618,6 +726,8 @@ class RawScenarioTests(unittest.TestCase):
                 event_labels.audit_scenario(raw, csv_dir, labels, "demo")
 
     def test_label_audit_rejects_unexplained_time_label_mismatch(self):
+        # a mismatch within a second of a window edge is a rounding artefact,
+        # so only one 40 s outside the 0-10 window counts as a disagreement
         record = {
             "@timestamp": "1970-01-01T00:00:50+00:00",
             "decoder": {"name": "sshd"},

@@ -22,16 +22,31 @@ SECONDS_PER_DAY = 86400.0
 SESSION_GAP_S = 600.0
 SESSION_KEY = ("entity_id", "detector_source", "rule_id")
 FAMILY_KEY = ("day", "entity_id", "detector_source", "rule_id")
+# carried on every session whether or not they are part of the key, because the
+# features and the CLI read them to describe a unit
+DESCRIPTIVE = ("entity_id", "detector_source", "rule_id")
+
+# when true a session cannot span midnight, so reading one day at a time gives the
+# same sessions as reading the whole file. Off by default because splitting a burst
+# at the boundary changes which windows the queue reaches.
+SPLIT_SESSIONS_AT_MIDNIGHT = False
 
 
-def assign_sessions(alerts: pd.DataFrame, gap_s: float = SESSION_GAP_S) -> pd.Series:
+def assign_sessions(
+    alerts: pd.DataFrame,
+    gap_s: float = SESSION_GAP_S,
+) -> pd.Series:
     # alerts must already be sorted by key then timestamp, so one forward scan
     # is enough to close a session on the first long silence
     key_changed = alerts[list(SESSION_KEY)].ne(
         alerts[list(SESSION_KEY)].shift()
     ).any(axis=1)
     quiet = alerts["timestamp"].diff().gt(gap_s)
-    return (key_changed | quiet).cumsum() - 1
+    boundary = key_changed | quiet
+    if SPLIT_SESSIONS_AT_MIDNIGHT:
+        day = (alerts["timestamp"] // SECONDS_PER_DAY).astype("int64")
+        boundary = boundary | day.ne(day.shift())
+    return boundary.cumsum() - 1
 
 
 def _nonempty(values: pd.Series) -> frozenset[str]:
@@ -40,6 +55,18 @@ def _nonempty(values: pd.Series) -> frozenset[str]:
 
 def _window_ids(values: pd.Series) -> frozenset[int]:
     return frozenset(int(value) for value in values if value >= 0)
+
+
+def _pair_counts(values: pd.Series) -> tuple[tuple[tuple[str, str], int], ...]:
+    # what the session is actually made of. Under a key that carries
+    # detector_source and rule_id this is always one pair, but the feature builder
+    # must not assume that or the aggregation grid measures the key's side effects
+    # instead of the key.
+    return tuple(values.value_counts().items())
+
+
+def _count_union(values: pd.Series) -> int:
+    return len(frozenset().union(*values))
 
 
 def _split_values(values: pd.Series) -> frozenset[str]:
@@ -54,11 +81,18 @@ def _asset_roles(entity_id: str, inventory: Inventory) -> tuple[str, ...]:
     return asset.groups if asset else ()
 
 
+def session_detectors(pair_counts: pd.Series) -> pd.Series:
+    return pair_counts.map(
+        lambda pairs: frozenset(detector for (detector, _), _ in pairs)
+    )
+
+
 def _nearby_detector_count(
     sessions: pd.DataFrame,
     gap_s: float = SESSION_GAP_S,
 ) -> pd.Series:
     counts = np.ones(len(sessions), dtype=float)
+    detector_sets = session_detectors(sessions["pair_counts"]).to_numpy()
     for positions in sessions.groupby(
         "entity_id", sort=False, observed=True
     ).indices.values():
@@ -66,14 +100,14 @@ def _nearby_detector_count(
         entity_sessions = sessions.iloc[positions]
         starts = entity_sessions["start"].to_numpy(dtype=float)
         ends = entity_sessions["end"].to_numpy(dtype=float)
-        detectors = entity_sessions["detector_source"].astype(str).to_numpy()
+        detectors = detector_sets[positions]
 
         for local_position, session_position in enumerate(positions):
             nearby = (
                 (starts <= ends[local_position] + gap_s)
                 & (ends >= starts[local_position] - gap_s)
             )
-            counts[session_position] = len(set(detectors[nearby]))
+            counts[session_position] = len(frozenset().union(*detectors[nearby]))
     return pd.Series(counts, index=sessions.index, dtype=float)
 
 
@@ -103,16 +137,18 @@ def build_sessions(
         _asset_roles(str(entity), inventory)
         for entity in work["entity_id"]
     ]
+    work["_pair"] = list(zip(
+        work["detector_source"].astype(str), work["rule_id"].astype(str)
+    ))
     work = work.sort_values(
         list(SESSION_KEY) + ["timestamp"], kind="stable"
     ).reset_index(drop=True)
     work["unit"] = assign_sessions(work, gap_s)
 
+    carried = dict.fromkeys(tuple(SESSION_KEY) + DESCRIPTIVE)
     sessions = work.groupby("unit", observed=True, sort=False).agg(
         scenario=("scenario", "first"),
-        entity_id=("entity_id", "first"),
-        detector_source=("detector_source", "first"),
-        rule_id=("rule_id", "first"),
+        **{name: (name, "first") for name in carried},
         start=("timestamp", "min"),
         end=("timestamp", "max"),
         size=("timestamp", "size"),
@@ -130,6 +166,7 @@ def build_sessions(
         rule_group_set=("rule_groups", _split_values),
         asset_roles=("_asset_roles", "first"),
         alert_rows=("_alert_row", list),
+        pair_counts=("_pair", _pair_counts),
     ).reset_index()
 
     sessions["session_id"] = scenario + "#" + sessions["unit"].astype(str)
@@ -148,14 +185,17 @@ def build_sessions(
     )
     sessions["log_size"] = np.log1p(sessions["size"])
 
+    sessions["_detectors"] = session_detectors(sessions["pair_counts"])
     entity_day = sessions.groupby(
         ["day", "entity_id"], observed=True, sort=False
     ).agg(
-        detectors_on_entity=("detector_source", "nunique"),
+        detectors_on_entity=("_detectors", _count_union),
         alerts_on_entity=("size", "sum"),
         groups_on_entity=("unit", "size"),
     ).reset_index()
-    sessions = sessions.merge(entity_day, on=["day", "entity_id"], how="left")
+    sessions = sessions.drop(columns="_detectors").merge(
+        entity_day, on=["day", "entity_id"], how="left"
+    )
     sessions["log_alerts_on_entity"] = np.log1p(sessions["alerts_on_entity"])
     sessions["detectors_nearby_10m"] = _nearby_detector_count(sessions)
     sessions["order"] = np.arange(len(sessions))
@@ -185,6 +225,16 @@ def build_families(scored_sessions: pd.DataFrame) -> pd.DataFrame:
     representatives = grouped.head(1).set_index(list(FAMILY_KEY))
     families = grouped.agg(
         scenario=("scenario", "first"),
+        # a descriptive column is a column only because it happens to be a group
+        # key, so a looser FAMILY_KEY made it vanish and every reader downstream
+        # broke. Carry them the way build_sessions already does. Under a key that
+        # drops one, the value is one arbitrary child's, which is fine for display
+        # and for the duplicate-concentration metric and is never a feature.
+        **{
+            name: (name, "first")
+            for name in DESCRIPTIVE
+            if name not in FAMILY_KEY
+        },
         ranking_score=("ranking_score", "max"),
         child_score_mean=("ranking_score", "mean"),
         child_score_std=("ranking_score", _population_std),
@@ -217,15 +267,8 @@ def build_families(scored_sessions: pd.DataFrame) -> pd.DataFrame:
     families["alert_category_count"] = families["alert_category_set"].map(len)
     families["technique_count"] = families["technique_id_set"].map(len)
     families["rule_group_count"] = families["rule_group_set"].map(len)
-    families["family_id"] = (
-        families["scenario"].astype(str)
-        + "#"
-        + families["day"].astype(str)
-        + "#"
-        + families["entity_id"].astype(str)
-        + "#"
-        + families["detector_source"].astype(str)
-        + "#"
-        + families["rule_id"].astype(str)
-    )
+    family_id = families["scenario"].astype(str)
+    for part in FAMILY_KEY:
+        family_id = family_id + "#" + families[part].astype(str)
+    families["family_id"] = family_id
     return families
