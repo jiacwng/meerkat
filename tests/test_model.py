@@ -721,20 +721,23 @@ class ClientRetrainingTests(unittest.TestCase):
         self.assertFalse(np.array_equal(before, after))
 
     def test_pu_training_reaches_the_bundle(self):
-        # --pu-c has to change the forest that gets saved, so the same
-        # sessions and seed score differently once the weighting is on
-        supervised = build_bundle(self.sessions, n_estimators=10, seed=0)
-        pu = build_bundle(self.sessions, n_estimators=10, seed=0, pu_c=0.5)
-        table = self.sessions["alpha"]
-        X = bench_eval.build_session_feature_matrix(table, supervised.schema)
-        self.assertFalse(
-            np.array_equal(
-                supervised.forest.predict_proba(X)[:, 1],
-                pu.forest.predict_proba(
-                    bench_eval.build_session_feature_matrix(table, pu.schema)
-                )[:, 1],
-            )
-        )
+        # pu_c has to reach the fit rather than be accepted and dropped. This
+        # used to compare the two forests' predictions, which is not a property
+        # the code guarantees: with ten trees on this fixture they can agree,
+        # and whether they do changed between scikit-learn versions.
+        with patch.object(
+            bench_eval, "fit_model_pu", wraps=bench_eval.fit_model_pu
+        ) as pu_fit:
+            build_bundle(self.sessions, n_estimators=10, seed=0, pu_c=0.5)
+        self.assertTrue(pu_fit.called)
+        self.assertEqual(pu_fit.call_args.kwargs["c"], 0.5)
+
+    def test_without_pu_c_the_supervised_fit_is_used(self):
+        with patch.object(
+            bench_eval, "fit_model_pu", wraps=bench_eval.fit_model_pu
+        ) as pu_fit:
+            build_bundle(self.sessions, n_estimators=10, seed=0)
+        self.assertFalse(pu_fit.called)
 
 
 # The client retraining path: soft labels from bags, a rescaled re-ranker and a
