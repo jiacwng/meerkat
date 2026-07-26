@@ -16,7 +16,7 @@
   <a href="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml">
     <img src="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml/badge.svg" alt="CI status">
   </a>
-  <img src="https://img.shields.io/badge/tests-284%20passing-brightgreen" alt="284 tests passing">
+  <img src="https://img.shields.io/badge/tests-287%20passing-brightgreen" alt="287 tests passing">
   <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 to 3.13">
   <img src="https://img.shields.io/badge/license-MIT-informational" alt="MIT license">
 </p>
@@ -70,7 +70,7 @@ Alerts are grouped twice before anything is ranked.
 <p align="center">
   <img
     src="docs/assets/pipeline.svg"
-    alt="36,358 alerts group into 3,169 sessions, collapse into 1,771 daily families, and are cut to the 40 reviewed at a budget of 10 a day, which is a setting"
+    alt="36,358 alerts group into 1,487 sessions, collapse into 326 daily families, and are cut to the 40 reviewed at a budget of 10 a day, which is a setting"
     width="100%"
   >
 </p>
@@ -91,11 +91,13 @@ from your inventory.
 
 **Group.** Alerts become sessions, sessions become daily families, as above.
 
-**Score sessions.** A random forest gives each session a probability. It is
-trained *positive-unlabelled*: a SOC can say an incident ran on this host between
-these times, but not which alerts inside that window were the attack. Nothing
-inside a window is therefore asserted positive. Sessions in a reported incident
-share the weight of one label; sessions outside every incident are negatives.
+**Score sessions.** A random forest gives each session a probability. The shipped
+model was trained on the benchmark, where every alert carries a ground-truth
+label. Retraining on your own history works from weaker labels, because a SOC can
+say an incident ran on this host between these times but not which alerts inside
+that window were the attack. Nothing inside a window is asserted positive there:
+sessions in a reported incident share the weight of one label, and sessions
+outside every incident are the negatives.
 
 **Rank families.** A logistic regression scores each family from its sessions'
 scores, the shape of the family and the role of the machine it landed on. The
@@ -116,7 +118,8 @@ meerkat demo
 ```
 
 The clone contains a trained model and one company's alerts, so this runs with no
-further download.
+further download. Those alerts are part of the AIT Alert Data Set, under CC BY
+4.0; [NOTICE](NOTICE) records what is included and how to attribute it.
 
 <p align="center">
   <img
@@ -135,7 +138,7 @@ families scoring this high in training, about 87% were real. A low value means
 ```
   meerkat demo                      score the bundled example alerts
 
-  meerkat inventory                 create a starter inventory from your alerts
+  meerkat inventory                 starter inventory from your wazuh alerts
   meerkat check                     report what triage will see, before running it
   meerkat triage --input DIR        score one batch into a run
   meerkat queue                     the ranked queue for a saved run
@@ -148,7 +151,8 @@ families scoring this high in training, about 87% were real. A low value means
   meerkat runs                      list saved runs
 
   exit codes   0 success   1 error   2 bad arguments
-               3 retrain refused     4 major drift
+               3 retrain refused
+               4 major feature drift, or too many rules the model never saw
 ```
 
 Every command takes `--help`. `queue` filters with `--day`, `--host`, `--detector`
@@ -156,12 +160,13 @@ and `--all`, recuts with `--budget`, and emits `--json`.
 
 ## Walkthrough
 
-Put your alert exports in a directory named `alerts`. Their filenames do not
-matter; each `.json` file is read a few lines deep and recognised by its
-contents. Every command below takes `--input` if you keep them somewhere else.
+Put your alert exports in a directory named `alerts`. Meerkat looks for
+`alerts_wazuh.json` and `alerts_aminer.json` first, then falls back to reading
+each `.json` file's opening lines to recognise it. Only the first file per
+detector is used. `--wazuh-file`, `--aminer-file` and `--input` override.
 
-The output shown in each step is a capture of this walkthrough being run against
-a directory of Wazuh, Suricata and AMiner exports.
+The captures below come from a different directory of alerts than `meerkat demo`
+scores, so their counts do not match the figure above.
 
 ### 1. Describe your machines
 
@@ -200,6 +205,10 @@ One asset per machine, with `roles` left blank for you to fill in:
 A machine keeps its own hostname where the alerts report one, and is labelled by
 its address otherwise.
 
+The command reads the Wazuh file alone, and only the records in it that carry an
+`agent.ip`. A deployment that exports Suricata or AMiner alerts and no Wazuh
+agents gets an empty inventory, and has to write one by hand.
+
 Filling in the roles is the one manual step, and it matters: the model reads
 asset role as a feature, so assets left blank are scored without it.
 `meerkat inventory --list-roles` prints the vocabulary.
@@ -226,8 +235,12 @@ meerkat check
   >
 </p>
 
-It exits non-zero and says what is wrong if machines are missing from the
-inventory, roles are blank, or the alerts do not parse.
+It exits non-zero and says what is wrong if inventory assets have no roles, if a
+role name is outside the vocabulary, if the rule ids look like one per alert, or
+if the alerts do not parse. Alerts on machines outside the inventory are printed
+as a warning and are not counted as a problem, which is why the capture above
+reports 15% of them and still ends in `ready to triage`. A network alert names
+the addresses at both ends of a connection, and no inventory can hold them all.
 
 ### 3. Score a batch
 
@@ -261,15 +274,19 @@ tactics observed there.
 ### 5. Train it on your own history
 
 ```bash
-meerkat retrain --incidents tickets.csv
+meerkat retrain --incidents tickets.csv --inventory alerts/inventory/alerts.json
 ```
 
 `tickets.csv` is a `start,end,host,verdict` export from your ticketing system: an
 incident ran on this machine between these times, and this was the outcome.
 
-Meerkat trains on the earlier days, scores itself on the most recent ones, and
-refuses to save the new model unless most of its attempts beat the current one on
-those held-out days.
+Meerkat trains on the earlier days and scores itself on the most recent ones. It
+fits five forests and saves one only when a majority of them pass two tests on
+the held-out days. A forest passes the first test when it reaches at least as
+many incidents as the shipped bundle, so an equal score is enough. It passes the
+second when the two models disagree on at least six held-out incidents, because
+below six a sign test cannot separate a real difference from chance. The forest
+with the median reach is the one saved, never the best one.
 
 ### 6. Watch for change
 
@@ -294,6 +311,9 @@ PSI, the population stability index, compares one feature's distribution now
 against the same feature at training time. Below 0.10 counts as stable, above
 0.25 as a major shift.
 
+The session and family counts in the capture above are the client directory's,
+so they differ from the ones in the pipeline figure, which come from the demo.
+
 ## MITRE ATT&CK
 
 Alerts are mapped to ATT&CK techniques from the detector's own rule metadata where
@@ -309,11 +329,9 @@ writes a layer file that opens in the
 [ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/) under
 **Open Existing Layer**.
 
-It covers **one run**: the latest by default, or `--run ID` for an older one, and
-`meerkat runs` lists them. Within that run it covers every alert, including
-alerts whose family never entered the queue; `--queue-only` narrows it to what
-was actually reviewed. The layer is written inside the run's own directory, so
-each triage keeps its own. Runs are not combined into a single layer.
+It covers one run, the latest or `--run ID`, and every alert in it. `--queue-only`
+narrows it to the queue. The layer is written inside that run's directory, so runs
+are never combined.
 
 <p align="center">
   <img
@@ -359,15 +377,23 @@ that were dropped, and the limits of the evaluation.
 - Triage runs in batches, not continuously. Review decisions are stored locally
   for a single user.
 - Wazuh, Suricata and AMiner are supported. Another detector needs an adapter.
-- Retraining is only as good as the incident records a company can supply.
+- Retraining is only as good as the incident records a company can supply. It
+  replaces the forest and refits the re-ranker's scaler; the re-ranker's
+  coefficients and the calibrator stay as shipped.
+- Below roughly 300 training sessions, drift reporting is mostly noise and
+  unmoved features read as major drift about half the time.
+- A detector that numbers each anomaly instead of naming its type breaks session
+  grouping and rule rarity, and `check` warns rather than failing.
 
 ## Model files
 
 Models are [skops](https://skops.readthedocs.io/) files: loading one rebuilds only
-the types allowlisted in `core/classifier.py`, so it cannot run arbitrary code the
-way a pickle can. The JSON beside it records the scikit-learn version, training
-data and a checksum, which catches corruption but is not a signature. Run
-directories under `runs/` are plain pickles, so open only your own.
+the types allowlisted in `core/classifier.py`, so it does not execute the file the
+way unpickling does. Meerkat also bounds how far a bundle may unpack and checks
+each tree's arrays, but none of that makes an untrusted bundle safe, so load your
+own. The JSON beside it records the scikit-learn version, training data and a
+checksum, which catches corruption but is not a signature. Run directories under
+`runs/` are plain pickles, so open only your own.
 
 ## Reproducing the results
 
@@ -383,7 +409,20 @@ python -m unittest discover -s tests -p "test_*.py"
 ruff check core meerkat bench tests
 ```
 
+## Citing
+
+If you publish anything from these numbers, cite the dataset they were measured
+on. `CITATION.cff` at the repository root carries the entries.
+
+- M. Landauer, F. Skopik and M. Wurzenberger, *Introducing a New Alert Data Set
+  for Multi-Step Attack Analysis*, CSET 2024.
+- M. Landauer, F. Skopik, M. Frank, W. Hotwagner, M. Wurzenberger and A. Rauber,
+  *Maintainable Log Datasets for Evaluation of Intrusion Detection Systems*,
+  IEEE Transactions on Dependable and Secure Computing, 2023.
+
 ## License
 
-MIT. The AIT Alert Data Set is distributed separately by the Austrian Institute of
-Technology under CC BY 4.0.
+MIT, see [LICENSE](LICENSE).
+
+The repository ships part of the AIT Alert Data Set under CC BY 4.0, and a lookup
+derived from MITRE ATT&CK. [NOTICE](NOTICE) carries both attributions.

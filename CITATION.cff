@@ -32,15 +32,54 @@ references:
     title: AIT Alert Data Set
     authors:
       - family-names: Landauer
-        given-names: Max
+        given-names: M.
       - family-names: Skopik
-        given-names: Florian
+        given-names: F.
       - family-names: Wurzenberger
-        given-names: Markus
+        given-names: M.
     doi: 10.5281/zenodo.8263181
     url: 'https://zenodo.org/records/8263181'
     license: CC-BY-4.0
     notes: >-
       Intrusion detection alerts from eight simulated company environments,
       published by the Austrian Institute of Technology. Meerkat is trained and
-      evaluated on this data set.
+      evaluated on this data set. One environment and the labels are included in
+      this repository under CC BY 4.0; see data/README.md.
+  - type: conference-paper
+    title: Introducing a New Alert Data Set for Multi-Step Attack Analysis
+    authors:
+      - family-names: Landauer
+        given-names: M.
+      - family-names: Skopik
+        given-names: F.
+      - family-names: Wurzenberger
+        given-names: M.
+    collection-title: Cyber Security Experimentation and Test Workshop (CSET)
+    year: 2024
+    notes: The paper describing the AIT Alert Data Set.
+  - type: article
+    title: Maintainable Log Datasets for Evaluation of Intrusion Detection Systems
+    authors:
+      - family-names: Landauer
+        given-names: M.
+      - family-names: Skopik
+        given-names: F.
+      - family-names: Frank
+        given-names: M.
+      - family-names: Hotwagner
+        given-names: W.
+      - family-names: Wurzenberger
+        given-names: M.
+      - family-names: Rauber
+        given-names: A.
+    journal: IEEE Transactions on Dependable and Secure Computing
+    year: 2023
+    notes: The paper describing the log data set the alerts were generated from.
+  - type: generic
+    title: MITRE ATT&CK Enterprise Matrix and STIX Distribution
+    authors:
+      - name: The MITRE Corporation
+    url: 'https://attack.mitre.org'
+    notes: >-
+      Enterprise ATT&CK 19.1 supplies the technique names and tactics in
+      core/data/attack_lookup.json. See NOTICE.

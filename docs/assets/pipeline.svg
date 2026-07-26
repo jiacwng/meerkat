@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 888 136" width="888" height="136" role="img" aria-labelledby="t">
-  <title id="t">36,358 alerts group into 3,169 sessions, collapse into 1,771 daily families, and are cut to the 40 reviewed at a budget of 10 a day, which is a setting</title>
+  <title id="t">36,358 alerts group into 1,487 sessions, collapse into 326 daily families, and are cut to the 40 reviewed at a budget of 10 a day, which is a setting</title>
   <style>
     text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
     .box  { fill: #f6f8fa; stroke: #d0d7de; }
@@ -36,12 +36,12 @@
   <text class="note" x="34" y="104">wazuh, suricata, aminer</text>
 
   <rect class="box" x="242" y="30" width="176" height="86" rx="6"/>
-  <text class="num"  x="262" y="66">3,169</text>
+  <text class="num"  x="262" y="66">1,487</text>
   <text class="name" x="262" y="87">sessions</text>
   <text class="note" x="262" y="104">one rule on one machine</text>
 
   <rect class="box" x="470" y="30" width="176" height="86" rx="6"/>
-  <text class="num"  x="490" y="66">1,771</text>
+  <text class="num"  x="490" y="66">326</text>
   <text class="name" x="490" y="87">families</text>
   <text class="note" x="490" y="104">one rule, machine, day</text>
 

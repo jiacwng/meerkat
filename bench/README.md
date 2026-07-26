@@ -54,7 +54,7 @@ Three steps, in this order, from the repository root:
 
 ```bash
 python -m bench.check
-python -m bench.train
+python -m bench.train --holdout russellmitchell
 python -m bench.evaluate --trees 200 --seeds 53,52,51
 ```
 
@@ -63,13 +63,20 @@ environment, and names every missing or unreadable file by path. Run it until al
 eight environments come back clean. `train` and `evaluate` on a half-placed
 dataset produce numbers that answer a different question.
 
-`bench.train` fits the bundle production ships, `models/meerkat_bundle.skops`,
-with a `.skops.json` sidecar recording the scikit-learn version, the training
-environments and a SHA-256 of the bundle.
+`bench.train` writes `models/meerkat_bundle.skops` and a `.skops.json` sidecar
+recording the scikit-learn version, the training environments and a SHA-256 of
+the bundle. `--holdout russellmitchell` is what the shipped bundle was built
+with, and the sidecar in the repository lists the seven environments that
+remain. russellmitchell drives the demo, so keeping it out of training means the
+demo scores an environment the model never saw. Without the flag, `bench.train`
+trains on all eight and produces a different bundle. It defaults to 200 trees,
+the count past which coverage stopped improving. The shipped sidecar records 300,
+because the bundle was built before that default changed.
 
 `bench.evaluate` runs the leave-one-environment-out protocol and prints the
-results table. It reads 2.7 GB and fits eight folds times three seeds, so it is
-the long step. The largest single input is `wilson_wazuh.json` at 673 MB.
+results table. It defaults to 200 trees, matching the table below, and to seed 0.
+`--seeds 53,52,51` is the rest of what the table was measured with. It reads 2.7 GB and fits eight folds times three seeds, so it is the
+long step. The largest single input is `wilson_wazuh.json` at 673 MB.
 
 ## Expected results
 
@@ -119,6 +126,7 @@ this directory out, so `pip install` of meerkat gives you the CLI and the model
 bundle without the benchmark. Modules here run from a checkout only, called as
 `python -m bench.<module>` from the repository root.
 
-Meerkat is MIT licensed. AIT-ADS is distributed separately under CC BY 4.0; cite
-it if you publish anything from these numbers. The dataset reference sits in
-`CITATION.cff` at the repository root.
+Meerkat is MIT licensed. The alert files are from AIT-ADS under CC BY 4.0, and
+the repository ships one of the eight environments; `NOTICE` records what is
+included and how to attribute it. Cite the dataset if you publish anything
+from these numbers. The references sit in `CITATION.cff` at the repository root.
