@@ -1,11 +1,8 @@
 """Load the merged AIT-ADS alert file into one normalized alert table.
 
 Public API:
-    normalize(alerts_path, labels_path, inventory_path, scenario) -> pd.DataFrame
     normalize_scenario(raw_dir, labels_path, scenario, inventory_path) -> pd.DataFrame
     iter_normalized_chunks(...)  -> bounded frames instead of one big list
-    write_day_partitioned(...)   -> spill one part file per day
-    iter_days(dest)              -> read those back a day at a time
 """
 
 from __future__ import annotations
@@ -26,7 +23,6 @@ from core.inventory import Inventory, load_inventory
 # batches and drop the dicts. Below ~5,000 the frame itself dominates and peak
 # stops improving.
 CHUNK_ROWS = 10_000
-SECONDS_PER_DAY = 86400.0
 
 COLUMNS = [
     "detector_source", "timestamp", "name", "host", "entity_id", "observer_id",
@@ -173,7 +169,6 @@ def extract_wazuh_fields(
         observer_id=agent_ip or str(agent.get("name") or ""),
         entity_in_inventory=agent_ip in inventory,
         severity=float(rule["level"]),
-        # mitre IDs fields have multiple values so we join them
         native_technique_ids=";".join(str(one) for one in mitre_ids),
         rule_id=str(rule.get("id", "")),
         native_event_id=native_event_id,
@@ -268,12 +263,14 @@ def aminer_host_candidates(record: dict) -> set[str]:
         raw = str(raw_line).strip()
 
         # a log line the miner flagged is attacker-influenced, so a "{" that is
-        # not json, or json without a host, is a bad line rather than a crash
+        # not json, or json without a host, is a bad line rather than a crash.
+        # json.loads answers deep nesting with RecursionError rather than
+        # JSONDecodeError, and one `{"a":{"a":...` line used to end the run.
         if raw.startswith("{"):
             try:
                 embedded = json.loads(raw)
                 candidates.add(str(embedded["host"]["name"]))
-            except (json.JSONDecodeError, KeyError, TypeError):
+            except (json.JSONDecodeError, KeyError, TypeError, RecursionError):
                 pass
 
         match = re.match(
@@ -338,11 +335,12 @@ def extract_aminer_fields(
     if raw.startswith("{"):
         try:
             embedded = json.loads(raw)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             embedded = {}
         cpu = embedded.get("system", {}).get("cpu", {})
         total = cpu.get("total", {}).get("pct")
         nice = cpu.get("nice", {}).get("pct")
+        # metricbeat writes these as a 0-1 fraction despite the pct name
         if total is not None:
             cpu_total_pct = float(total) * 100
         if nice is not None:
@@ -491,10 +489,6 @@ def normalize_record(
     }
 
 
-def build_normalized_frame(rows: list[dict], columns: list[str]) -> pd.DataFrame:
-    return finalize_normalized_frame(pd.DataFrame(rows, columns=columns))
-
-
 def _normalized_columns(with_event_label: bool) -> list[str]:
     return COLUMNS + ["event_label"] if with_event_label else COLUMNS
 
@@ -508,34 +502,6 @@ def finalize_normalized_frame(df: pd.DataFrame) -> pd.DataFrame:
     if "event_label" in df.columns:
         df["event_label"] = df["event_label"].astype("category")
     return df.sort_values("timestamp", kind="stable").reset_index(drop=True)
-
-
-def normalize(
-    alerts_path: Path,
-    labels_path: Path,
-    inventory_path: Path,
-    scenario: str,
-) -> pd.DataFrame:
-    windows = load_attack_windows(labels_path, scenario)
-    inventory = load_inventory(inventory_path)
-    rows = []
-
-    with alerts_path.open(encoding="utf-8") as fh:
-        for position, line in enumerate(fh):
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            row = normalize_record(
-                record,
-                record["detector_source"],
-                windows,
-                inventory,
-            )
-            row["source_file"] = alerts_path.name
-            row["source_position"] = position
-            rows.append(row)
-
-    return build_normalized_frame(rows, COLUMNS)
 
 
 WAZUH_FAMILY = "wazuh"
@@ -562,7 +528,7 @@ def classify_alert_family(record: dict) -> str:
 def sniff_alert_family(path: Path, max_lines: int = SNIFF_LINES) -> str:
     # a wazuh export is tens of MB, so the family is decided from the first few
     # records and the rest of the file is never read. Anything unreadable, not
-    # json, or json of neither shape is simply not an alert file.
+    # json, or json of neither shape is not an alert file.
     try:
         with path.open(encoding="utf-8", errors="replace") as fh:
             read = 0
@@ -601,6 +567,13 @@ def read_alert_record(line: str, path: Path, position: int) -> dict | None:
     except json.JSONDecodeError as error:
         raise AlertFileError(
             f"{path.name} line {position + 1} is not valid JSON: {error.msg}. "
+            "Alert files are JSON lines, one object per line."
+        ) from error
+    except RecursionError as error:
+        # json.loads recurses, so a record nested a few thousand deep raises
+        # this instead and used to end the whole ingest with a traceback
+        raise AlertFileError(
+            f"{path.name} line {position + 1} nests too deeply to parse. "
             "Alert files are JSON lines, one object per line."
         ) from error
     if not isinstance(record, dict):
@@ -676,7 +649,7 @@ def iter_normalized_rows(
     # the miner is optional; the wazuh file carries both wazuh and suricata
     have_aminer = aminer_path.exists()
     have_wazuh = wazuh_path.exists()
-    # an unseen company has no label file, so it simply carries no attack windows
+    # an unseen company has no label file, so it carries no attack windows
     windows = load_attack_windows(labels_path, scenario) if labels_path else []
     inventory = load_inventory(inventory_path)
 
@@ -688,11 +661,15 @@ def iter_normalized_rows(
         from core.event_labels import load_scenario_labels
         _, _, _, event_labels = load_scenario_labels(event_csv_dir, scenario)
         if have_aminer and have_wazuh:
-            with wazuh_path.open(encoding="utf-8-sig") as fh:
+            with wazuh_path.open(encoding="utf-8-sig", errors="replace") as fh:
                 aminer_offset = sum(1 for _ in fh)
 
+    # a log line is attacker-influenced, so one bad byte anywhere in a 45MB export
+    # would otherwise take the whole ingest down with a UnicodeDecodeError. The
+    # replacement character still parses as JSON and still counts as one line, so
+    # the event-label join stays aligned.
     if have_aminer:
-        with aminer_path.open(encoding="utf-8-sig") as fh:
+        with aminer_path.open(encoding="utf-8-sig", errors="replace") as fh:
             for position, line in enumerate(fh):
                 record = read_alert_record(line, aminer_path, position)
                 if record is None:
@@ -710,7 +687,7 @@ def iter_normalized_rows(
                 yield row
 
     if have_wazuh:
-        with wazuh_path.open(encoding="utf-8-sig") as fh:
+        with wazuh_path.open(encoding="utf-8-sig", errors="replace") as fh:
             for position, line in enumerate(fh):
                 # a concatenated export often carries a blank line between parts,
                 # and one of them used to abort the whole run. position still
@@ -779,65 +756,3 @@ def normalize_scenario(
     frame = chunks[0] if len(chunks) == 1 else pd.concat(chunks, ignore_index=True)
     del chunks
     return finalize_normalized_frame(frame)
-
-
-def write_day_partitioned(
-    dest: Path,
-    raw_dir: Path,
-    labels_path: Path | None,
-    scenario: str,
-    inventory_path: Path,
-    event_csv_dir: Path | None = None,
-    chunk_rows: int = CHUNK_ROWS,
-) -> Path:
-    # records arrive in file order, not time order, and the two detector files are
-    # read one after the other, so a day is not finished until the last record.
-    # Holding every day in memory until then is the problem being solved, so each
-    # flush writes a new numbered part instead.
-    columns = _normalized_columns(event_csv_dir is not None)
-    dest.mkdir(parents=True, exist_ok=True)
-    buffered: dict[int, list[dict]] = {}
-    parts: dict[int, int] = {}
-    held = 0
-
-    def flush() -> None:
-        nonlocal held
-        for day, rows in buffered.items():
-            if not rows:
-                continue
-            index = parts.get(day, 0)
-            parts[day] = index + 1
-            day_dir = dest / f"day={day}"
-            day_dir.mkdir(exist_ok=True)
-            # pickle, not parquet: the same run writes and reads these, so
-            # parquet would only add a pyarrow dependency
-            pd.DataFrame(rows, columns=columns).to_pickle(
-                day_dir / f"part-{index:05d}.pkl"
-            )
-        buffered.clear()
-        held = 0
-
-    for row in iter_normalized_rows(
-        raw_dir, labels_path, scenario, inventory_path, event_csv_dir
-    ):
-        buffered.setdefault(int(row["timestamp"] // SECONDS_PER_DAY), []).append(row)
-        held += 1
-        if held >= chunk_rows:
-            flush()
-    flush()
-    return dest
-
-
-# alerts bucket by their own timestamp, so a session starting before midnight
-# loses the part landing after. Reading one day is not yet equivalent to reading
-# the file; that needs a lookahead bounded by SESSION_GAP_S.
-def iter_days(dest: Path) -> Iterator[tuple[int, pd.DataFrame]]:
-    for day_dir in sorted(
-        dest.glob("day=*"), key=lambda path: int(path.name.split("=")[1])
-    ):
-        day = int(day_dir.name.split("=")[1])
-        frames = [pd.read_pickle(part) for part in sorted(day_dir.glob("*.pkl"))]
-        if not frames:
-            continue
-        frame = frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True)
-        yield day, finalize_normalized_frame(frame)

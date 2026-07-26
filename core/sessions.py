@@ -21,15 +21,9 @@ from core.inventory import Inventory
 SECONDS_PER_DAY = 86400.0
 SESSION_GAP_S = 600.0
 SESSION_KEY = ("entity_id", "detector_source", "rule_id")
-FAMILY_KEY = ("day", "entity_id", "detector_source", "rule_id")
-# carried on every session whether or not they are part of the key, because the
-# features and the CLI read them to describe a unit
-DESCRIPTIVE = ("entity_id", "detector_source", "rule_id")
-
-# when true a session cannot span midnight, so reading one day at a time gives the
-# same sessions as reading the whole file. Off by default because splitting a burst
-# at the boundary changes which windows the queue reaches.
-SPLIT_SESSIONS_AT_MIDNIGHT = False
+# a family is one day of one session key, so the two must stay in step: a column
+# that stops being a session key stops being a family key with it
+FAMILY_KEY = ("day",) + SESSION_KEY
 
 
 def assign_sessions(
@@ -42,11 +36,7 @@ def assign_sessions(
         alerts[list(SESSION_KEY)].shift()
     ).any(axis=1)
     quiet = alerts["timestamp"].diff().gt(gap_s)
-    boundary = key_changed | quiet
-    if SPLIT_SESSIONS_AT_MIDNIGHT:
-        day = (alerts["timestamp"] // SECONDS_PER_DAY).astype("int64")
-        boundary = boundary | day.ne(day.shift())
-    return boundary.cumsum() - 1
+    return (key_changed | quiet).cumsum() - 1
 
 
 def _nonempty(values: pd.Series) -> frozenset[str]:
@@ -149,10 +139,11 @@ def build_sessions(
     ).reset_index(drop=True)
     work["unit"] = assign_sessions(work, gap_s)
 
-    carried = dict.fromkeys(tuple(SESSION_KEY) + DESCRIPTIVE)
     sessions = work.groupby("unit", observed=True, sort=False).agg(
         scenario=("scenario", "first"),
-        **{name: (name, "first") for name in carried},
+        # the key columns are grouped away, and the features and the CLI both
+        # read them back to describe a unit, so carry them onto the row
+        **{name: (name, "first") for name in SESSION_KEY},
         start=("timestamp", "min"),
         end=("timestamp", "max"),
         size=("timestamp", "size"),
@@ -229,16 +220,6 @@ def build_families(scored_sessions: pd.DataFrame) -> pd.DataFrame:
     representatives = grouped.head(1).set_index(list(FAMILY_KEY))
     families = grouped.agg(
         scenario=("scenario", "first"),
-        # a descriptive column is a column only because it happens to be a group
-        # key, so a looser FAMILY_KEY made it vanish and every reader downstream
-        # broke. Carry them the way build_sessions already does. Under a key that
-        # drops one, the value is one arbitrary child's, which is fine for display
-        # and for the duplicate-concentration metric and is never a feature.
-        **{
-            name: (name, "first")
-            for name in DESCRIPTIVE
-            if name not in FAMILY_KEY
-        },
         ranking_score=("ranking_score", "max"),
         child_score_mean=("ranking_score", "mean"),
         child_score_std=("ranking_score", _population_std),
@@ -263,8 +244,6 @@ def build_families(scored_sessions: pd.DataFrame) -> pd.DataFrame:
         rule_group_set=("rule_group_set", _union),
     )
     families["representative_session_id"] = representatives["session_id"]
-    families["representative_score"] = representatives["ranking_score"]
-    families["representative_order"] = representatives["order"]
     families = families.reset_index()
     families["child_score_max"] = families["ranking_score"]
     families["family_span_s"] = families["end"] - families["start"]

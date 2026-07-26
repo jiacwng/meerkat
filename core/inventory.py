@@ -57,9 +57,6 @@ def load_inventory(path: Path) -> Inventory:
 
     unknown_roles: set[str] = set()
     for item in config["assets"]:
-        # "roles" is the documented key, "groups" is what AIT and Wazuh use.
-        # a string is iterable, so "webserver" used to become six one-letter
-        # roles and the asset silently ended up with none
         if not isinstance(item, dict):
             raise ValueError(
                 f"{path.name}: every entry under \"assets\" must be an object"
@@ -69,6 +66,9 @@ def load_inventory(path: Path) -> Inventory:
                 raise ValueError(
                     f"{path.name}: an asset is missing \"{required}\""
                 )
+        # "roles" is the documented key, "groups" is what AIT and Wazuh use.
+        # a string is iterable, so "webserver" used to become six one-letter
+        # roles and the asset silently ended up with none
         declared = item.get("roles") or item.get("groups") or []
         if isinstance(declared, str):
             declared = [declared]
@@ -90,8 +90,9 @@ def load_inventory(path: Path) -> Inventory:
         )
         for ip in asset.ip_addresses:
             assets_by_ip[ip] = asset
-        # `meerkat inventory` emits address-less assets and only warns, so the
-        # loader has to survive its own scaffolding
+        # this file is hand-edited, so an asset with its addresses deleted is an
+        # ordinary typo rather than something the scaffolder writes; without the
+        # guard it is an IndexError on load
         if asset.ip_addresses:
             ip_by_hostname[asset.hostname.casefold()] = asset.ip_addresses[0]
 

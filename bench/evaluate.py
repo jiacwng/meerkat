@@ -460,7 +460,9 @@ def main() -> None:
     parser.add_argument(
         "--event-csv-dir", type=Path, default=Path("data/raw/alerts_csv")
     )
-    parser.add_argument("--trees", type=int, default=50)
+    # 200 is where added trees stopped improving coverage, and it is what
+    # the published table is measured at
+    parser.add_argument("--trees", type=int, default=200)
     parser.add_argument("--seeds", default="0")
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()

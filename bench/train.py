@@ -32,7 +32,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--event-csv-dir", type=Path, default=Path("data/raw/alerts_csv")
     )
-    parser.add_argument("--trees", type=int, default=300)
+    # 200 is where added trees stopped improving coverage
+    parser.add_argument("--trees", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--model", type=Path, default=Path("models/meerkat_bundle.skops")

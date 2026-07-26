@@ -11,6 +11,7 @@ Public API:
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -30,6 +31,10 @@ SESSION_NUMERIC_FEATURES = (
 )
 SUPPORTED_DETECTOR_ORDER = ("wazuh", "suricata", "aminer")
 SCHEMA_INDEX_NAMES = ("detector_source", "rule_id")
+
+# one warning per detector name per process, so a 36k-row frame does not report
+# the same missing scale once per batch
+_UNSCALED_DETECTORS_WARNED: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -61,6 +66,21 @@ def standardize_severity(
     suricata = detector_source.eq("suricata")
     standardized[wazuh] = (severity[wazuh] / 15.0).clip(0, 1)
     standardized[suricata] = ((4.0 - severity[suricata]) / 3.0).clip(0, 1)
+    # the midpoint is a decision for aminer and an accident for anyone else: a
+    # client detector nobody mapped keeps every one of its alerts at 0.5, which
+    # ranks plausibly and is therefore easy to miss. Say the name once.
+    unscaled = {
+        str(name)
+        for name in detector_source[~(wazuh | suricata)].unique()
+        if not pd.isna(name)
+    } - set(SUPPORTED_DETECTOR_ORDER) - _UNSCALED_DETECTORS_WARNED
+    for detector in sorted(unscaled):
+        _UNSCALED_DETECTORS_WARNED.add(detector)
+        warnings.warn(
+            f"detector {detector!r} has no severity scale in standardize_severity, "
+            "so all of its alerts score 0.5",
+            stacklevel=2,
+        )
     return standardized
 
 

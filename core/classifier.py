@@ -17,7 +17,8 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
-from dataclasses import dataclass, replace
+import zipfile
+from dataclasses import dataclass, is_dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -197,7 +198,8 @@ def fit_soft_labels(
     return model
 
 
-# Elkan-Noto, two-step weighted form. Real attacks that nobody wrote down sit in
+# Elkan and Noto, Learning classifiers from only positive and unlabeled data, KDD
+# 2008; the two-step weighted form. Real attacks that nobody wrote down sit in
 # the unlabelled pool, so calling that pool negative teaches the forest they are
 # normal. Each unlabelled session enters twice instead, split between the classes
 # by how likely it is to be one. c is P(labelled | positive).
@@ -306,11 +308,7 @@ TRUSTED_TYPES = (
     "sklearn.tree._tree.Tree",
 )
 
-SKOPS_SUFFIX = ".skops"
 
-
-# skops cannot reduce a pandas Series, so flatten schema.rule_counts here rather
-# than change SessionFeatureSchema and disturb the feature code
 def _to_wire(model: object) -> object:
     schema = getattr(model, "schema", None)
     counts = getattr(schema, "rule_counts", None)
@@ -359,6 +357,9 @@ def load_model(path: Path) -> object:
             "Retrain with `meerkat retrain`, or fetch a bundle written by this "
             "version of Meerkat."
         )
+    # every member is expanded before any of this runs, so bound the unpacking
+    # first
+    _refuse_oversized_bundle(path)
     # skops lists every type needing explicit trust, ours included, so the
     # test is what falls outside the allowlist
     unexpected = set(sio.get_untrusted_types(file=path)) - set(TRUSTED_TYPES)
@@ -368,7 +369,9 @@ def load_model(path: Path) -> object:
             f"{', '.join(sorted(unexpected))}. It was not written by "
             f"`meerkat retrain`; refusing to load it."
         )
-    return _from_wire(sio.load(path, trusted=list(TRUSTED_TYPES)))
+    model = sio.load(path, trusted=list(TRUSTED_TYPES))
+    _refuse_malformed_forest(path, model)
+    return _from_wire(model)
 
 
 class UntrustedBundleError(Exception):
@@ -376,9 +379,118 @@ class UntrustedBundleError(Exception):
 
 
 def _is_skops(path: Path) -> bool:
-    # skops writes a zip; a pickle never starts with the zip magic
+    # skops writes a zip holding schema.json; a pickle never starts with the zip
+    # magic, and a zip without that member is not a bundle either. Accepting one
+    # on the magic alone sent it into skops, which answered with a KeyError on
+    # the missing member instead of the refusal above.
     with path.open("rb") as file:
-        return file.read(4) == b"PK\x03\x04"
+        if file.read(4) != b"PK\x03\x04":
+            return False
+    try:
+        with zipfile.ZipFile(path) as archive:
+            archive.getinfo("schema.json")
+    except (zipfile.BadZipFile, KeyError, OSError):
+        return False
+    return True
+
+
+# The members are unpacked before the allowlist is consulted, so a 204 KB file
+# declaring a 200 MB schema.json cost 459 MB of memory inside
+# get_untrusted_types, before anything had decided whether to trust it. skops
+# stores its members without compressing them, so the shipped 15 MB bundle sits
+# at ratio 1.0 and both limits are far above anything a real bundle reaches.
+MAX_BUNDLE_UNPACKED = 256 * 1024 * 1024
+MAX_BUNDLE_RATIO = 50
+
+
+def _refuse_oversized_bundle(path: Path) -> None:
+    # the central directory carries the declared sizes, and zipfile stops reading
+    # a member at the size declared there, so this bounds the real allocation
+    with zipfile.ZipFile(path) as archive:
+        entries = archive.infolist()
+    unpacked = sum(entry.file_size for entry in entries)
+    packed = sum(entry.compress_size for entry in entries)
+    if unpacked > MAX_BUNDLE_UNPACKED:
+        raise UntrustedBundleError(
+            f"{path.name} declares {unpacked / 1e6:.0f} MB of members, over the "
+            f"{MAX_BUNDLE_UNPACKED / 1e6:.0f} MB limit a bundle may unpack to "
+            "(the shipped one is about 15 MB); refusing to load it."
+        )
+    if packed and unpacked > packed * MAX_BUNDLE_RATIO:
+        raise UntrustedBundleError(
+            f"{path.name} unpacks to {unpacked / packed:.0f} times its size on "
+            f"disk, over the {MAX_BUNDLE_RATIO}x limit for a bundle; refusing "
+            "to load it."
+        )
+
+
+def _sequence(value: object) -> tuple:
+    # everything read here comes out of the file being judged, so a field
+    # holding something other than what its name says must not be a new crash
+    return tuple(value) if isinstance(value, (list, tuple)) else ()
+
+
+def _iter_trees(model: object):
+    # only the containers the allowlist admits are walked, so this never
+    # descends into the schema's rule counts
+    seen: set[int] = set()
+    stack = [model]
+    while stack:
+        value = stack.pop()
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        tree = getattr(value, "tree_", None)
+        if tree is not None:
+            yield tree
+        stack.extend(_sequence(getattr(value, "estimators_", None)))
+        stack.extend(
+            step[1] for step in _sequence(getattr(value, "steps", None))
+            if isinstance(step, (list, tuple)) and len(step) == 2
+        )
+        if is_dataclass(value) and not isinstance(value, type):
+            stack.extend(vars(value).values())
+
+
+# Tree.__setstate__ checks the dtype and the shape of the arrays it is handed and
+# never what is in them, so a bundle whose left_child names node 4 billion loads
+# without complaint and then reads out of bounds inside Tree.apply, which is a
+# segfault rather than an exception. This does not make an untrusted bundle safe;
+# it turns one shape of malformed bundle into an error message.
+def _refuse_malformed_forest(path: Path, model: object) -> None:
+    def malformed(detail: str) -> UntrustedBundleError:
+        return UntrustedBundleError(f"{path.name} is malformed: {detail}.")
+
+    for tree in _iter_trees(model):
+        count = int(getattr(tree, "node_count", -1))
+        arrays = [
+            np.atleast_1d(np.asarray(getattr(tree, name, ())))
+            for name in ("children_left", "children_right", "feature")
+        ]
+        # children_left slices to node_count, so a node count past the end of the
+        # array is exactly what a short slice reports
+        children, feature = arrays[:2], arrays[2]
+        if count < 1 or any(
+            array.ndim != 1 or len(array) != count for array in arrays
+        ):
+            raise malformed(
+                f"a tree declares {count} nodes and carries a different "
+                "number; refusing to score with it"
+            )
+        for side in children:
+            if ((side < -1) | (side >= count)).any():
+                raise malformed(
+                    f"a tree has a child index outside its {count} nodes; "
+                    "refusing to score with it"
+                )
+        # a leaf's feature is never read, an internal node's indexes the row
+        used = feature[children[0] != -1]
+        n_features = int(getattr(tree, "n_features", 0))
+        if used.size and ((used < 0) | (used >= n_features)).any():
+            raise malformed(
+                f"a tree splits on a feature outside the {n_features} it was "
+                "fitted on; refusing to score with it"
+            )
 
 
 def provenance_path(path: Path) -> Path:
@@ -410,7 +522,21 @@ def read_provenance(path: Path) -> dict | None:
     sidecar = provenance_path(path)
     if not sidecar.exists():
         return None
-    record = json.loads(sidecar.read_text(encoding="utf-8"))
+    # a bundle from elsewhere brings its own sidecar, so this file is as
+    # untrusted as the bundle. A list rather than an object used to reach
+    # .get and answer with an AttributeError instead of the refusal.
+    try:
+        record = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, RecursionError, UnicodeDecodeError) as error:
+        raise UntrustedBundleError(
+            f"{sidecar.name} is not valid JSON, so it records nothing about "
+            f"what wrote {path.name}; refusing to read it."
+        ) from error
+    if not isinstance(record, dict):
+        raise UntrustedBundleError(
+            f"{sidecar.name} is a {type(record).__name__}, not the object "
+            f"`meerkat retrain` writes beside {path.name}; refusing to read it."
+        )
     record["matches_file"] = (
         record.get("sha256") == hashlib.sha256(path.read_bytes()).hexdigest()
     )

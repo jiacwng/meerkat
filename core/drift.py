@@ -28,8 +28,8 @@ import numpy as np
 import pandas as pd
 
 # The credit-risk convention, which is where PSI comes from and where the whole
-# reject-inference framing in this project comes from too. These thresholds are the
-# published ones rather than anything tuned here.
+# reject-inference framing in this project comes from too. The 0.10 and 0.25 bands
+# are Siddiqi's, Credit Risk Scorecards, 2006, not anything tuned here.
 PSI_STABLE = 0.10
 PSI_MAJOR = 0.25
 DECILES = tuple(round(0.1 * i, 2) for i in range(1, 10))
