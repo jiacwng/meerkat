@@ -1,6 +1,6 @@
 # ============================================================
-# Data — raw AIT-ADS downloads stay local (see data/README.md
-# for how to regenerate data/ait_alerts.json from the source)
+# Data — raw AIT-ADS downloads stay local. NOTICE records what the
+# repository ships and how to attribute it.
 # ============================================================
 
 # local
@@ -15,6 +15,8 @@ runs/
 __pycache__/
 *.py[cod]
 *.egg-info/
+build/
+dist/
 .venv/
 venv/
 env/

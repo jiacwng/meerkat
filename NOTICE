@@ -1,0 +1,68 @@
+meerkat
+Copyright (c) 2026 Wang Jiacheng
+Released under the MIT License. See LICENSE.
+
+This repository redistributes third-party material. The notices below apply to
+that material and not to the rest of the project.
+
+MITRE ATT&CK
+------------
+
+© 2026 The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation.
+
+The file `core/data/attack_lookup.json` holds 858 technique identifiers with
+their ATT&CK technique names and tactic assignments, and the 15 Enterprise
+tactics in matrix order. It was built from the Enterprise ATT&CK 19.1 STIX
+distribution, published at https://attack.mitre.org. The same release is
+recorded as `ATTACK_RELEASE` in `core/attack_mapping.py`, and its major number
+is written into every ATT&CK Navigator layer that `meerkat export navigator`
+produces.
+
+AIT Alert Data Set
+------------------
+
+AIT Alert Data Set, by Max Landauer, Florian Skopik and Markus Wurzenberger,
+AIT Austrian Institute of Technology.
+
+  DOI     10.5281/zenodo.8263181
+  Record  https://zenodo.org/records/8263181
+  License Creative Commons Attribution 4.0 International (CC BY 4.0)
+          https://creativecommons.org/licenses/by/4.0/
+
+The full data set holds alerts from eight simulated company networks. One of the
+eight, russellmitchell, is included here so that `meerkat demo` runs from a clone
+with no download. The other seven stay in the Zenodo record and are needed to
+reproduce the results table in README.md.
+
+Copied unmodified from the data set:
+
+  data/raw/russellmitchell_wazuh.json   45.3 MB, Wazuh and Suricata alerts (Git LFS)
+  data/raw/russellmitchell_aminer.json   3.4 MB, AMiner alerts (Git LFS)
+  data/labels.csv                        3.7 KB, the attack windows for all eight
+                                         environments, byte-identical to the record
+
+Derived from the data set:
+
+  data/raw/inventory/*.json   converted from the environment configuration AIT
+                              publishes alongside the alerts, into the inventory
+                              format meerkat reads. Attacker-group assets were
+                              left out. One address in the shaw environment was
+                              added by hand and carries no groups.
+
+  models/meerkat_bundle.skops a model, not alert data, but fitted on seven of the
+                              eight environments, with a training profile that
+                              summarises their alerts. Adapted material under the
+                              same licence.
+
+Cite the data set if you publish anything measured on it:
+
+  M. Landauer, F. Skopik and M. Wurzenberger. Introducing a New Alert Data Set
+  for Multi-Step Attack Analysis. Cyber Security Experimentation and Test
+  Workshop (CSET), 2024.
+
+  M. Landauer, F. Skopik, M. Frank, W. Hotwagner, M. Wurzenberger and A. Rauber.
+  Maintainable Log Datasets for Evaluation of Intrusion Detection Systems. IEEE
+  Transactions on Dependable and Secure Computing, 2023.
+
+Everything else in this repository is the project's own work, under the MIT
+licence in LICENSE.

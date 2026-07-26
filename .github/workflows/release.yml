@@ -1,0 +1,62 @@
+name: Release
+
+# Runs when an annotated tag is pushed. It refuses to publish a tag whose name
+# disagrees with the version in the package, which is the mistake that produces
+# a release nobody can reproduce.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build and publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip build
+          python -m pip install -e .
+
+      - name: The tag must match the package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(python -c "import meerkat; print(meerkat.__version__)")
+          echo "tag=$tag package=$pkg"
+          test "$tag" = "$pkg"
+
+      - name: The changelog must have a section for it
+        run: grep -q "^## ${GITHUB_REF_NAME#v}" CHANGELOG.md
+
+      - name: Tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Build the wheel and sdist
+        run: python -m build
+
+      - name: The wheel must import on its own
+        run: |
+          python -m pip install --target /tmp/wheelcheck --no-deps dist/*.whl
+          cd /tmp && PYTHONPATH=/tmp/wheelcheck python -c "import meerkat.cli"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file CHANGELOG.md \
+            --verify-tag \
+            $([ "${GITHUB_REF_NAME}" != "${GITHUB_REF_NAME%-rc*}" ] && echo --prerelease)

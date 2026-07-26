@@ -1,5 +1,5 @@
 {
- "_comment": "Reviewed detector rule -> ATT&CK technique mappings. Keyed by stable rule identity (wazuh rule.id, suricata signature_id, aminer AnalysisComponentName). An EMPTY list means 'reviewed: maps to nothing' and suppresses native detector tags (routine-activity noise); an ABSENT rule falls through to native tags. Every technique ID is validated against data/attack_lookup.json at load.",
+ "_comment": "Reviewed detector rule -> ATT&CK technique mappings. Keyed by stable rule identity (wazuh rule.id, suricata signature_id, aminer AnalysisComponentName). An EMPTY list means 'reviewed: maps to nothing' and suppresses native detector tags (routine-activity noise); an ABSENT rule falls through to native tags. Every technique ID is validated against core/data/attack_lookup.json at load.",
  "wazuh": {
   "31516": ["T1505.003"],
   "31101": ["T1595.002"],

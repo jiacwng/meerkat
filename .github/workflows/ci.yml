@@ -1,10 +1,13 @@
 name: CI
 
+# pull_request covers every branch that is proposed for merge, and push covers
+# main itself. Running both on every branch fired the matrix twice per commit and
+# left two check runs per required name.
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -50,4 +53,4 @@ jobs:
         run: python -m pip install ruff
 
       - name: Check
-        run: ruff check core meerkat tests
+        run: ruff check core meerkat bench tests

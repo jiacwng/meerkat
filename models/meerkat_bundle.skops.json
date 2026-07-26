@@ -1,0 +1,35 @@
+{
+  "sha256": "6af62bde11c9aee83c52ff78dc763865e0cafb926335e2bc822b8c8e7da09327",
+  "sklearn_version": "1.6.0",
+  "python_version": "3.13.1",
+  "written_at": "2026-07-26T17:41:35+00:00",
+  "training_scenarios": [
+    "fox",
+    "harrison",
+    "santos",
+    "shaw",
+    "wardbeck",
+    "wheeler",
+    "wilson"
+  ],
+  "n_estimators": 300,
+  "seed": 0,
+  "roles": [
+    "behind_proxy",
+    "dmz",
+    "dns_server",
+    "employee",
+    "external_mail",
+    "external_user",
+    "file_share",
+    "firewall",
+    "internal",
+    "internal_employee",
+    "internet_facing",
+    "mail_server",
+    "monitoring_agent",
+    "nat_forwarded",
+    "remote_employee",
+    "server"
+  ]
+}

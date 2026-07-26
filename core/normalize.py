@@ -1,8 +1,8 @@
 """Load the merged AIT-ADS alert file into one normalized alert table.
 
 Public API:
-    normalize(alerts_path, labels_path, inventory_path, scenario) -> pd.DataFrame
     normalize_scenario(raw_dir, labels_path, scenario, inventory_path) -> pd.DataFrame
+    iter_normalized_chunks(...)  -> bounded frames instead of one big list
 """
 
 from __future__ import annotations
@@ -10,13 +10,19 @@ from __future__ import annotations
 import csv
 import json
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
 
 from core.inventory import Inventory, load_inventory
+
+# a row dict costs about four times the same row inside a frame, so convert in
+# batches and drop the dicts. Below ~5,000 the frame itself dominates and peak
+# stops improving.
+CHUNK_ROWS = 10_000
 
 COLUMNS = [
     "detector_source", "timestamp", "name", "host", "entity_id", "observer_id",
@@ -124,7 +130,13 @@ def get_timestamp(record: dict, detector: str) -> float:
     # wazuh/suricata store an ISO-8601 string ending in "Z" for UTC
     if detector == "aminer":
         return float(record["LogData"]["Timestamps"][0])
-    return datetime.fromisoformat(record["@timestamp"]).timestamp()
+    stamp = datetime.fromisoformat(record["@timestamp"])
+    # a SIEM export that omits the zone is otherwise read in the reading
+    # machine's local time, so the same file lands in different days, sessions
+    # and attack windows depending on who runs it
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    return stamp.timestamp()
 
 
 def extract_wazuh_fields(
@@ -141,6 +153,11 @@ def extract_wazuh_fields(
         asset = inventory.assets_by_ip.get(agent_ip)
         host = asset.hostname if asset else agent_ip or agent["name"]
     mitre = rule.get("mitre") or {}
+    # a single id is sometimes a bare string, and a string is iterable, so
+    # "T1059" used to join to "T;1;0;5;9" and technique_count read 5 not 1
+    mitre_ids = mitre.get("id") or []
+    if isinstance(mitre_ids, str):
+        mitre_ids = [mitre_ids]
     native_event_id = str(data.get("id") or "")
     http_status = float("nan")
     if native_event_id.isdigit() and 100 <= int(native_event_id) <= 599:
@@ -152,8 +169,7 @@ def extract_wazuh_fields(
         observer_id=agent_ip or str(agent.get("name") or ""),
         entity_in_inventory=agent_ip in inventory,
         severity=float(rule["level"]),
-        # mitre IDs fields have multiple values so we join them
-        native_technique_ids=";".join(mitre.get("id") or []),
+        native_technique_ids=";".join(str(one) for one in mitre_ids),
         rule_id=str(rule.get("id", "")),
         native_event_id=native_event_id,
         source_user=str(data.get("srcuser") or ""),
@@ -246,9 +262,16 @@ def aminer_host_candidates(record: dict) -> set[str]:
     for raw_line in raw_lines:
         raw = str(raw_line).strip()
 
+        # a log line the miner flagged is attacker-influenced, so a "{" that is
+        # not json, or json without a host, is a bad line rather than a crash.
+        # json.loads answers deep nesting with RecursionError rather than
+        # JSONDecodeError, and one `{"a":{"a":...` line used to end the run.
         if raw.startswith("{"):
-            embedded = json.loads(raw)
-            candidates.add(str(embedded["host"]["name"]))
+            try:
+                embedded = json.loads(raw)
+                candidates.add(str(embedded["host"]["name"]))
+            except (json.JSONDecodeError, KeyError, TypeError, RecursionError):
+                pass
 
         match = re.match(
             r"^[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+"
@@ -310,10 +333,14 @@ def extract_aminer_fields(
     cpu_total_pct = float("nan")
     cpu_nice_pct = float("nan")
     if raw.startswith("{"):
-        embedded = json.loads(raw)
+        try:
+            embedded = json.loads(raw)
+        except (json.JSONDecodeError, RecursionError):
+            embedded = {}
         cpu = embedded.get("system", {}).get("cpu", {})
         total = cpu.get("total", {}).get("pct")
         nice = cpu.get("nice", {}).get("pct")
+        # metricbeat writes these as a 0-1 fraction despite the pct name
         if total is not None:
             cpu_total_pct = float(total) * 100
         if nice is not None:
@@ -323,9 +350,13 @@ def extract_aminer_fields(
     target_user = ""
     command = ""
     working_directory = ""
+    # `.*?PWD=` rescans to the end at every "sudo:", so a log line of repeated
+    # "sudo: a : " costs 15s at 160KB and ten minutes at 1MB. The line is
+    # attacker-written, and a real sudo record never runs past a few hundred
+    # characters, so cap the input rather than reshape a working pattern.
     sudo = re.search(
         r"sudo:\s+(\S+)\s+:.*?PWD=([^;]+)\s*;\s*USER=([^;]+)\s*;\s*COMMAND=(.*)$",
-        raw,
+        raw[:4096],
     )
     if sudo:
         source_user = sudo.group(1)
@@ -382,6 +413,11 @@ def classify_wazuh_record(record: dict) -> str:
         return ""
     if "alert" in record.get("data", {}):
         return "suricata"
+    # a wazuh alert always carries rule and agent. Claiming anything else is one
+    # sent the extractor straight into a KeyError the user then read as a
+    # traceback, so an object without them is not recognised rather than fatal.
+    if not isinstance(record.get("rule"), dict) or "agent" not in record:
+        return ""
     return "wazuh"
 
 
@@ -453,8 +489,14 @@ def normalize_record(
     }
 
 
-def build_normalized_frame(rows: list[dict], columns: list[str]) -> pd.DataFrame:
-    df = pd.DataFrame(rows, columns=columns)
+def _normalized_columns(with_event_label: bool) -> list[str]:
+    return COLUMNS + ["event_label"] if with_event_label else COLUMNS
+
+
+# separate from frame construction because a chunked reader has to concatenate
+# first: casting per chunk gives each chunk its own categories, and concatenating
+# those falls back to object dtype
+def finalize_normalized_frame(df: pd.DataFrame) -> pd.DataFrame:
     for column in CATEGORICAL_COLUMNS:
         df[column] = df[column].astype("category")
     if "event_label" in df.columns:
@@ -462,30 +504,234 @@ def build_normalized_frame(rows: list[dict], columns: list[str]) -> pd.DataFrame
     return df.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
 
-def normalize(
-    alerts_path: Path,
-    labels_path: Path,
+WAZUH_FAMILY = "wazuh"
+AMINER_FAMILY = "aminer"
+SNIFF_LINES = 5
+
+
+def classify_alert_family(record: dict) -> str:
+    # the two exports share no top-level field. aminer writes what fired and the
+    # log it read (AnalysisComponent / LogData); wazuh writes the rule and the
+    # agent that reported it. suricata rides in the wazuh file with that same
+    # rule+agent pair and its own data.alert, so it is the wazuh family here and
+    # classify_wazuh_record splits the two apart per record at parse time.
+    if "AnalysisComponent" in record or "LogData" in record:
+        return AMINER_FAMILY
+    if "rule" in record and "agent" in record:
+        return WAZUH_FAMILY
+    data = record.get("data")
+    if isinstance(data, dict) and "alert" in data:
+        return WAZUH_FAMILY
+    return ""
+
+
+def sniff_alert_family(path: Path, max_lines: int = SNIFF_LINES) -> str:
+    # a wazuh export is tens of MB, so the family is decided from the first few
+    # records and the rest of the file is never read. Anything unreadable, not
+    # json, or json of neither shape is not an alert file.
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            read = 0
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                read += 1
+                if read > max_lines:
+                    break
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(record, dict):
+                    family = classify_alert_family(record)
+                    if family:
+                        return family
+    except OSError:
+        return ""
+    return ""
+
+
+class AlertFileError(Exception):
+    pass
+
+
+def read_alert_record(line: str, path: Path, position: int) -> dict | None:
+    # a malformed record names its file and line. Returning None means "skip a
+    # blank"; anything else is fatal, because silently dropping records would
+    # change the answer without saying so.
+    if not line.strip():
+        return None
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError as error:
+        raise AlertFileError(
+            f"{path.name} line {position + 1} is not valid JSON: {error.msg}. "
+            "Alert files are JSON lines, one object per line."
+        ) from error
+    except RecursionError as error:
+        # json.loads recurses, so a record nested a few thousand deep raises
+        # this instead and used to end the whole ingest with a traceback
+        raise AlertFileError(
+            f"{path.name} line {position + 1} nests too deeply to parse. "
+            "Alert files are JSON lines, one object per line."
+        ) from error
+    if not isinstance(record, dict):
+        raise AlertFileError(
+            f"{path.name} line {position + 1} is a {type(record).__name__}, "
+            "not an alert object."
+        )
+    return record
+
+
+def resolve_alert_files(
+    raw_dir: Path,
+    scenario: str,
+    wazuh_path: Path | None = None,
+    aminer_path: Path | None = None,
+) -> tuple[Path, Path]:
+    # <company>_wazuh.json is AIT's layout and stays the convenient default, but a
+    # real export is called whatever the SIEM called it, so either file can be named
+    # outright. Returns both paths whether or not they exist; callers test that.
+    default_wazuh = raw_dir / f"{scenario}_wazuh.json"
+    default_aminer = raw_dir / f"{scenario}_aminer.json"
+    resolved_wazuh = wazuh_path or default_wazuh
+    resolved_aminer = aminer_path or default_aminer
+    if resolved_wazuh.exists() or resolved_aminer.exists():
+        return resolved_wazuh, resolved_aminer
+
+    # nothing under the convention, so the name stops mattering: read the head of
+    # each json file and let its format say which detector wrote it. Two exports
+    # of the same family means a directory of archives, and first by name is both
+    # the earliest for a dated name and the same choice on every run.
+    found = (
+        sorted(raw_dir.glob("*.json"), key=lambda path: path.name)
+        if raw_dir.is_dir() else []
+    )
+    by_family: dict[str, Path] = {}
+    for candidate in found:
+        family = sniff_alert_family(candidate)
+        if family and family not in by_family:
+            by_family[family] = candidate
+    if by_family:
+        sniffed_wazuh = wazuh_path or by_family.get(WAZUH_FAMILY) or default_wazuh
+        sniffed_aminer = aminer_path or by_family.get(AMINER_FAMILY) or default_aminer
+        # an explicit path that does not exist is a typo worth reporting, so only
+        # take the sniffed pair once something in it is actually readable
+        if sniffed_wazuh.exists() or sniffed_aminer.exists():
+            return sniffed_wazuh, sniffed_aminer
+
+    names = [p.name for p in found]
+    hint = (
+        f"\n{len(names)} json file(s) are there: {', '.join(names[:8])}"
+        f"\npoint at one directly with --wazuh-file or --aminer-file"
+        if names else
+        f"\nno json files in {raw_dir} at all"
+    )
+    raise FileNotFoundError(
+        f"no alert file for '{scenario}': looked for {resolved_wazuh.name} "
+        f"(wazuh and suricata) and {resolved_aminer.name} in {raw_dir}.{hint}"
+    )
+
+
+def iter_normalized_rows(
+    raw_dir: Path,
+    labels_path: Path | None,
+    scenario: str,
     inventory_path: Path,
-    scenario: str = "russellmitchell",
-) -> pd.DataFrame:
-    windows = load_attack_windows(labels_path, scenario)
+    event_csv_dir: Path | None = None,
+    wazuh_file: Path | None = None,
+    aminer_file: Path | None = None,
+) -> Iterator[dict]:
+    wazuh_path, aminer_path = resolve_alert_files(
+        raw_dir, scenario, wazuh_file, aminer_file
+    )
+    # the miner is optional; the wazuh file carries both wazuh and suricata
+    have_aminer = aminer_path.exists()
+    have_wazuh = wazuh_path.exists()
+    # an unseen company has no label file, so it carries no attack windows
+    windows = load_attack_windows(labels_path, scenario) if labels_path else []
     inventory = load_inventory(inventory_path)
-    rows = []
 
-    with alerts_path.open(encoding="utf-8") as fh:
-        for position, line in enumerate(fh):
-            record = json.loads(line)
-            row = normalize_record(
-                record,
-                record["detector_source"],
-                windows,
-                inventory,
-            )
-            row["source_file"] = alerts_path.name
-            row["source_position"] = position
-            rows.append(row)
+    # the label CSV follows raw file order, wazuh then aminer, so the wazuh half
+    # stays aligned at offset 0 whether or not aminer is there
+    event_labels: list[str] | None = None
+    aminer_offset = 0
+    if event_csv_dir is not None:
+        from core.event_labels import load_scenario_labels
+        _, _, _, event_labels = load_scenario_labels(event_csv_dir, scenario)
+        if have_aminer and have_wazuh:
+            with wazuh_path.open(encoding="utf-8-sig", errors="replace") as fh:
+                aminer_offset = sum(1 for _ in fh)
 
-    return build_normalized_frame(rows, COLUMNS)
+    # a log line is attacker-influenced, so one bad byte anywhere in a 45MB export
+    # would otherwise take the whole ingest down with a UnicodeDecodeError. The
+    # replacement character still parses as JSON and still counts as one line, so
+    # the event-label join stays aligned.
+    if have_aminer:
+        with aminer_path.open(encoding="utf-8-sig", errors="replace") as fh:
+            for position, line in enumerate(fh):
+                record = read_alert_record(line, aminer_path, position)
+                if record is None:
+                    continue
+                row = normalize_record(
+                    record,
+                    "aminer",
+                    windows,
+                    inventory,
+                )
+                row["source_file"] = aminer_path.name
+                row["source_position"] = position
+                if event_labels is not None:
+                    row["event_label"] = event_labels[aminer_offset + position]
+                yield row
+
+    if have_wazuh:
+        with wazuh_path.open(encoding="utf-8-sig", errors="replace") as fh:
+            for position, line in enumerate(fh):
+                # a concatenated export often carries a blank line between parts,
+                # and one of them used to abort the whole run. position still
+                # advances, so the event-label join stays aligned.
+                record = read_alert_record(line, wazuh_path, position)
+                if record is None:
+                    continue
+                detector = classify_wazuh_record(record)
+                if detector:
+                    row = normalize_record(
+                        record,
+                        detector,
+                        windows,
+                        inventory,
+                    )
+                    row["source_file"] = wazuh_path.name
+                    row["source_position"] = position
+                    if event_labels is not None:
+                        row["event_label"] = event_labels[position]
+                    yield row
+
+
+def iter_normalized_chunks(
+    raw_dir: Path,
+    labels_path: Path | None,
+    scenario: str,
+    inventory_path: Path,
+    event_csv_dir: Path | None = None,
+    chunk_rows: int = CHUNK_ROWS,
+    wazuh_file: Path | None = None,
+    aminer_file: Path | None = None,
+) -> Iterator[pd.DataFrame]:
+    columns = _normalized_columns(event_csv_dir is not None)
+    batch: list[dict] = []
+    for row in iter_normalized_rows(
+        raw_dir, labels_path, scenario, inventory_path, event_csv_dir,
+        wazuh_file, aminer_file,
+    ):
+        batch.append(row)
+        if len(batch) >= chunk_rows:
+            yield pd.DataFrame(batch, columns=columns)
+            batch = []
+    if batch:
+        yield pd.DataFrame(batch, columns=columns)
 
 
 def normalize_scenario(
@@ -494,67 +740,19 @@ def normalize_scenario(
     scenario: str,
     inventory_path: Path,
     event_csv_dir: Path | None = None,
+    wazuh_file: Path | None = None,
+    aminer_file: Path | None = None,
 ) -> pd.DataFrame:
-    aminer_path = raw_dir / f"{scenario}_aminer.json"
-    wazuh_path = raw_dir / f"{scenario}_wazuh.json"
-    # an unseen company has no label file, so it simply carries no attack windows
-    windows = load_attack_windows(labels_path, scenario) if labels_path else []
-    inventory = load_inventory(inventory_path)
-    rows = []
-
-    # the official label CSV follows raw file order, wazuh then aminer
-    event_labels: list[str] | None = None
-    aminer_offset = 0
-    if event_csv_dir is not None:
-        from core.event_labels import load_scenario_labels
-        _, _, _, event_labels = load_scenario_labels(event_csv_dir, scenario)
-        with wazuh_path.open(encoding="utf-8") as fh:
-            aminer_offset = sum(1 for _ in fh)
-
-    with aminer_path.open(encoding="utf-8") as fh:
-        for position, line in enumerate(fh):
-            row = normalize_record(
-                json.loads(line),
-                "aminer",
-                windows,
-                inventory,
-            )
-            row["source_file"] = aminer_path.name
-            row["source_position"] = position
-            if event_labels is not None:
-                row["event_label"] = event_labels[aminer_offset + position]
-            rows.append(row)
-
-    with wazuh_path.open(encoding="utf-8") as fh:
-        for position, line in enumerate(fh):
-            record = json.loads(line)
-            detector = classify_wazuh_record(record)
-            if detector:
-                row = normalize_record(
-                    record,
-                    detector,
-                    windows,
-                    inventory,
-                )
-                row["source_file"] = wazuh_path.name
-                row["source_position"] = position
-                if event_labels is not None:
-                    row["event_label"] = event_labels[position]
-                rows.append(row)
-
-    columns = COLUMNS + ["event_label"] if event_labels is not None else COLUMNS
-    return build_normalized_frame(rows, columns)
-
-
-
-
-
-if __name__ == "__main__":
-    df = normalize_scenario(
-        Path("data/raw"),
-        Path("data/labels.csv"),
-        "russellmitchell",
-        Path("data/raw/inventory/russellmitchell.json"),
+    chunks = list(
+        iter_normalized_chunks(
+            raw_dir, labels_path, scenario, inventory_path, event_csv_dir,
+            wazuh_file=wazuh_file, aminer_file=aminer_file,
+        )
     )
-    print(f"{len(df)} alerts")
-    print(df.groupby("detector_source").size())
+    if not chunks:
+        return finalize_normalized_frame(
+            pd.DataFrame([], columns=_normalized_columns(event_csv_dir is not None))
+        )
+    frame = chunks[0] if len(chunks) == 1 else pd.concat(chunks, ignore_index=True)
+    del chunks
+    return finalize_normalized_frame(frame)

@@ -1,12 +1,24 @@
+# reading detector exports: which file is which, and what a record becomes
+
+from __future__ import annotations
+
 import importlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 
 from core import event_labels, normalize
+from core.normalize import (
+    AMINER_FAMILY,
+    SNIFF_LINES,
+    WAZUH_FAMILY,
+    resolve_alert_files,
+    sniff_alert_family,
+)
 
 try:
     inventory = importlib.import_module("core.inventory")
@@ -54,6 +66,8 @@ def write_company_inventory(
 
 class InventoryTests(unittest.TestCase):
     def test_loader_excludes_attacker_assets(self):
+        # the AIT testbed lists the attacker machine in the same inventory, and
+        # scoring it would teach the forest to rank the attack host itself
         self.assertIsNotNone(inventory)
         config = {
             "company": "demo",
@@ -82,6 +96,8 @@ class InventoryTests(unittest.TestCase):
         self.assertNotIn("attacker-0", loaded.ip_by_hostname)
 
     def test_loader_requires_an_inventory_file(self):
+        # asset role is the largest feature block, so a missing inventory stops
+        # the run rather than quietly scoring every host as roleless
         self.assertIsNotNone(inventory)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "missing.json"
@@ -94,6 +110,8 @@ class InventoryTests(unittest.TestCase):
         "AIT importer requires PyYAML",
     )
     def test_ait_importer_writes_runtime_json_without_attacker(self):
+        # the testbed YAML is converted once into the runtime JSON, so the
+        # attacker filter has to survive that conversion too
         source = (
             "server_a:\n"
             "  hostname: server-a\n"
@@ -125,6 +143,8 @@ class InventoryTests(unittest.TestCase):
 
 class EntityAttributionTests(unittest.TestCase):
     def test_wazuh_separates_observer_and_entity(self):
+        # the agent name describes the collector, so host comes from
+        # predecoder.hostname and entity_id stays the address sessions key on
         record = {
             "rule": {"description": "Login failed", "level": 8},
             "predecoder": {"hostname": "server-a"},
@@ -140,6 +160,8 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertTrue(fields.entity_in_inventory)
 
     def test_suricata_known_destination_wins(self):
+        # both endpoints are managed here, and taking the destination puts the
+        # session on the machine being attacked
         record = {
             "data": {
                 "alert": {"signature": "Lateral alert", "severity": 2},
@@ -160,6 +182,8 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertTrue(fields.entity_in_inventory)
 
     def test_suricata_known_source_wins_over_external_destination(self):
+        # outbound traffic to an unmanaged address still has to attach to the
+        # managed source, or every exfil alert lands on an entity nobody owns
         record = {
             "data": {
                 "alert": {"signature": "Outbound alert", "severity": 2},
@@ -176,6 +200,8 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertTrue(fields.entity_in_inventory)
 
     def test_suricata_unknown_endpoints_use_destination(self):
+        # neither endpoint is in the inventory, so the destination is still a
+        # stable key and entity_in_inventory stays False for the features
         record = {
             "data": {
                 "alert": {"signature": "Unknown alert", "severity": 2},
@@ -192,6 +218,8 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertFalse(fields.entity_in_inventory)
 
     def test_aminer_forwarded_log_uses_source_entity(self):
+        # logstash forwards other machines' logs to one AMiner box, so the
+        # /var/log/logstash/<host>/ path decides which host owns the anomaly
         record = aminer_record(
             "10.143.0.35",
             json.dumps({"host": {"name": "intranet-server"}}),
@@ -212,6 +240,8 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertTrue(fields.entity_in_inventory)
 
     def test_aminer_syslog_hostname_does_not_change_entity(self):
+        # a syslog line can name any host in its text, so only a logstash path
+        # moves the entity and a local /var/log/auth.log leaves it alone
         record = aminer_record(
             "192.168.98.239",
             "Jan 19 02:45:26 walker-mail dhclient[408]: DHCPREQUEST",
@@ -231,6 +261,8 @@ class EntityAttributionTests(unittest.TestCase):
 
 class NativeMappingTests(unittest.TestCase):
     def test_wazuh_native_technique_ids_are_preserved(self):
+        # rule.mitre.id arrives as a list and travels as a semicolon string,
+        # since the mapping layer needs the native ids to fall back on
         record = {
             "rule": {
                 "description": "Authentication failed",
@@ -248,6 +280,8 @@ class NativeMappingTests(unittest.TestCase):
 
 class RawScenarioTests(unittest.TestCase):
     def test_wazuh_preserves_privilege_evidence(self):
+        # alice becoming root with a command and a working directory is what
+        # the Process / System panel shows, so all five fields are carried
         record = {
             "rule": {"description": "Successful sudo", "level": 8},
             "data": {
@@ -271,6 +305,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.working_directory, "/srv/app")
 
     def test_wazuh_preserves_detector_taxonomy_and_network_evidence(self):
+        # rule_groups feeds the re-ranker's rule_group_count, and a numeric
+        # data.id on a web rule is really the status, so 404 is an http_status
         record = {
             "rule": {
                 "description": "Web request",
@@ -301,6 +337,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.rule_fired_times, 7.0)
 
     def test_wazuh_keeps_non_http_native_event_id(self):
+        # apache writes AH01630 into that same data.id field, so a non-numeric
+        # id stays a native event id and http_status is left missing
         record = {
             "rule": {"description": "Apache denied request", "level": 5},
             "data": {"id": "AH01630"},
@@ -313,6 +351,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertTrue(pd.isna(fields.http_status))
 
     def test_suricata_preserves_network_and_http_evidence(self):
+        # the Network and Network / HTTP panels read normalized names, so a
+        # suricata alert has to unpack its nested data.flow and data.http
         record = {
             "data": {
                 "alert": {
@@ -358,6 +398,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.http_status, 200.0)
 
     def test_suricata_uses_known_source_when_destination_is_not_managed(self):
+        # the entity choice also picks the host label, so an outbound alert
+        # reads as webserver rather than the external address it reached
         record = {
             "data": {
                 "alert": {"signature": "Outbound alert", "severity": 2},
@@ -376,6 +418,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.host, "webserver")
 
     def test_aminer_preserves_affected_web_request(self):
+        # AMiner reports the anomalous value under AffectedLogAtomValues, and
+        # /model/fm/request/request is where a suspicious URL turns up
         record = aminer_record("10.0.0.1", "apache access line")
         record["AnalysisComponent"].update({
             "AffectedLogAtomPaths": ["/model/fm/request/request"],
@@ -387,6 +431,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.web_request, "/shell.php?command=id%20-a")
 
     def test_aminer_preserves_detector_state_and_log_structure(self):
+        # an AMiner detection has no severity, so the threshold and critical
+        # value are the only numbers saying how far off the model a line was
         record = aminer_record("10.0.0.1", "dns log line")
         record["AnalysisComponent"].update({
             "AnalysisComponentType": "EntropyDetector",
@@ -415,6 +461,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.probability_threshold, 0.05)
 
     def test_aminer_missing_training_state_remains_unknown(self):
+        # TrainingMode absent stays NaN, since folding it to False would claim
+        # the detector was live when nothing in the record said so
         fields = normalize.extract_aminer_fields(
             aminer_record("10.0.0.1", "plain log line"),
             company_inventory(),
@@ -423,6 +471,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertTrue(pd.isna(fields.training_mode))
 
     def test_aminer_preserves_metricbeat_cpu_values_as_percentages(self):
+        # metricbeat reports cpu as a 0-1 fraction and the panel prints a
+        # percent, so the scale is fixed once here rather than in the renderer
         raw = json.dumps({
             "host": {"name": "server-a"},
             "system": {
@@ -442,6 +492,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.cpu_nice_pct, 93.62)
 
     def test_aminer_preserves_sudo_evidence(self):
+        # the sudo line is free text in RawLogData, so alice, root, /srv/app
+        # and id are parsed out into the same fields a wazuh alert fills
         raw = (
             "Feb  8 08:36:54 server-a sudo: alice : TTY=pts/0 ; "
             "PWD=/srv/app ; USER=root ; COMMAND=id"
@@ -458,6 +510,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.command, "id")
 
     def test_aminer_preserves_su_user_change(self):
+        # su reports the pair the other way round, so www-data is the source
+        # and alice the target, matching how sudo fills those two fields
         raw = (
             "Jan 18 13:14:31 server-a su[28816]: "
             "Successful su for alice by www-data"
@@ -472,15 +526,28 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(fields.target_user, "alice")
 
     def test_classifies_raw_wazuh_records(self):
-        wazuh = {"decoder": {"name": "sshd"}, "data": {}}
+        # the AIT wazuh file carries every suricata alert twice, decoded once
+        # as json and once as snort, so the snort copy is dropped
+        # every real wazuh record carries rule and agent, so a record without
+        # them is not claimed: the extractor would only reach a KeyError, which
+        # a user then reads as a traceback
+        wazuh = {"decoder": {"name": "sshd"}, "data": {},
+                 "rule": {"id": "1", "level": 5, "description": "d"},
+                 "agent": {"name": "w", "ip": "10.0.0.1"}}
         suricata = {"decoder": {"name": "json"}, "data": {"alert": {}}}
         duplicate = {"decoder": {"name": "snort"}, "data": {"alert": {}}}
 
         self.assertEqual(normalize.classify_wazuh_record(wazuh), "wazuh")
         self.assertEqual(normalize.classify_wazuh_record(suricata), "suricata")
         self.assertEqual(normalize.classify_wazuh_record(duplicate), "")
+        self.assertEqual(normalize.classify_wazuh_record({}), "")
+        self.assertEqual(
+            normalize.classify_wazuh_record({"rule": {"id": "1"}}), ""
+        )
 
     def test_normalize_scenario_combines_raw_files_and_skips_duplicate(self):
+        # source_file and source_position are how `meerkat inspect --raw` finds
+        # a line again, so dropping the snort copy must not renumber the rest
         aminer = aminer_record(
             "10.0.0.1",
             "Jan 21 00:00:00 mail app: event",
@@ -542,7 +609,67 @@ class RawScenarioTests(unittest.TestCase):
             ["demo_aminer.json", "demo_wazuh.json", "demo_wazuh.json"],
         )
 
+    def test_normalize_scenario_runs_without_a_log_anomaly_miner(self):
+        # most companies run no log anomaly miner, so a missing
+        # demo_aminer.json costs coverage and still produces a scored table
+        wazuh = {
+            "@timestamp": "1970-01-01T00:00:02+00:00",
+            "decoder": {"name": "sshd"},
+            "data": {},
+            "rule": {"description": "Login failed", "level": 8, "id": "1"},
+            "predecoder": {"hostname": "mail"},
+            "agent": {"name": "mail"},
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "raw"
+            raw.mkdir()
+            labels = root / "labels.csv"
+            labels.write_text("scenario,attack,start,end\n", encoding="utf-8")
+            (raw / "demo_wazuh.json").write_text(
+                json.dumps(wazuh) + "\n",
+                encoding="utf-8",
+            )
+            inventory_path = write_company_inventory(
+                root / "company.json",
+                ("mail", "10.0.0.1", ("servers",)),
+            )
+
+            result = normalize.normalize_scenario(
+                raw,
+                labels,
+                "demo",
+                inventory_path,
+            )
+
+        self.assertEqual(list(result["detector_source"]), ["wazuh"])
+        self.assertEqual(list(result["source_file"]), ["demo_wazuh.json"])
+
+    def test_normalize_scenario_names_both_files_when_neither_is_present(self):
+        # a typo in --company surfaces here first, so the error names both
+        # filenames it looked for
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "raw"
+            raw.mkdir()
+            labels = root / "labels.csv"
+            labels.write_text("scenario,attack,start,end\n", encoding="utf-8")
+            inventory_path = write_company_inventory(
+                root / "company.json",
+                ("mail", "10.0.0.1", ("servers",)),
+            )
+
+            with self.assertRaises(FileNotFoundError) as caught:
+                normalize.normalize_scenario(raw, labels, "demo", inventory_path)
+
+        message = str(caught.exception)
+        self.assertIn("demo_wazuh.json", message)
+        self.assertIn("demo_aminer.json", message)
+
     def test_normalize_scenario_resolves_wazuh_file_alert_from_agent_ip(self):
+        # a web accesslog alert carries no predecoder hostname, so the agent ip
+        # is resolved through the inventory and both detectors say server-a
         aminer = aminer_record(
             "10.0.0.1",
             "Jan 21 00:00:00 server-a app: event",
@@ -585,6 +712,8 @@ class RawScenarioTests(unittest.TestCase):
         self.assertEqual(list(result["host"]), ["server-a", "server-a"])
 
     def test_label_audit_rejects_shift_hidden_by_repeated_names(self):
+        # labels attach to raw records by position, and a repeated alert name
+        # lets a one-row shift pass the name check, so times are compared too
         first = {
             "@timestamp": "1970-01-01T00:00:01+00:00",
             "decoder": {"name": "sshd"},
@@ -618,6 +747,8 @@ class RawScenarioTests(unittest.TestCase):
                 event_labels.audit_scenario(raw, csv_dir, labels, "demo")
 
     def test_label_audit_rejects_unexplained_time_label_mismatch(self):
+        # a mismatch within a second of a window edge is a rounding artefact,
+        # so only one 40 s outside the 0-10 window counts as a disagreement
         record = {
             "@timestamp": "1970-01-01T00:00:50+00:00",
             "decoder": {"name": "sshd"},
@@ -644,6 +775,253 @@ class RawScenarioTests(unittest.TestCase):
 
             with self.assertRaisesRegex(AssertionError, "unexplained time labels"):
                 event_labels.audit_scenario(raw, csv_dir, labels, "demo")
+
+
+# Alert files are found by what is inside them, not by what they are called, so
+# a company whose wazuh export is named alerts.json needs no override flag.
+
+
+def wazuh_record() -> dict:
+    return {
+        "predecoder": {"hostname": "mail", "program_name": "freshclam"},
+        "agent": {"ip": "172.19.130.4", "name": "wazuh-client", "id": "19"},
+        "manager": {"name": "wazuh.manager"},
+        "rule": {
+            "level": 3,
+            "description": "ClamAV database update",
+            "groups": ["clamd", "virus"],
+            "id": "52507",
+        },
+        "decoder": {"name": "freshclam"},
+        "@timestamp": "2022-01-21T00:02:27.000000Z",
+    }
+
+
+def suricata_record() -> dict:
+    return {
+        "agent": {"ip": "10.143.0.103", "name": "wazuh-client", "id": "16"},
+        "data": {
+            "src_ip": "10.143.0.103",
+            "dest_ip": "91.189.95.85",
+            "proto": "TCP",
+            "event_type": "alert",
+            "alert": {
+                "severity": "3",
+                "signature_id": "2013504",
+                "signature": "ET POLICY GNU/Linux APT User-Agent Outbound",
+                "category": "Not Suspicious Traffic",
+            },
+        },
+        "rule": {"level": 3, "description": "Suricata: Alert", "id": "86601"},
+        "decoder": {"name": "json"},
+        "@timestamp": "2022-01-21T00:14:21.351932Z",
+    }
+
+
+def aminer_export_record() -> dict:
+    return {
+        "AnalysisComponent": {
+            "AnalysisComponentType": "NewMatchPathDetector",
+            "AnalysisComponentName": "AMiner: New event type.",
+            "TrainingMode": True,
+            "AffectedLogAtomPaths": ["/model", "/model/time"],
+        },
+        "LogData": {
+            "RawLogData": ["Jan 21 00:00:01 cloud-share CRON[4388]: session opened"],
+            "Timestamps": [1642723201],
+            "LogLinesCount": 1,
+            "LogResources": ["/var/log/auth.log"],
+        },
+        "AMiner": {"ID": "172.19.130.106"},
+    }
+
+
+def raw_directory() -> Path:
+    return Path(tempfile.mkdtemp())
+
+
+def write_records(path: Path, *records: dict) -> Path:
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+    return path
+
+
+class FormatSniffing(unittest.TestCase):
+    def test_a_wazuh_export_is_known_by_its_rule_and_agent(self):
+        # every record in the real 45MB export carries both, and neither appears
+        # anywhere in an aminer record, so the pair is what separates the two
+        path = write_records(raw_directory() / "alerts.json", wazuh_record())
+        self.assertEqual(sniff_alert_family(path), WAZUH_FAMILY)
+
+    def test_a_suricata_record_still_reads_as_the_wazuh_family(self):
+        # wazuh forwards suricata alerts into its own file, so a file starting
+        # with one is a wazuh-family export, not a third kind of file
+        path = write_records(
+            raw_directory() / "alerts.json", suricata_record(), wazuh_record()
+        )
+        self.assertEqual(sniff_alert_family(path), WAZUH_FAMILY)
+
+    def test_a_bare_suricata_record_has_no_rule_to_go_on(self):
+        # a suricata alert exported without the wazuh envelope keeps only
+        # data.alert, and losing those records would silently drop the IDS half
+        bare = {"data": suricata_record()["data"], "@timestamp": "2022-01-21T00:14:21Z"}
+        path = write_records(raw_directory() / "ids.json", bare)
+        self.assertEqual(sniff_alert_family(path), WAZUH_FAMILY)
+
+    def test_an_aminer_export_is_known_by_its_analysis_component(self):
+        # the miner names the detector that fired and the log it read; a wazuh
+        # record has neither field
+        path = write_records(raw_directory() / "whatever.json", aminer_export_record())
+        self.assertEqual(sniff_alert_family(path), AMINER_FAMILY)
+
+    def test_a_file_that_is_not_json_is_not_an_alert_file(self):
+        # --input points at a working directory, so pdfs and csvs sit beside the
+        # export and must not raise out of discovery
+        directory = raw_directory()
+        text = directory / "notes.json"
+        text.write_text("this is not json at all\n", encoding="utf-8")
+        empty = directory / "empty.json"
+        empty.write_text("", encoding="utf-8")
+        self.assertEqual(sniff_alert_family(text), "")
+        self.assertEqual(sniff_alert_family(empty), "")
+
+    def test_json_of_neither_family_is_not_an_alert_file(self):
+        # an inventory or a config file parses fine and would otherwise be fed to
+        # the wazuh extractor, which needs record["rule"] and would crash
+        directory = raw_directory()
+        config = write_records(
+            directory / "inventory.json", {"company": "acme", "assets": []}
+        )
+        listy = directory / "array.json"
+        listy.write_text("[1, 2, 3]\n", encoding="utf-8")
+        self.assertEqual(sniff_alert_family(config), "")
+        self.assertEqual(sniff_alert_family(listy), "")
+
+    def test_only_the_first_handful_of_lines_is_read(self):
+        # the demo wazuh file is 45MB; classifying by reading it would cost more
+        # than normalizing it, so the budget is a few lines and it is a hard stop
+        path = raw_directory() / "late.json"
+        junk = "\n".join("not json" for _ in range(SNIFF_LINES))
+        path.write_text(
+            junk + "\n" + json.dumps(wazuh_record()) + "\n", encoding="utf-8"
+        )
+        self.assertEqual(sniff_alert_family(path), "")
+
+    def test_blank_lines_do_not_spend_the_budget(self):
+        # a hand-edited export often ends with, or is padded by, empty lines and
+        # those are not records
+        path = raw_directory() / "padded.json"
+        path.write_text(
+            "\n\n\n" + json.dumps(aminer_export_record()) + "\n", encoding="utf-8"
+        )
+        self.assertEqual(sniff_alert_family(path), AMINER_FAMILY)
+
+
+class ConventionFirst(unittest.TestCase):
+    def test_the_ait_naming_resolves_without_sniffing_anything(self):
+        # the demo and the benchmark run on <company>_wazuh.json, and the
+        # convention is tried first so their output cannot move
+        directory = raw_directory()
+        write_records(directory / "acme_wazuh.json", wazuh_record())
+        write_records(directory / "acme_aminer.json", aminer_export_record())
+        with mock.patch.object(normalize, "sniff_alert_family") as sniffer:
+            wazuh, aminer = resolve_alert_files(directory, "acme")
+        sniffer.assert_not_called()
+        self.assertEqual(wazuh.name, "acme_wazuh.json")
+        self.assertEqual(aminer.name, "acme_aminer.json")
+
+    def test_an_explicit_path_beats_the_convention_and_the_sniffer(self):
+        # an analyst who names a file has looked at it, so the flag wins over
+        # both guesses even when a conventional file sits right there
+        directory = raw_directory()
+        write_records(directory / "acme_wazuh.json", wazuh_record())
+        chosen = write_records(directory / "yesterday.json", wazuh_record())
+        wazuh, _ = resolve_alert_files(directory, "acme", wazuh_path=chosen)
+        self.assertEqual(wazuh, chosen)
+
+
+class SniffedDiscovery(unittest.TestCase):
+    def test_a_wazuh_export_called_alerts_json_is_found(self):
+        # alerts.json is what wazuh itself writes, and needing a flag for the
+        # single most common filename in the product is the bug being fixed
+        directory = raw_directory()
+        exported = write_records(directory / "alerts.json", wazuh_record())
+        wazuh, aminer = resolve_alert_files(directory, "acme")
+        self.assertEqual(wazuh, exported)
+        # both paths come back whether or not they exist; callers test .exists()
+        self.assertEqual(aminer, directory / "acme_aminer.json")
+        self.assertFalse(aminer.exists())
+
+    def test_an_arbitrarily_named_aminer_export_is_found(self):
+        # the miner's output is renamed as often as wazuh's, and a company
+        # running only the miner has to resolve on its own
+        directory = raw_directory()
+        exported = write_records(directory / "aminer-out-2026-07-26.json", aminer_export_record())
+        wazuh, aminer = resolve_alert_files(directory, "acme")
+        self.assertEqual(aminer, exported)
+        self.assertFalse(wazuh.exists())
+
+    def test_both_families_are_assigned_from_one_directory(self):
+        # a company hands over one dump per detector with no shared naming, and
+        # each has to land in the right slot however they are ordered on disk
+        directory = raw_directory()
+        siem = write_records(directory / "zzz-siem-dump.json", wazuh_record())
+        miner = write_records(directory / "aaa-miner-dump.json", aminer_export_record())
+        wazuh, aminer = resolve_alert_files(directory, "acme")
+        self.assertEqual(wazuh, siem)
+        self.assertEqual(aminer, miner)
+
+    def test_unreadable_files_are_skipped_rather_than_chosen(self):
+        # the export usually arrives beside notes and configs, and one of those
+        # winning the wazuh slot would crash in the extractor, not here
+        directory = raw_directory()
+        (directory / "a-notes.json").write_text("not json\n", encoding="utf-8")
+        (directory / "b-empty.json").write_text("", encoding="utf-8")
+        write_records(directory / "c-config.json", {"company": "acme"})
+        exported = write_records(directory / "d-alerts.json", wazuh_record())
+        wazuh, _ = resolve_alert_files(directory, "acme")
+        self.assertEqual(wazuh, exported)
+
+    def test_daily_archives_of_one_family_pick_the_first_by_name(self):
+        # a directory of dated exports is one file per day; first by name is the
+        # earliest for a dated name and is the same choice on every run
+        directory = raw_directory()
+        for day in ("03", "01", "02"):
+            write_records(directory / f"alerts-2026-07-{day}.json", wazuh_record())
+        first, _ = resolve_alert_files(directory, "acme")
+        second, _ = resolve_alert_files(directory, "acme")
+        self.assertEqual(first.name, "alerts-2026-07-01.json")
+        self.assertEqual(second, first)
+
+    def test_a_directory_with_nothing_recognisable_lists_what_was_there(self):
+        # wrong --input is the usual cause, so the error has to show the files it
+        # did look at and the flag that overrides the search
+        directory = raw_directory()
+        (directory / "archive.json").write_text("not json\n", encoding="utf-8")
+        write_records(directory / "inventory.json", {"company": "acme"})
+        with self.assertRaises(FileNotFoundError) as caught:
+            resolve_alert_files(directory, "acme")
+        message = str(caught.exception)
+        self.assertIn("archive.json", message)
+        self.assertIn("inventory.json", message)
+        self.assertIn("--wazuh-file", message)
+        self.assertIn("--aminer-file", message)
+
+    def test_a_directory_that_does_not_exist_says_there_are_no_files(self):
+        # a typo in --input must not read as "the export is unreadable"
+        with self.assertRaises(FileNotFoundError) as caught:
+            resolve_alert_files(raw_directory() / "missing", "acme")
+        self.assertIn("no json files", str(caught.exception))
+
+    def test_a_named_file_that_is_not_there_is_reported_not_replaced(self):
+        # sniffing would happily hand back alerts.json instead, and silently
+        # normalizing a different file than the one asked for hides the typo
+        directory = raw_directory()
+        write_records(directory / "alerts.json", wazuh_record())
+        with self.assertRaises(FileNotFoundError) as caught:
+            resolve_alert_files(directory, "acme", wazuh_path=directory / "typo.json")
+        self.assertIn("typo.json", str(caught.exception))
 
 
 if __name__ == "__main__":
