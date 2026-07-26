@@ -1,54 +1,61 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 268" width="920" height="268" font-family="Segoe UI, Roboto, Helvetica Neue, Helvetica, Arial, sans-serif">
-  <rect x="0" y="0" width="920" height="268" fill="#292929"/>
-
-  <text x="20" y="30" font-size="14" font-weight="600" fill="#e6e6e6">Meerkat pipeline, with the counts from the bundled russellmitchell demo</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 888 136" width="888" height="136" role="img" aria-labelledby="t">
+  <title id="t">36,358 alerts group into 3,169 sessions, collapse into 1,771 daily families, and are cut to the 40 reviewed at a budget of 10 a day, which is a setting</title>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+    .box  { fill: #f6f8fa; stroke: #d0d7de; }
+    .num  { fill: #1f2328; font-size: 25px; font-weight: 600; }
+    .last { fill: #0969da; }
+    .name { fill: #1f2328; font-size: 13px; font-weight: 600; }
+    .note { fill: #59636e; font-size: 11px; }
+    .edge { stroke: #d0d7de; }
+    .head { fill: #d0d7de; }
+    .step { fill: #59636e; font-size: 10.5px; }
+    @media (prefers-color-scheme: dark) {
+      .box  { fill: #161b22; stroke: #30363d; }
+      .num  { fill: #e6edf3; }
+      .last { fill: #4493f8; }
+      .name { fill: #e6edf3; }
+      .note { fill: #8b949e; }
+      .edge { stroke: #30363d; }
+      .head { fill: #30363d; }
+      .step { fill: #8b949e; }
+    }
+  </style>
 
   <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a8a8a"/>
+    <marker id="a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+      <path class="head" d="M0 0 L8 4 L0 8 z"/>
     </marker>
   </defs>
 
-  <!-- stage 1: alerts -->
-  <rect x="15" y="60" width="190" height="78" rx="8" fill="#333333" stroke="#4a4a4a"/>
-  <text x="110" y="95" text-anchor="middle" font-size="24" font-weight="700" fill="#e6e6e6">36,358</text>
-  <text x="110" y="120" text-anchor="middle" font-size="13" fill="#e6e6e6">alerts</text>
-  <text x="110" y="160" text-anchor="middle" font-size="10.5" fill="#9aa0a6">Suricata, Wazuh, AMiner</text>
-  <text x="110" y="175" text-anchor="middle" font-size="10.5" fill="#9aa0a6">normalized to one table</text>
+  <text class="note" x="14" y="18">four days of alerts from one company. The budget of 10 a day is a setting, not a property of the tool</text>
 
-  <!-- stage 2: sessions -->
-  <rect x="255" y="60" width="190" height="78" rx="8" fill="#333333" stroke="#4a4a4a"/>
-  <text x="350" y="95" text-anchor="middle" font-size="24" font-weight="700" fill="#e6e6e6">1,487</text>
-  <text x="350" y="120" text-anchor="middle" font-size="13" fill="#e6e6e6">sessions</text>
-  <text x="350" y="160" text-anchor="middle" font-size="10.5" fill="#9aa0a6">one rule on one host,</text>
-  <text x="350" y="175" text-anchor="middle" font-size="10.5" fill="#9aa0a6">closed after 10 min of quiet</text>
+  <rect class="box" x="14" y="30" width="176" height="86" rx="6"/>
+  <text class="num"  x="34" y="66">36,358</text>
+  <text class="name" x="34" y="87">alerts</text>
+  <text class="note" x="34" y="104">wazuh, suricata, aminer</text>
 
-  <!-- stage 3: families -->
-  <rect x="495" y="60" width="190" height="78" rx="8" fill="#333333" stroke="#4a4a4a"/>
-  <text x="590" y="95" text-anchor="middle" font-size="24" font-weight="700" fill="#e6e6e6">326</text>
-  <text x="590" y="120" text-anchor="middle" font-size="13" fill="#e6e6e6">families</text>
-  <text x="590" y="160" text-anchor="middle" font-size="10.5" fill="#9aa0a6">one rule, one host, one day</text>
-  <text x="590" y="175" text-anchor="middle" font-size="10.5" fill="#9aa0a6">the unit an analyst decides on</text>
+  <rect class="box" x="242" y="30" width="176" height="86" rx="6"/>
+  <text class="num"  x="262" y="66">3,169</text>
+  <text class="name" x="262" y="87">sessions</text>
+  <text class="note" x="262" y="104">one rule on one machine</text>
 
-  <!-- stage 4: queue -->
-  <rect x="735" y="60" width="170" height="78" rx="8" fill="#16301f" stroke="#3fb950"/>
-  <text x="820" y="95" text-anchor="middle" font-size="24" font-weight="700" fill="#3fb950">10</text>
-  <text x="820" y="120" text-anchor="middle" font-size="13" fill="#3fb950">reviewed per day</text>
-  <text x="820" y="160" text-anchor="middle" font-size="10.5" fill="#9aa0a6">a budget set by how much</text>
-  <text x="820" y="175" text-anchor="middle" font-size="10.5" fill="#9aa0a6">an analyst can review; 10 here</text>
+  <rect class="box" x="470" y="30" width="176" height="86" rx="6"/>
+  <text class="num"  x="490" y="66">1,771</text>
+  <text class="name" x="490" y="87">families</text>
+  <text class="note" x="490" y="104">one rule, machine, day</text>
 
-  <!-- arrows -->
-  <line x1="208" y1="99" x2="250" y2="99" stroke="#8a8a8a" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="229" y="90" text-anchor="middle" font-size="10" fill="#9aa0a6">group</text>
+  <rect class="box" x="698" y="30" width="176" height="86" rx="6"/>
+  <text class="num last" x="718" y="66">40</text>
+  <text class="name" x="718" y="87">reviewed</text>
+  <text class="note" x="718" y="104">10 a day, four days</text>
 
-  <line x1="448" y1="99" x2="490" y2="99" stroke="#8a8a8a" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="469" y="90" text-anchor="middle" font-size="10" fill="#9aa0a6">collapse</text>
+  <text class="step" x="216" y="66" text-anchor="middle">10 min</text>
+  <line class="edge" x1="198" y1="76" x2="230" y2="76" marker-end="url(#a)"/>
 
-  <line x1="688" y1="99" x2="730" y2="99" stroke="#8a8a8a" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="709" y="90" text-anchor="middle" font-size="10" fill="#9aa0a6">rank</text>
+  <text class="step" x="444" y="66" text-anchor="middle">per day</text>
+  <line class="edge" x1="426" y1="76" x2="458" y2="76" marker-end="url(#a)"/>
 
-  <!-- model caption -->
-  <line x1="15" y1="205" x2="905" y2="205" stroke="#4a4a4a"/>
-  <text x="15" y="228" font-size="11.5" fill="#e6e6e6">A Random Forest scores every session. A learned re-ranker orders the families. A calibrator turns the score into the displayed percentage,</text>
-  <text x="15" y="246" font-size="11.5" fill="#e6e6e6">which is shown to the analyst but never changes the order.</text>
+  <text class="step" x="672" y="66" text-anchor="middle">budget</text>
+  <line class="edge" x1="654" y1="76" x2="686" y2="76" marker-end="url(#a)"/>
 </svg>
