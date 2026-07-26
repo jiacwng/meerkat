@@ -10,15 +10,20 @@ data again: triage writes a run directory once and the rest reopen it.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import sys
 import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import islice
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from core.attack_mapping import (
@@ -26,33 +31,78 @@ from core.attack_mapping import (
     export_navigator_layer,
     technique_name,
 )
-from core.classifier import load_model, save_model
+from core.classifier import load_model, read_provenance, save_model
+from core.drift import (
+    PSI_MAJOR,
+    UNSEEN_RULE_WARN,
+    compare_profile,
+    unseen_rule_share,
+)
+from core.features import build_session_feature_matrix
+from core.incidents import (
+    assign_bag_priors,
+    assign_reviewed,
+    entity_for,
+    load_incidents,
+    load_reviewed_periods,
+    unresolved_hosts,
+)
 from core.inventory import load_inventory
-from core.normalize import load_attack_windows, normalize_scenario
+from core.normalize import (
+    iter_normalized_rows,
+    load_attack_windows,
+    normalize_scenario,
+    resolve_alert_files,
+)
+from core.roles import CANONICAL_ROLES, role_sources
 from core.scenario_eval import (
-    SCENARIOS,
     add_window_ids,
-    build_bundle,
-    load_inventories,
-    load_scenarios,
-    prepare_sessions,
+    refit_forest,
+    rescale_bundle,
     score_sessions,
 )
-from core.sessions import build_sessions
+from core.sessions import SECONDS_PER_DAY, build_sessions
 from core.triage_policy import daily_queue, enrich_alerts
 from meerkat import __version__
 
-DEFAULT_MODEL = Path("models/meerkat_bundle.joblib")
+DEFAULT_MODEL = Path("models/meerkat_bundle.skops")
 DEFAULT_RUNS = Path("runs")
-DEFAULT_RAW = Path("data/raw")
-DEFAULT_LABELS = Path("data/labels.csv")
-DEFAULT_INVENTORY_DIR = Path("data/raw/inventory")
-DEFAULT_EVENT_CSV = Path("data/raw/alerts_csv")
+# a plain convention a company can adopt, and deliberately NOT data/raw: pointing
+# every command inside the benchmark's directory is what made the tool look
+# inoperable until someone knew to pass --input
+DEFAULT_INPUT = Path("alerts")
+
+# the bundled demo is the only part of the product that knows the benchmark's
+# layout. Nothing else may use these.
 DEMO_COMPANY = "russellmitchell"
+DEMO_RAW = Path("data/raw")
+DEMO_LABELS = Path("data/labels.csv")
+DEMO_INVENTORY_DIR = Path("data/raw/inventory")
+DEMO_EVENT_CSV = Path("data/raw/alerts_csv")
 REVIEW_DECISIONS = ("escalate", "benign", "false-positive")
 DETECTOR_LABELS = {"wazuh": "Wazuh", "suricata": "Suricata", "aminer": "AMiner"}
 
+# rich parses [tags] in anything printed, and a Table cell does not strip ESC.
+# Rule names, hostnames, user agents, urls and commands are all written by whoever
+# triggered the alert, so an unescaped one can raise MarkupError and take out the
+# whole queue view, draw a live hyperlink inside evidence text, or clear the
+# analyst's terminal mid-table. Every alert-derived string goes through safe().
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def safe(value: object) -> str:
+    return escape(_CONTROL.sub("", str(value)))
+
+
 console = Console()
+# errors go to stderr so `meerkat queue --json | jq` stays parseable when one fails
+errors = Console(stderr=True)
+
+# 0 success, 2 argparse usage. A script has to tell a refused retrain, which is the
+# gate working, apart from a crash, so declining gets its own code.
+EXIT_ERROR = 1
+EXIT_DECLINED = 3
+EXIT_DRIFT = 4
 
 
 # --------------------------------------------------------------------------
@@ -74,7 +124,7 @@ def _now_iso() -> str:
 
 
 def new_run_id(company: str) -> str:
-    return f"{company}-{datetime.now(UTC):%Y%m%d-%H%M%S}"
+    return safe_run_id(f"{company}-{datetime.now(UTC):%Y%m%d-%H%M%S}")
 
 
 def _family_label(alert_slice: pd.DataFrame) -> str:
@@ -201,7 +251,7 @@ def load_run(runs_dir: Path, run_id: str | None = None) -> RunState:
         raise FileNotFoundError(
             f"no runs in {runs_dir}, run `meerkat triage` first"
         )
-    directory = runs_dir / run_id
+    directory = runs_dir / safe_run_id(run_id)
     if not (directory / "run.json").exists():
         raise FileNotFoundError(f"run {run_id} not found in {runs_dir}")
     return RunState(
@@ -214,6 +264,25 @@ def load_run(runs_dir: Path, run_id: str | None = None) -> RunState:
     )
 
 
+# A session's identity has to survive a retrain. session_id is a row counter, the
+# S1 handles are ordered by score, and the start timestamp moves when one late
+# alert lands inside a 600 s gap and merges two bursts. Even the session's row
+# offsets move, because they are positions inside whatever range that run covered.
+# What does not move is where each alert sits in the raw detector file, so the key
+# digests those.
+def session_label_key(session: pd.Series, alerts: pd.DataFrame) -> str:
+    rows = alerts.iloc[list(session["alert_rows"])]
+    origin = sorted(
+        f"{file}:{position}"
+        for file, position in zip(rows["source_file"], rows["source_position"])
+    )
+    seed = (
+        f"{session['entity_id']}|{session['detector_source']}"
+        f"|{session['rule_id']}|{'|'.join(origin)}"
+    )
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+
+
 def append_review(
     directory: Path,
     run_id: str,
@@ -221,6 +290,8 @@ def append_review(
     handle: str,
     decision: str,
     note: str,
+    session_key: str | None = None,
+    session_handle: str | None = None,
 ) -> dict:
     entry = {
         "timestamp": _now_iso(),
@@ -229,6 +300,9 @@ def append_review(
         "handle": handle,
         "decision": decision,
         "note": note,
+        # absent means the decision covers every session in the family
+        "session_key": session_key,
+        "session_handle": session_handle,
     }
     with (directory / "reviews.jsonl").open("a", encoding="utf-8") as file:
         file.write(json.dumps(entry) + "\n")
@@ -408,7 +482,7 @@ def _render_panels(alert_slice: pd.DataFrame) -> None:
         console.print(f"[bold cyan]{title}[/bold cyan]")
         width = max(len(label) for label, _ in lines)
         for label, value in lines:
-            console.print(f"  {label.rjust(width)} : {value}")
+            console.print(f"  {label.rjust(width)} : {safe(value)}")
         console.print()
     console.print(
         "[dim]Available evidence: "
@@ -434,7 +508,7 @@ def _render_attack_observations(alert_slice: pd.DataFrame) -> None:
             f"{tactic} ({fmt_time(timestamp)[11:]})"
             for timestamp, tactic in host_steps
         )
-        console.print(f"  {host}: {chain}")
+        console.print(f"  {safe(host)}: {chain}")
     console.print(
         "  [dim]independently mapped tactics, not a confirmed single "
         "campaign[/dim]\n"
@@ -485,9 +559,9 @@ def render_queue(
         table.add_row(
             family["handle"],
             fmt_date(family["day"]),
-            str(family["host_label"]),
+            safe(family["host_label"]),
             detector_label(family["detector_source"]),
-            (family["title"] or family["rule_id"])[:40],
+            safe(family["title"] or family["rule_id"])[:40],
             str(int(family["alert_count"])),
             f"{family['ranking_score']:.2f}",
             f"{family['evidence_probability'] * 100:.0f}",
@@ -498,9 +572,9 @@ def render_queue(
 
 def family_heading(family: pd.Series) -> str:
     return (
-        f"{family['handle']}  {family['host_label']} / "
+        f"{family['handle']}  {safe(family['host_label'])} / "
         f"{detector_label(family['detector_source'])} / "
-        f"{family['title'] or family['rule_id']}"
+        f"{safe(family['title'] or family['rule_id'])}"
     )
 
 
@@ -608,7 +682,7 @@ def _render_related(run: RunState, family: pd.Series) -> None:
         note = "  [yellow]other detector[/yellow]" if corroborates else ""
         console.print(
             f"  {other['handle']}  {detector_label(other['detector_source'])}"
-            f" / {other['title'] or other['rule_id']}"
+            f" / {safe(other['title'] or other['rule_id'])}"
             f"  score {other['ranking_score']:.2f}{note}"
         )
     console.print()
@@ -657,8 +731,8 @@ def render_alert_rows(alert_slice: pd.DataFrame, limit: int) -> None:
         table.add_row(
             fmt_time(alert["timestamp"]),
             detector_label(alert["detector_source"]),
-            str(alert["name"])[:44],
-            f"{alert['source_file']}:{alert['source_position']}",
+            safe(alert["name"])[:44],
+            safe(f"{alert['source_file']}:{alert['source_position']}"),
         )
     console.print(table)
 
@@ -673,7 +747,7 @@ def render_distinct(alert_slice: pd.DataFrame, field: str) -> None:
     table.add_column(field)
     table.add_column("alerts", justify="right")
     for value, count in counts.items():
-        table.add_row(str(value)[:60], str(int(count)))
+        table.add_row(safe(value)[:60], str(int(count)))
     console.print(table)
 
 
@@ -681,13 +755,9 @@ def render_distinct(alert_slice: pd.DataFrame, field: str) -> None:
 # shared command helpers
 # --------------------------------------------------------------------------
 
+# sklearn warns once per estimator on a version mismatch, which is a wall of
+# noise for one fact
 def _load_bundle(path: Path):
-    """Load the saved model, reporting a version mismatch once and plainly.
-
-    The shipped bundle is a pickle, so scikit-learn warns for every estimator
-    inside it when the installed version differs from the one that wrote it.
-    The estimators load correctly; the noise is what is unhelpful.
-    """
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         bundle = load_model(path)
@@ -703,15 +773,30 @@ def _load_bundle(path: Path):
             "It loads and scores normally; retrain with `meerkat train` to "
             "silence this."
         )
+    # the hash says the file is unchanged since it was written. It says nothing
+    # about who wrote it, and an attacker shipping a bundle ships a matching
+    # sidecar too, so say what it does and does not prove.
+    record = read_provenance(path)
+    if record is None:
+        errors.print(
+            f"[yellow]note[/yellow] {path.name} has no provenance sidecar, so "
+            "there is no record of what trained it."
+        )
+    elif not record.get("matches_file", True):
+        errors.print(
+            f"[red]warning[/red] {path.name} does not match the sha256 in "
+            f"{path.name}.json, so it changed after it was written. Retrain with "
+            "`meerkat train` rather than trusting it."
+        )
     return bundle
 
 
 def _load_run(args) -> RunState:
     try:
         return load_run(args.runs_dir, args.run)
-    except FileNotFoundError as error:
-        console.print(f"[red]{error}[/red]")
-        raise SystemExit(1)
+    except (FileNotFoundError, ValueError) as error:
+        errors.print(f"[red]{error}[/red]")
+        raise SystemExit(EXIT_ERROR)
 
 
 def _announce_run(run: RunState) -> None:
@@ -732,8 +817,8 @@ def _require(path: Path, what: str) -> None:
     # checked up front, so a missing file reports itself instead of surfacing as
     # a traceback halfway through normalization
     if not path.exists():
-        console.print(f"[red]{what} not found:[/red] {path}")
-        raise SystemExit(1)
+        errors.print(f"[red]{what} not found:[/red] {path}")
+        raise SystemExit(EXIT_ERROR)
 
 
 def _score_company(
@@ -743,15 +828,36 @@ def _score_company(
     inventory_path: Path,
     labels_path: Path | None,
     event_csv_dir: Path | None,
+    wazuh_file: Path | None = None,
+    aminer_file: Path | None = None,
 ):
     inventory = load_inventory(inventory_path)
+    # asset role is the model's largest feature block. An inventory scaffolded by
+    # `meerkat inventory` has empty roles until someone fills them in, and the
+    # queue silently gets much worse rather than failing, so say it here.
+    unroled = inventory.assets_without_roles()
+    if unroled:
+        share = len(unroled) / max(len(set(inventory.assets_by_ip.values())), 1)
+        console.print(
+            f"[yellow]{len(unroled)} assets have no roles[/yellow] "
+            f"({share:.0%} of the inventory). Asset role is the largest feature "
+            "block in the model; on the benchmark an empty inventory costs more "
+            "coverage than dropping a whole detector. Fill roles in "
+            f"{inventory_path.name} using `meerkat inventory --list-roles`."
+        )
+    if inventory.unknown_roles:
+        console.print(
+            f"[yellow]unrecognised roles[/yellow] {', '.join(inventory.unknown_roles)} "
+            "contribute nothing to a model trained elsewhere"
+        )
     windows = (
         load_attack_windows(labels_path, company)
         if labels_path and labels_path.exists()
         else []
     )
     frame = normalize_scenario(
-        input_dir, labels_path, company, inventory_path, event_csv_dir
+        input_dir, labels_path, company, inventory_path, event_csv_dir,
+        wazuh_file=wazuh_file, aminer_file=aminer_file,
     )
     # mark the window ids once so the session alert_rows and the saved alert
     # table share one row order and line up by position
@@ -765,32 +871,6 @@ def _score_company(
 # --------------------------------------------------------------------------
 # train
 # --------------------------------------------------------------------------
-
-def cmd_train(args) -> None:
-    scenarios = tuple(s for s in SCENARIOS if s != args.holdout)
-    console.print(
-        f"training on {len(scenarios)} companies"
-        + (f", holding out {args.holdout}" if args.holdout else "")
-    )
-    frames = load_scenarios(
-        args.raw_dir, args.labels, args.inventory_dir, scenarios,
-        args.event_csv_dir,
-    )
-    inventories = load_inventories(args.inventory_dir, scenarios)
-    windows = {
-        scenario: load_attack_windows(args.labels, scenario)
-        for scenario in scenarios
-    }
-    sessions = prepare_sessions(frames, inventories, windows)
-    bundle = build_bundle(
-        sessions, holdout=None, n_estimators=args.trees, seed=args.seed
-    )
-    save_model(bundle, args.model)
-    console.print(
-        f"[green]saved model[/green] {args.model}  "
-        f"({args.trees} trees, seed {args.seed})"
-    )
-
 
 # --------------------------------------------------------------------------
 # triage
@@ -815,29 +895,44 @@ def _window_metrics(families, budget: int, total_windows: int) -> dict:
 
 def cmd_triage(args) -> None:
     if not args.model.exists():
-        console.print(
+        errors.print(
             f"[red]no model at {args.model}[/red]  run `meerkat train` first"
         )
-        raise SystemExit(1)
+        raise SystemExit(EXIT_ERROR)
+    company = resolve_company(args)
+    if args.inventory is None:
+        args.inventory = args.input / "inventory" / f"{company}.json"
     _require(args.inventory, "inventory")
-    _require(args.input / f"{args.company}_wazuh.json", "wazuh alerts")
-    _require(args.input / f"{args.company}_aminer.json", "aminer alerts")
+    try:
+        wazuh_path, aminer_path = resolve_alert_files(
+            args.input, company, args.wazuh_file, args.aminer_file
+        )
+    except FileNotFoundError as error:
+        errors.print(f"[red]{error}[/red]")
+        raise SystemExit(EXIT_ERROR)
     bundle = _load_bundle(args.model)
-    console.print(f"scoring {args.company} with {args.model}")
+    # the miner is optional, but say so: dropping it costs coverage
+    if not aminer_path.exists():
+        console.print(
+            f"[yellow]no {aminer_path.name}[/yellow]  scoring wazuh and suricata "
+            "only; log anomaly detections will be missing from the queue"
+        )
+    console.print(f"scoring {company} with {args.model}")
     scored_sessions, families, alerts = _score_company(
-        bundle, args.input, args.company, args.inventory,
+        bundle, args.input, company, args.inventory,
         args.labels, args.event_csv_dir,
+        wazuh_file=args.wazuh_file, aminer_file=args.aminer_file,
     )
     families = decorate_families(families, alerts, args.budget)
 
     total_windows = (
-        len(load_attack_windows(args.labels, args.company))
+        len(load_attack_windows(args.labels, company))
         if args.labels and args.labels.exists()
         else 0
     )
-    run_id = new_run_id(args.company)
+    run_id = new_run_id(company)
     meta = {
-        "company": args.company,
+        "company": company,
         "budget": args.budget,
         "model": str(args.model),
         "input": str(args.input),
@@ -876,7 +971,7 @@ def _select_families(
                 f"[red]no day {day} in this run[/red]  available: "
                 + ", ".join(sorted(set(run.families["day"].map(fmt_date))))
             )
-            raise SystemExit(1)
+            raise SystemExit(EXIT_ERROR)
         families = families[dates.eq(day)]
     if host:
         families = families[
@@ -917,8 +1012,42 @@ def _print_queue(
     render_queue(families, reviews, f"Review queue ({scope})")
 
 
+QUEUE_JSON_FIELDS = (
+    "handle", "day", "host_label", "entity_id", "detector_source", "rule_id",
+    "title", "alert_count", "n_child_sessions", "queue_rank", "in_queue",
+    "ranking_score", "evidence_probability", "start", "end",
+)
+
+
+def queue_records(run, families) -> list[dict]:
+    reviews = current_reviews(run.directory)
+    records = []
+    for _, family in families.iterrows():
+        record = {
+            field: family[field] for field in QUEUE_JSON_FIELDS if field in family
+        }
+        record["family_id"] = family["family_id"]
+        record["run_id"] = run.run_id
+        review = reviews.get(family["family_id"])
+        record["review"] = review["decision"] if review else None
+        records.append(record)
+    return records
+
+
 def cmd_queue(args) -> None:
     run = _load_run(args)
+    if args.budget:
+        # K never reaches the model, so a saved run can be cut anywhere. Every
+        # family already carries its queue_rank from triage.
+        run.families["in_queue"] = run.families["queue_rank"] < args.budget
+        run.meta["budget"] = args.budget
+    if args.json:
+        families = _select_families(
+            run, args.all, args.host, args.detector, args.rule,
+            args.review_state, args.day,
+        )
+        print(json.dumps(queue_records(run, families), indent=2, default=str))
+        return
     _print_queue(
         run, args.all, args.host, args.detector, args.rule, args.review_state,
         args.day,
@@ -930,6 +1059,15 @@ def cmd_runs(args) -> None:
     directories = sorted(
         d for d in args.runs_dir.glob("*") if (d / "run.json").exists()
     ) if args.runs_dir.exists() else []
+    if args.json:
+        print(json.dumps([
+            {
+                **json.loads((d / "run.json").read_text(encoding="utf-8")),
+                "latest": d.name == latest,
+            }
+            for d in directories
+        ], indent=2, default=str))
+        return
     if not directories:
         console.print(f"[dim]no runs in {args.runs_dir}[/dim]")
         return
@@ -960,15 +1098,15 @@ def _parse_pairs(pairs, columns) -> list[tuple[str, str]]:
     parsed = []
     for pair in pairs or []:
         if "=" not in pair:
-            console.print(f"[red]expected field=value, got {pair!r}[/red]")
-            raise SystemExit(1)
+            errors.print(f"[red]expected field=value, got {pair!r}[/red]")
+            raise SystemExit(EXIT_ERROR)
         field, value = pair.split("=", 1)
         if field not in columns:
-            console.print(
+            errors.print(
                 f"[red]unknown field {field!r}[/red]  "
                 "check the normalized schema"
             )
-            raise SystemExit(1)
+            raise SystemExit(EXIT_ERROR)
         parsed.append((field, value))
     return parsed
 
@@ -1013,7 +1151,7 @@ def _render_raw(alert_slice, raw_dir: Path, limit: int) -> None:
             try:
                 console.print_json(json.dumps(json.loads(line)))
             except json.JSONDecodeError:
-                console.print(line.rstrip())
+                console.print(safe(line.rstrip()))
 
 
 def cmd_inspect(args) -> None:
@@ -1023,21 +1161,21 @@ def cmd_inspect(args) -> None:
     wheres = _parse_pairs(args.where, columns)
     excludes = _parse_pairs(args.exclude, columns)
     if args.distinct and args.distinct not in columns:
-        console.print(f"[red]unknown field {args.distinct!r}[/red]")
-        raise SystemExit(1)
+        errors.print(f"[red]unknown field {args.distinct!r}[/red]")
+        raise SystemExit(EXIT_ERROR)
 
     try:
         family = run.family_by_handle(args.handle)
     except KeyError as error:
-        console.print(f"[red]{error.args[0]}[/red]")
-        raise SystemExit(1)
+        errors.print(f"[red]{error.args[0]}[/red]")
+        raise SystemExit(EXIT_ERROR)
 
     if args.session:
         try:
             session = run.session_by_handle(family, args.session)
         except KeyError as error:
-            console.print(f"[red]{error.args[0]}[/red]")
-            raise SystemExit(1)
+            errors.print(f"[red]{error.args[0]}[/red]")
+            raise SystemExit(EXIT_ERROR)
         alert_slice = run.session_alerts(session)
     else:
         session = None
@@ -1059,7 +1197,7 @@ def cmd_inspect(args) -> None:
     if wants_rows:
         limit = args.alerts or (5 if args.raw else 20)
         if args.raw:
-            _render_raw(alert_slice, args.raw_dir, limit)
+            _render_raw(alert_slice, _raw_dir_for(run, args), limit)
         else:
             render_alert_rows(alert_slice, limit)
 
@@ -1073,17 +1211,461 @@ def cmd_review(args) -> None:
     try:
         family = run.family_by_handle(args.handle)
     except KeyError as error:
-        console.print(f"[red]{error.args[0]}[/red]")
-        raise SystemExit(1)
+        errors.print(f"[red]{error.args[0]}[/red]")
+        raise SystemExit(EXIT_ERROR)
+
+    # Dismissing a family is exact: if nothing in it was an attack, nothing in any
+    # of its sessions was. Escalating one is not, because it only means at least
+    # one burst was malicious, so that direction has to name the burst.
+    handles = run.session_handles(family)
+    session = None
+    if args.decision == "escalate" and not args.session:
+        errors.print(
+            f"[red]{family['handle']} holds {len(handles)} sessions[/red]  "
+            "escalate needs --session S1 to say which burst was malicious, "
+            "or --session all if the whole family was"
+        )
+        for handle, _ in handles:
+            errors.print(f"  {handle}")
+        raise SystemExit(EXIT_ERROR)
+
+    if args.session and args.session.lower() != "all":
+        try:
+            session = run.session_by_handle(family, args.session)
+        except KeyError as error:
+            errors.print(f"[red]{error.args[0]}[/red]")
+            raise SystemExit(EXIT_ERROR)
+
     entry = append_review(
         run.directory, run.run_id, family["family_id"], family["handle"],
         args.decision, args.note or "",
+        session_key=(session_label_key(session, run.alerts) if session is not None else None),
+        session_handle=args.session.upper() if args.session else None,
+    )
+    scope = (
+        f"{family['handle']}/{args.session.upper()}" if session is not None
+        else family["handle"]
     )
     console.print(
-        f"[green]recorded[/green] {family['handle']} -> {entry['decision']}"
+        f"[green]recorded[/green] {scope} -> {entry['decision']}"
         + (f"  ({entry['note']})" if entry["note"] else "")
     )
+    if session is None:
+        console.print(f"[dim]covers all {len(handles)} sessions[/dim]")
     console.print(f"[dim]{family['family_id']}  run {run.run_id}[/dim]")
+
+
+# --------------------------------------------------------------------------
+# retrain
+# --------------------------------------------------------------------------
+
+def _incident_reach(families, incidents, inventory, budget):
+    # one boolean per incident rather than a count, because the approval test needs
+    # to know WHICH incidents the two models disagree about
+    queue = families[families["queue_rank"] < budget]
+    reached = []
+    for row in incidents.itertuples():
+        entity = entity_for(row.host, inventory)
+        if not entity:
+            reached.append(False)
+            continue
+        hit = (
+            queue["entity_id"].astype(str).eq(entity)
+            & queue["start"].le(row.end)
+            & queue["end"].ge(row.start)
+        )
+        reached.append(bool(hit.any()))
+    return np.asarray(reached, dtype=bool)
+
+
+# a two-sided sign test on n same-direction pairs gives p = 2 * 0.5**n, so five
+# pairs reach 0.0625 and six reach 0.031. Below six the comparison cannot call a
+# difference real however many incidents were supplied.
+MIN_DISCORDANT = 6
+
+
+def _validate_retrain_result(old, new) -> None:
+    old = np.asarray(old, dtype=bool)
+    new = np.asarray(new, dtype=bool)
+    if not new.any():
+        raise ValueError(
+            f"the retrained forest reaches none of the {len(new)} held-out incidents"
+        )
+    if new.sum() < old.sum():
+        raise ValueError("the retrained forest reaches fewer incidents")
+    discordant = int((old != new).sum())
+    if discordant < MIN_DISCORDANT:
+        raise ValueError(
+            f"the two models disagree on {discordant} of {len(old)} held-out "
+            f"incidents, and {MIN_DISCORDANT} are needed before a difference can be "
+            "called real; supply incidents covering more days, or lower --budget"
+        )
+
+
+def incident_reach_for(
+    candidate, held, alerts, held_incidents, inventory, budget: int
+):
+    families = decorate_families(score_sessions(candidate, held)[1], alerts, budget)
+    return _incident_reach(families, held_incidents, inventory, budget)
+
+
+def compare_models(
+    shipped,
+    candidates: list,
+    held,
+    alerts,
+    held_incidents,
+    inventory,
+    budget: int,
+) -> dict:
+    # A client chooses between two things they could deploy: the bundle as
+    # downloaded, or a retrained one. The rescale-only arm is measured so they can
+    # see how much of any gain needed no labels at all, and it is reported rather
+    # than gated on.
+    def reach(candidate):
+        return incident_reach_for(
+            candidate, held, alerts, held_incidents, inventory, budget
+        )
+
+    shipped_reach = reach(shipped)
+    verdicts, reasons = [], []
+    results = [reach(candidate) for candidate in candidates]
+    for result in results:
+        try:
+            _validate_retrain_result(shipped_reach, result)
+            verdicts.append(True)
+        except ValueError as error:
+            verdicts.append(False)
+            reasons.append(str(error))
+    # the median seed, never the best: picking the best would select on the same
+    # held-out incidents the gate just spent
+    order = sorted(range(len(results)), key=lambda i: int(results[i].sum()))
+    return {
+        "shipped": shipped_reach,
+        "rescaled": reach(rescale_bundle(shipped, held)),
+        "candidates": results,
+        "passed": verdicts,
+        "reason": reasons[0] if reasons else "",
+        "median_index": order[len(order) // 2] if order else 0,
+        "approved": sum(verdicts) * 2 > len(verdicts),
+    }
+
+
+def cmd_retrain(args) -> None:
+    _require(args.incidents, "incident records")
+    _require(args.inventory, "inventory")
+    if not args.model.exists():
+        errors.print(f"[red]no bundle at {args.model}[/red]  it is the starting point")
+        raise SystemExit(EXIT_ERROR)
+    company = resolve_company(args)
+
+    inventory = load_inventory(args.inventory)
+    incidents = load_incidents(args.incidents)
+    unresolved = unresolved_hosts(incidents, inventory)
+    if unresolved:
+        console.print(
+            f"[yellow]{len(unresolved)} incident hosts are not in the "
+            f"inventory[/yellow]  {', '.join(unresolved[:5])}"
+        )
+    bundle = _load_bundle(args.model)
+    alerts = normalize_scenario(
+        args.input, None, company, args.inventory,
+        wazuh_file=args.wazuh_file, aminer_file=args.aminer_file,
+    )
+    sessions = build_sessions(alerts, company, inventory)
+
+    # train on the earlier days and keep the last ones to check the result, so no
+    # reported number comes from days the forest has already seen
+    days = sorted(sessions["day"].unique())
+    if len(days) <= args.holdout_days:
+        errors.print(
+            f"[red]{len(days)} days of alerts, need more than "
+            f"{args.holdout_days}[/red]"
+        )
+        raise SystemExit(EXIT_ERROR)
+    cutoff = days[-args.holdout_days]
+    train = sessions[sessions["day"] < cutoff].copy()
+    held = sessions[sessions["day"] >= cutoff].copy()
+
+    reviewed_periods = (
+        load_reviewed_periods(args.reviewed_periods)
+        if args.reviewed_periods else None
+    )
+    train["reviewed"] = assign_reviewed(train, reviewed_periods)
+    # split the incidents on the same instant as the sessions. Passing all of them
+    # would let a burst that spans the cutoff be labelled by a held-out incident.
+    boundary = cutoff * SECONDS_PER_DAY
+    train_incidents = incidents[incidents["start"] < boundary]
+    held_incidents = incidents[incidents["start"] >= boundary]
+    prior = assign_bag_priors(train, train_incidents, inventory, args.prior_k)
+    bags = int((prior > 0).sum())
+    console.print(
+        f"{len(sessions)} sessions over {len(days)} days, "
+        f"{len(incidents)} incidents, {len(train_incidents)} for training and "
+        f"{len(held_incidents)} held out, {bags} sessions inside one"
+    )
+    if not len(train_incidents):
+        errors.print(
+            f"[red]every incident falls in the last {args.holdout_days} days, "
+            "so training has nothing to learn from[/red]  lower --holdout-days, "
+            "or supply incidents covering an earlier period"
+        )
+        raise SystemExit(EXIT_ERROR)
+    # one forest per seed, because a single fit decides approval on a metric coarse
+    # enough for seed noise to flip it
+    try:
+        candidates = [
+            refit_forest(
+                bundle, train, prior, n_estimators=args.trees, seed=args.seed + offset,
+                min_positives=args.min_positives,
+            )
+            for offset in range(args.fits)
+        ]
+    except ValueError as error:
+        errors.print(f"[red]{error}[/red]")
+        raise SystemExit(EXIT_ERROR)
+
+    verdict = compare_models(
+        bundle, candidates, held, alerts, held_incidents, inventory, args.budget
+    )
+    console.print(
+        f"held-out incidents reached at budget {args.budget}, "
+        f"of {len(held_incidents)}: shipped {int(verdict['shipped'].sum())}, "
+        f"rescale only {int(verdict['rescaled'].sum())}, retrained "
+        f"{', '.join(str(int(r.sum())) for r in verdict['candidates'])}"
+    )
+    if not verdict["approved"]:
+        errors.print(
+            f"[yellow]not saved[/yellow]  only {sum(verdict['passed'])} of "
+            f"{len(verdict['passed'])} seeds beat the shipped bundle; "
+            f"{verdict['reason']}"
+        )
+        # the gate did its job, so this is a decision rather than a failure
+        raise SystemExit(EXIT_DECLINED)
+
+    retrained = candidates[verdict["median_index"]]
+    save_model(retrained, args.out)
+    console.print(
+        f"[green]saved[/green] {args.out}  "
+        f"{sum(verdict['passed'])} of {len(verdict['passed'])} seeds passed, "
+        "median kept"
+    )
+
+
+# --------------------------------------------------------------------------
+# check: read a bounded sample and answer "will triage work on this"
+#
+# bench/check.py answers a different question, whether the eight benchmark
+# environments are on disk, so almost nothing is shared beyond the idea.
+# --------------------------------------------------------------------------
+
+CHECK_SAMPLE = 5_000
+# above this share of distinct rule ids, the detector is probably numbering each
+# anomaly instead of naming its type, which quietly ruins rarity and the session key
+RULE_CARDINALITY_WARN = 0.5
+
+
+def cmd_check(args) -> None:
+    company = resolve_company(args)
+    if args.inventory is None:
+        args.inventory = args.input / "inventory" / f"{company}.json"
+    _require(args.inventory, "inventory")
+    try:
+        wazuh_path, aminer_path = resolve_alert_files(
+            args.input, company, args.wazuh_file, args.aminer_file
+        )
+    except FileNotFoundError as error:
+        errors.print(f"[red]{error}[/red]")
+        raise SystemExit(EXIT_ERROR)
+
+    console.print(f"reading up to {args.sample} alerts from {args.input}")
+    for label, path in (("wazuh and suricata", wazuh_path), ("log anomaly", aminer_path)):
+        if path.exists():
+            size = path.stat().st_size / 1_000_000
+            console.print(f"  [green]found[/green] {label:19} {path.name}  {size:.1f} MB")
+        else:
+            console.print(f"  [dim]absent[/dim] {label:19} {path.name}")
+
+    inventory = load_inventory(args.inventory)
+    # one generator drains the first file before reaching the second, so a flat
+    # sample of a company with 4,056 miner and 32,302 host alerts reports the miner
+    # alone. Take a share from each file instead.
+    present = [p for p in (wazuh_path, aminer_path) if p.exists()]
+    per_file = max(1, args.sample // len(present))
+    absent = args.input / "__no_such_alert_file__.json"
+    rows = []
+    for path in present:
+        rows.extend(islice(
+            iter_normalized_rows(
+                args.input, None, company, args.inventory,
+                wazuh_file=path if path is wazuh_path else absent,
+                aminer_file=path if path is aminer_path else absent,
+            ),
+            per_file,
+        ))
+    if not rows:
+        errors.print("[red]no alerts parsed[/red]  the files resolved but held no rows")
+        raise SystemExit(EXIT_ERROR)
+
+    frame = pd.DataFrame(rows)
+    table = Table(title=f"check ({len(frame)} alerts sampled)",
+                  title_justify="left", header_style="bold")
+    table.add_column("detector")
+    table.add_column("alerts", justify="right")
+    table.add_column("hosts", justify="right")
+    table.add_column("in inventory", justify="right")
+    table.add_column("distinct rules", justify="right")
+    for detector, part in frame.groupby("detector_source", sort=True):
+        matched = int(part["entity_in_inventory"].astype(bool).sum())
+        table.add_row(
+            detector_label(str(detector)),
+            str(len(part)),
+            str(part["entity_id"].nunique()),
+            f"{matched}/{len(part)}",
+            str(part["rule_id"].nunique()),
+        )
+    console.print(table)
+
+    start, end = frame["timestamp"].min(), frame["timestamp"].max()
+    console.print(f"  covering {fmt_time(start)} to {fmt_time(end)}")
+
+    problems = 0
+    unmatched = frame.loc[~frame["entity_in_inventory"].astype(bool), "host"]
+    if len(unmatched):
+        share = len(unmatched) / len(frame)
+        names = sorted(set(unmatched.astype(str)))[:5]
+        errors.print(
+            f"[yellow]{share:.0%} of alerts are on hosts outside the inventory"
+            f"[/yellow]  {', '.join(safe(n) for n in names)}\n"
+            "  those alerts score with no asset roles, and roles are the model's "
+            "largest feature block"
+        )
+        problems += 1
+
+    unroled = inventory.assets_without_roles()
+    if unroled:
+        errors.print(
+            f"[yellow]{len(unroled)} inventory assets have no roles[/yellow]  "
+            "on the benchmark an empty inventory costs more coverage than dropping "
+            f"a whole detector. `meerkat inventory --list-roles` lists the vocabulary."
+        )
+        problems += 1
+    if inventory.unknown_roles:
+        errors.print(
+            f"[yellow]unrecognised roles[/yellow] "
+            f"{', '.join(safe(r) for r in inventory.unknown_roles)}  "
+            "these contribute nothing to a model trained elsewhere"
+        )
+        problems += 1
+
+    # M13's trap: rarity and the session key both assume rule_id names a KIND of
+    # alert. A detector numbering each anomaly individually degrades the model with
+    # no error at all, so say it here rather than let it pass silently.
+    ratio = frame["rule_id"].nunique() / len(frame)
+    if ratio > RULE_CARDINALITY_WARN and len(frame) >= 500:
+        errors.print(
+            f"[yellow]{frame['rule_id'].nunique()} distinct rule ids across "
+            f"{len(frame)} alerts[/yellow]  a rule id should name a kind of alert "
+            "rather than one occurrence. At this ratio sessions cannot group and "
+            "rule rarity carries no signal."
+        )
+        problems += 1
+
+    if problems:
+        console.print(f"[yellow]{problems} thing(s) to look at before triaging[/yellow]")
+        raise SystemExit(EXIT_ERROR)
+    console.print("[green]ready to triage[/green]")
+
+
+# --------------------------------------------------------------------------
+# drift: how far the current alerts sit from what the model was trained on
+#
+# This needs NO incidents, which is the point. Evaluation needs confirmed
+# tickets and a client is short of those. It reports covariate shift only:
+# it can say the input moved and it cannot say the queue got worse.
+# --------------------------------------------------------------------------
+
+VERDICT_STYLE = {"stable": "green", "moderate": "yellow", "major": "red"}
+
+
+def cmd_drift(args) -> None:
+    company = resolve_company(args)
+    if args.inventory is None:
+        args.inventory = args.input / "inventory" / f"{company}.json"
+    _require(args.inventory, "inventory")
+    bundle = _load_bundle(args.model)
+    profile = getattr(bundle, "profile", None)
+    if profile is None:
+        errors.print(
+            f"[red]{args.model.name} carries no training profile[/red]  it predates "
+            "drift reporting. Refit with `meerkat retrain` to record one."
+        )
+        raise SystemExit(EXIT_ERROR)
+
+    inventory = load_inventory(args.inventory)
+    alerts = normalize_scenario(
+        args.input, None, company, args.inventory,
+        wazuh_file=args.wazuh_file, aminer_file=args.aminer_file,
+    )
+    sessions = build_sessions(alerts, company, inventory)
+    X = build_session_feature_matrix(sessions, bundle.schema)
+    scored, families = score_sessions(bundle, sessions)
+
+    console.print(
+        f"{len(alerts)} alerts, {len(sessions)} sessions, {len(families)} families "
+        f"against a model trained on {profile.n_sessions} sessions"
+    )
+
+    unseen = unseen_rule_share(bundle.schema, sessions["pair_counts"])
+    console.print(
+        f"  rules the model never saw: [bold]{unseen:.1%}[/bold] of alerts"
+        + ("  [red]<- the model has no rarity signal for these[/red]"
+           if unseen > UNSEEN_RULE_WARN else "")
+    )
+    outside = 1.0 - float(sessions["in_inventory"].mean())
+    console.print(
+        f"  sessions on hosts outside the inventory: [bold]{outside:.1%}[/bold]"
+        f"  (training had {1 - profile.inventory_coverage:.1%})"
+    )
+
+    drifts = compare_profile(profile, X)
+    table = Table(title="feature drift, worst first", title_justify="left",
+                  header_style="bold")
+    table.add_column("feature")
+    table.add_column("PSI", justify="right")
+    table.add_column("verdict")
+    table.add_column("training median", justify="right")
+    table.add_column("now", justify="right")
+    shown = [d for d in drifts if d.verdict != "stable"] or drifts[:5]
+    for d in shown[:args.top]:
+        style = VERDICT_STYLE[d.verdict]
+        table.add_row(
+            safe(d.name), f"{d.psi:.3f}", f"[{style}]{d.verdict}[/{style}]",
+            f"{d.training_median:.3f}", f"{d.current_median:.3f}",
+        )
+    console.print(table)
+
+    # the queue is a top-K cut, so a shift confined to the bottom of the score
+    # distribution changes nothing an analyst sees. Report the boundary separately.
+    trained_edges = profile.family_score_bins[0]
+    if trained_edges:
+        boundary = float(np.quantile(families["ranking_score"].to_numpy(), 0.9))
+        trained_boundary = trained_edges[-1]
+        console.print(
+            f"  top-decile family score: [bold]{boundary:.3f}[/bold] now, "
+            f"{trained_boundary:.3f} at training"
+        )
+
+    major = [d for d in drifts if d.verdict == "major"]
+    if major or unseen > UNSEEN_RULE_WARN:
+        console.print(
+            f"[yellow]{len(major)} feature(s) past PSI {PSI_MAJOR}[/yellow]  "
+            "this says the input moved, not that the queue is wrong. Retraining on "
+            "your own incidents is what closes the gap."
+        )
+        raise SystemExit(EXIT_DRIFT)
+    console.print(f"[green]no major drift[/green]  worst PSI {drifts[0].psi:.3f}"
+                  if drifts else "[green]no comparable features[/green]")
 
 
 # --------------------------------------------------------------------------
@@ -1111,6 +1693,31 @@ def cmd_export(args) -> None:
     )
 
 
+def _csv_safe(value):
+    # a hostname is attacker-controlled and Excel evaluates a cell starting with
+    # = + - or @, so quote the leading character rather than the whole cell
+    if isinstance(value, str) and value[:1] in "=+-@\t\r":
+        return "'" + value
+    return value
+
+
+# the queue is what a SOC actually pushes into a ticketing system, so it has to
+# leave the tool as data rather than only as a terminal table
+def cmd_export_queue(args) -> None:
+    run = _load_run(args)
+    families = run.families if args.all else run.families[run.families["in_queue"]]
+    records = queue_records(run, families)
+    suffix = "json" if args.format == "json" else "csv"
+    output = args.output or (run.directory / f"queue.{suffix}")
+    if args.format == "json":
+        output.write_text(
+            json.dumps(records, indent=2, default=str), encoding="utf-8"
+        )
+    else:
+        pd.DataFrame(records).map(_csv_safe).to_csv(output, index=False)
+    console.print(f"[green]exported[/green] {len(records)} families to {output}")
+
+
 # --------------------------------------------------------------------------
 # demo
 # --------------------------------------------------------------------------
@@ -1120,35 +1727,32 @@ def cmd_demo(args) -> None:
     aminer = args.raw_dir / f"{DEMO_COMPANY}_aminer.json"
     for path in (wazuh, aminer):
         if not path.exists() or _is_lfs_pointer(path):
-            console.print(
+            errors.print(
                 f"[red]demo data missing: {path}[/red]\n"
                 "the raw AIT files are stored with Git LFS. fetch them with:\n\n"
                 "  git lfs install\n"
                 "  git lfs pull\n"
             )
-            raise SystemExit(1)
+            raise SystemExit(EXIT_ERROR)
 
     if not args.model.exists():
-        console.print(
-            f"[yellow]no model at {args.model}, training one "
-            f"(holdout {DEMO_COMPANY})[/yellow]"
+        errors.print(
+            f"[red]no model at {args.model}[/red]\n"
+            "the bundle is stored with Git LFS. fetch it with:\n\n"
+            "  git lfs install\n"
+            "  git lfs pull\n"
         )
-        cmd_train(argparse.Namespace(
-            holdout=DEMO_COMPANY, raw_dir=args.raw_dir,
-            labels=DEFAULT_LABELS,
-            inventory_dir=DEFAULT_INVENTORY_DIR,
-            event_csv_dir=DEFAULT_EVENT_CSV,
-            trees=300, seed=0, model=args.model,
-        ))
+        raise SystemExit(EXIT_ERROR)
 
     # the event-label CSVs are evaluation ground truth and are not shipped, so
     # a clone triages without them and simply reports no window coverage
-    labels = DEFAULT_LABELS if DEFAULT_LABELS.exists() else None
-    event_csv = DEFAULT_EVENT_CSV if DEFAULT_EVENT_CSV.exists() else None
+    labels = DEMO_LABELS if DEMO_LABELS.exists() else None
+    event_csv = DEMO_EVENT_CSV if DEMO_EVENT_CSV.exists() else None
     cmd_triage(argparse.Namespace(
         model=args.model, input=args.raw_dir, company=DEMO_COMPANY,
-        inventory=DEFAULT_INVENTORY_DIR / f"{DEMO_COMPANY}.json",
+        inventory=DEMO_INVENTORY_DIR / f"{DEMO_COMPANY}.json",
         labels=labels, event_csv_dir=event_csv,
+        wazuh_file=None, aminer_file=None,
         budget=args.budget, runs_dir=args.runs_dir,
     ))
     console.print(
@@ -1168,6 +1772,39 @@ def _positive(value: str) -> int:
     return number
 
 
+def safe_run_id(run_id: str) -> str:
+    # a run directory is unpickled on open, so the id has to be one path
+    # component. Traversal here is code execution, not a wrong directory.
+    cleaned = str(run_id).strip()
+    if not cleaned or Path(cleaned).name != cleaned or cleaned in (".", ".."):
+        raise ValueError(f"{run_id!r} is not a run id")
+    return cleaned
+
+
+def _raw_dir_for(run: RunState, args) -> Path:
+    return args.raw_dir or Path(run.meta.get("input", str(DEFAULT_INPUT)))
+
+
+def resolve_company(args) -> str:
+    # the company name used to double as a filename prefix. Discovery is by format
+    # now, so it is only a run label, and the input directory names it well enough
+    # that a single-site user never has to pass it.
+    if getattr(args, "company", None):
+        return args.company
+    return safe_run_id(args.input.resolve().name)
+
+
+def _add_alert_files(parser) -> None:
+    # --input plus AIT's <company>_wazuh.json naming stays the default, and either
+    # file can be named outright when the export is called something else
+    parser.add_argument("--wazuh-file", type=Path, default=None,
+                        help="wazuh alert JSON, if it is not "
+                             "<input>/<company>_wazuh.json")
+    parser.add_argument("--aminer-file", type=Path, default=None,
+                        help="aminer alert JSON, if it is not "
+                             "<input>/<company>_aminer.json")
+
+
 def _add_run_selector(parser) -> None:
     parser.add_argument("--run", help="run id (default: latest successful)")
     parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
@@ -1179,7 +1816,29 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Triage a SOC alert queue.\n\n"
             "analyst commands: triage, queue, inspect, review\n"
-            "support commands: train, export navigator, demo"
+            "support commands: check, inventory, retrain, drift, export, demo"
+        ),
+        epilog=(
+            "first run:\n"
+            "  meerkat demo                       score the bundled example\n"
+            "\n"
+            "your own data:\n"
+            "  meerkat check --input DIR          read a sample and report what\n"
+            "                                     triage will see\n"
+            "  meerkat inventory ACME             scaffold the asset inventory,\n"
+            "                                     then fill in the roles by hand\n"
+            "  meerkat triage --company ACME      score a day into a run\n"
+            "  meerkat queue                      work the queue\n"
+            "  meerkat inspect F003               open one family\n"
+            "  meerkat review F003 escalate --session S1\n"
+            "  meerkat retrain --company ACME --incidents tickets.csv\n"
+            "                                     refit on your own incidents\n"
+            "\n"
+            "alert files default to <input>/<company>_wazuh.json; pass\n"
+            "--wazuh-file or --aminer-file when yours are named differently.\n"
+            "\n"
+            "exit codes: 0 ok, 1 error, 2 bad arguments, 3 retrain declined,\n"
+            "            4 major drift found\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1188,23 +1847,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    train = sub.add_parser("train", help="fit and save the model (support)")
-    train.add_argument("--holdout", help="company to keep out of training")
-    train.add_argument("--raw-dir", type=Path, default=DEFAULT_RAW)
-    train.add_argument("--labels", type=Path, default=DEFAULT_LABELS)
-    train.add_argument("--inventory-dir", type=Path, default=DEFAULT_INVENTORY_DIR)
-    train.add_argument("--event-csv-dir", type=Path, default=DEFAULT_EVENT_CSV)
-    train.add_argument("--trees", type=int, default=300)
-    train.add_argument("--seed", type=int, default=0)
-    train.add_argument("--model", type=Path, default=DEFAULT_MODEL)
-    train.set_defaults(func=cmd_train)
 
     triage = sub.add_parser("triage", help="score one company into a run queue")
-    triage.add_argument("--company", required=True, help="company name")
-    triage.add_argument("--input", type=Path, default=DEFAULT_RAW,
+    triage.add_argument("--company", default=None,
+                        help="run label; defaults to the input directory's name")
+    triage.add_argument("--input", type=Path, default=DEFAULT_INPUT,
                         help="directory with <company>_wazuh.json etc.")
-    triage.add_argument("--inventory", type=Path, required=True,
-                        help="the company asset inventory JSON")
+    triage.add_argument("--inventory", type=Path, default=None,
+                        help="asset inventory JSON; defaults to where "
+                             "`meerkat inventory` writes it")
+    _add_alert_files(triage)
     triage.add_argument("--labels", type=Path, default=None,
                         help="optional label CSV, for evaluation only")
     triage.add_argument("--event-csv-dir", type=Path, default=None)
@@ -1220,11 +1872,18 @@ def build_parser() -> argparse.ArgumentParser:
     queue.add_argument("--rule", help="filter by rule id substring")
     queue.add_argument("--review-state", choices=REVIEW_DECISIONS)
     queue.add_argument("--day", metavar="YYYY-MM-DD", help="one day's queue")
+    queue.add_argument("--budget", type=_positive, default=None,
+                       help="re-cut the queue at a different K; the ranking is "
+                            "already saved, so this needs no rescoring")
+    queue.add_argument("--json", action="store_true",
+                       help="emit the queue as JSON instead of a table")
     _add_run_selector(queue)
     queue.set_defaults(func=cmd_queue)
 
     runs = sub.add_parser("runs", help="list saved runs")
     runs.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
+    runs.add_argument("--json", action="store_true",
+                      help="emit the run list as JSON instead of a table")
     runs.set_defaults(func=cmd_runs)
 
     inspect = sub.add_parser("inspect", help="open a family or session")
@@ -1235,13 +1894,19 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--distinct", metavar="field")
     inspect.add_argument("--alerts", type=_positive, metavar="N")
     inspect.add_argument("--raw", action="store_true")
-    inspect.add_argument("--raw-dir", type=Path, default=DEFAULT_RAW)
+    inspect.add_argument("--raw-dir", type=Path, default=None,
+                         help="where the alert files live; defaults to the "
+                              "directory the run recorded")
     _add_run_selector(inspect)
     inspect.set_defaults(func=cmd_inspect)
 
-    review = sub.add_parser("review", help="record a decision on a family")
+    review = sub.add_parser("review", help="record a decision on a family or session")
     review.add_argument("handle", help="family handle, e.g. F003")
     review.add_argument("decision", choices=REVIEW_DECISIONS)
+    review.add_argument(
+        "--session",
+        help="which burst, e.g. S1, or all. Required to escalate.",
+    )
     review.add_argument("--note", default="")
     _add_run_selector(review)
     review.set_defaults(func=cmd_review)
@@ -1256,14 +1921,163 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_selector(navigator)
     navigator.set_defaults(func=cmd_export)
 
+    queue_out = export_sub.add_parser(
+        "queue", help="the scored queue as csv or json, for a ticketing system"
+    )
+    queue_out.add_argument("--format", choices=("csv", "json"), default="csv")
+    queue_out.add_argument("--output", type=Path, default=None)
+    queue_out.add_argument("--all", action="store_true",
+                           help="every scored family, not only the daily top-K")
+    _add_run_selector(queue_out)
+    queue_out.set_defaults(func=cmd_export_queue)
+
     demo = sub.add_parser("demo", help="run the bundled russellmitchell demo")
-    demo.add_argument("--raw-dir", type=Path, default=DEFAULT_RAW)
+    demo.add_argument("--raw-dir", type=Path, default=DEMO_RAW)
     demo.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     demo.add_argument("--budget", type=int, default=10)
     demo.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
     demo.set_defaults(func=cmd_demo)
 
+    inventory = sub.add_parser(
+        "inventory", help="scaffold an asset inventory from a wazuh alert file"
+    )
+    inventory.add_argument("company", nargs="?", default=None,
+                           help="defaults to the input directory's name")
+    inventory.add_argument("--input", type=Path, default=DEFAULT_INPUT)
+    inventory.add_argument("--out", type=Path, help="default <input>/inventory/<company>.json")
+    inventory.add_argument(
+        "--limit", type=_positive, default=500_000,
+        help="stop after this many alert lines",
+    )
+    inventory.add_argument(
+        "--list-roles", action="store_true",
+        help="print the role vocabulary and where each name comes from",
+    )
+    inventory.set_defaults(func=cmd_inventory)
+
+    check = sub.add_parser(
+        "check", help="read a sample of your alerts and report what triage will see"
+    )
+    check.add_argument("--company", default=None,
+                       help="run label; defaults to the input directory's name")
+    check.add_argument("--input", type=Path, default=DEFAULT_INPUT)
+    check.add_argument("--inventory", type=Path, default=None)
+    check.add_argument("--sample", type=_positive, default=CHECK_SAMPLE,
+                       help="how many alerts to read")
+    _add_alert_files(check)
+    check.set_defaults(func=cmd_check)
+
+    drift = sub.add_parser(
+        "drift", help="how far your alerts sit from what the model was trained on"
+    )
+    drift.add_argument("--company", default=None)
+    drift.add_argument("--input", type=Path, default=DEFAULT_INPUT)
+    drift.add_argument("--inventory", type=Path, default=None)
+    drift.add_argument("--model", type=Path, default=DEFAULT_MODEL)
+    drift.add_argument("--top", type=_positive, default=10,
+                       help="how many features to list")
+    _add_alert_files(drift)
+    drift.set_defaults(func=cmd_drift)
+
+    retrain = sub.add_parser(
+        "retrain", help="refit the forest on your own alerts and incident records"
+    )
+    retrain.add_argument("--company", default=None,
+                         help="run label; defaults to the input directory's name")
+    retrain.add_argument("--incidents", type=Path, required=True)
+    retrain.add_argument(
+        "--reviewed-periods", type=Path,
+        help="CSV of start,end periods whose alerts were fully reviewed",
+    )
+    retrain.add_argument("--inventory", type=Path, required=True)
+    retrain.add_argument("--input", type=Path, default=DEFAULT_INPUT)
+    _add_alert_files(retrain)
+    retrain.add_argument("--model", type=Path, default=DEFAULT_MODEL,
+                         help="bundle to start from; its re-ranker is kept")
+    retrain.add_argument("--out", type=Path, default=Path("models/retrained.skops"))
+    retrain.add_argument("--holdout-days", type=_positive, default=7)
+    retrain.add_argument("--budget", type=int, default=10)
+    tuning = retrain.add_argument_group(
+        "tuning",
+        "defaults are what the benchmark shipped with; leave them alone unless "
+        "you are measuring something",
+    )
+    tuning.add_argument("--prior-k", type=float, default=1.0,
+                        help="bag-size discount; a ticket contributes k/n per "
+                             "session and k=1 keeps every ticket's total at 1.0")
+    tuning.add_argument("--min-positives", type=_positive, default=10)
+    tuning.add_argument("--trees", type=int, default=300)
+    tuning.add_argument("--seed", type=int, default=0)
+    tuning.add_argument("--fits", type=_positive, default=5,
+                        help="forests to fit; a majority must beat the shipped one")
+    retrain.set_defaults(func=cmd_retrain)
+
     return parser
+
+
+# wazuh alerts carry agent.name and agent.ip but not agent groups, so roles are
+# the one part a human still has to fill in
+def cmd_inventory(args) -> None:
+    if getattr(args, "list_roles", False):
+        for role, origin in role_sources().items():
+            console.print(f"  {role:20} {origin}")
+        return
+    company = resolve_company(args)
+    # scaffolding reads the same file triage will, so a differently named export
+    # scaffolds as readily as the benchmark's convention
+    source, _ = resolve_alert_files(args.input, company)
+    _require(source, "wazuh alerts")
+    out = args.out or (args.input / "inventory" / f"{company}.json")
+
+    by_name: dict[str, set[str]] = {}
+    read = 0
+    with source.open(encoding="utf-8") as handle:
+        for line in handle:
+            if read >= args.limit:
+                break
+            read += 1
+            try:
+                agent = (json.loads(line).get("agent") or {})
+            except json.JSONDecodeError:
+                continue
+            name = str(agent.get("name") or "").strip()
+            if not name:
+                continue
+            addresses = by_name.setdefault(name, set())
+            address = str(agent.get("ip") or "").strip()
+            if address:
+                addresses.add(address)
+
+    if not by_name:
+        errors.print(f"[red]no agent names found in {source.name}[/red]")
+        raise SystemExit(EXIT_ERROR)
+
+    assets = [
+        {
+            "hostname": name,
+            "ip_addresses": sorted(by_name[name]),
+            "roles": [],
+        }
+        for name in sorted(by_name)
+    ]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps({"company": company, "assets": assets}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    missing = [asset["hostname"] for asset in assets if not asset["ip_addresses"]]
+    console.print(f"wrote {out}  {len(assets)} assets from {read} alert lines")
+    if missing:
+        console.print(
+            f"[yellow]{len(missing)} assets have no address[/yellow]  "
+            + ", ".join(missing[:5])
+        )
+    console.print(
+        "[yellow]roles are empty and must be filled in[/yellow]  asset role is the "
+        "model's largest single feature, so an inventory without roles scores worse"
+    )
+    console.print("choose from: " + ", ".join(CANONICAL_ROLES))
 
 
 def main(argv: list[str] | None = None) -> None:

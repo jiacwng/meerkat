@@ -95,6 +95,8 @@ def make_sessions() -> pd.DataFrame:
 
 class HandleTests(unittest.TestCase):
     def test_handles_follow_queue_order_and_budget(self):
+        # F001 is handed out down the queue order, so the day's top family is
+        # always F001 and budget 1 leaves F002 out of in_queue
         decorated = cli.decorate_families(make_families(), make_alerts(), budget=1)
         by_score = decorated.sort_values("ranking_score", ascending=False)
         self.assertEqual(list(by_score["handle"]), ["F001", "F002"])
@@ -104,6 +106,8 @@ class HandleTests(unittest.TestCase):
         self.assertFalse(bottom["in_queue"])
 
     def test_title_and_host_come_from_alerts(self):
+        # a family key holds only entity_id and rule_id, so the readable host
+        # and finding are the mode over the alerts the family covers
         decorated = cli.decorate_families(make_families(), make_alerts(), budget=2)
         top = decorated[decorated["handle"].eq("F001")].iloc[0]
         self.assertEqual(top["host_label"], "intranet-server")
@@ -119,6 +123,8 @@ class RunRoundTripTests(unittest.TestCase):
         )
 
     def test_latest_pointer_tracks_newest_good_run(self):
+        # latest.txt is written after the pickles, so a run that died halfway
+        # is never the one a bare `meerkat queue` reopens
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
             self._save(runs, "acme-1")
@@ -129,6 +135,8 @@ class RunRoundTripTests(unittest.TestCase):
             self.assertEqual(len(run.families), 2)
 
     def test_handles_and_related_resolve_after_reload(self):
+        # the read commands reopen the run rather than scoring again, so f001
+        # still resolves and S1/S2 keep the order build_families sorted
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
             self._save(runs, "acme-1")
@@ -148,6 +156,8 @@ class RunRoundTripTests(unittest.TestCase):
 
 class ReviewTests(unittest.TestCase):
     def test_append_only_history_last_entry_wins(self):
+        # reviews.jsonl is append only so the audit trail survives, and the
+        # family's current state is whichever line was written last
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             cli.append_review(
@@ -164,6 +174,8 @@ class ReviewTests(unittest.TestCase):
 
 class FilterTests(unittest.TestCase):
     def test_match_handles_float_and_string_fields(self):
+        # an analyst types --where http_status=400 as text against a float
+        # column, so 400 and 400.0 have to compare as the same value
         alerts = make_alerts()
         kept = cli._apply_filters(alerts, [("http_status", "400")], [])
         self.assertEqual(len(kept), 2)
@@ -173,6 +185,8 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(len(by_rule), 1)
 
     def test_match_numeric_series_directly(self):
+        # the typed value always arrives as a string, so a float column parses
+        # it once and returns a mask over the rows
         series = pd.Series([400.0, 404.0])
         self.assertEqual(cli._match(series, "400").tolist(), [True, False])
 
@@ -187,6 +201,8 @@ class PanelTests(unittest.TestCase):
         return buffer.getvalue()
 
     def test_http_panel_shows_process_panel_hidden(self):
+        # a panel with nothing in it is skipped, and the Available evidence
+        # line then tells an analyst what the alert did carry
         text = self._capture(
             lambda: cli._render_panels(make_alerts().iloc[[0, 1]])
         )
@@ -196,6 +212,8 @@ class PanelTests(unittest.TestCase):
         self.assertIn("Available evidence", text)
 
     def test_http_outcome_leads_with_the_verdict(self):
+        # whether anything got through is the first question on a web attack,
+        # so the count of successes leads and the codes follow as detail
         all_404 = pd.DataFrame({"http_status": [404.0] * 6})
         mixed = pd.DataFrame(
             {"http_status": [200.0, 200.0, 302.0, 404.0, 500.0]}
@@ -210,6 +228,8 @@ class PanelTests(unittest.TestCase):
         )
 
     def test_family_and_session_overviews_show_http_outcome(self):
+        # the outcome line is recomputed over whatever alerts are in scope, so
+        # the family reads 3 requests and drilling into S1 reads 2
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
             alerts = make_alerts()
@@ -244,6 +264,8 @@ class PanelTests(unittest.TestCase):
             )
 
     def test_family_overview_omits_outcome_without_http_status(self):
+        # only HTTP carries success semantics in the normalized schema, so a
+        # suricata family prints no outcome line at all
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
             decorated = cli.decorate_families(
@@ -260,6 +282,8 @@ class PanelTests(unittest.TestCase):
             self.assertNotIn("outcome", text)
 
     def test_family_view_renders_without_error(self):
+        # the whole family view renders in one pass, so a broken ATT&CK story
+        # or related-host block shows up here as a traceback
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
             decorated = cli.decorate_families(
@@ -278,6 +302,8 @@ class PanelTests(unittest.TestCase):
             self.assertIn("Related families on this host", text)
 
     def test_family_overview_shows_known_asset_roles(self):
+        # asset role is the largest feature block, so the roles behind the
+        # score are printed where they can be checked against the inventory
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
             decorated = cli.decorate_families(
@@ -294,6 +320,8 @@ class PanelTests(unittest.TestCase):
             self.assertIn("asset         : intranet, servers", text)
 
     def test_family_overview_omits_empty_asset_roles(self):
+        # a host outside the inventory has no roles, and an empty asset line
+        # would read as a fact about the host
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
             decorated = cli.decorate_families(
@@ -310,6 +338,8 @@ class PanelTests(unittest.TestCase):
             self.assertNotIn("asset         :", text)
 
     def test_family_overview_compares_volume_with_three_rule_peers(self):
+        # 40 alerts says nothing on its own, so it is put against the median
+        # for the same rule in this run once three peers exist
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
             decorated = cli.decorate_families(
@@ -345,6 +375,8 @@ class PanelTests(unittest.TestCase):
             )
 
     def test_family_overview_omits_volume_comparison_below_three_peers(self):
+        # a median over one or two peers is noise, so the comparison is
+        # dropped rather than printed with nothing behind it
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
             decorated = cli.decorate_families(
@@ -366,6 +398,8 @@ class OutcomeTests(unittest.TestCase):
         return cli._http_outcome(pd.DataFrame({"http_status": statuses}))
 
     def test_nothing_succeeded_is_stated_not_implied(self):
+        # a wall of 404s is the common shape, and reading that off the codes
+        # alone costs an analyst longer than the sentence does
         self.assertEqual(
             self.outcome([404.0] * 6), "6 requests, none succeeded (404)"
         )
@@ -384,6 +418,8 @@ class OutcomeTests(unittest.TestCase):
         )
 
     def test_all_succeeded_and_single_request(self):
+        # one request would otherwise read as "1 requests", and 304 counts as
+        # success because the 200-399 range is what decides it
         self.assertEqual(
             self.outcome([200.0, 304.0]), "2 requests, all succeeded (200, 304)"
         )
@@ -391,6 +427,8 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual(self.outcome([404.0]), "1 request, failed (404)")
 
     def test_absent_or_empty_http_renders_nothing(self):
+        # aminer and most wazuh alerts have no http_status at all, so the
+        # outcome line disappears rather than rendering an empty verdict
         self.assertEqual(self.outcome([float("nan")] * 3), "")
         self.assertEqual(cli._http_outcome(pd.DataFrame({"name": ["x"]})), "")
 
@@ -405,6 +443,8 @@ class QueueSelectionTests(unittest.TestCase):
         return cli.load_run(runs, "acme-1")
 
     def test_default_scope_is_top_k_but_a_filter_sees_all(self):
+        # "show me everything on this host" has to reach families below the
+        # queue line, so any filter widens the scope to the whole run
         with tempfile.TemporaryDirectory() as tmp:
             run = self._run(Path(tmp))
             default = cli._select_families(run, False, None, None, None, None)
@@ -416,6 +456,8 @@ class QueueSelectionTests(unittest.TestCase):
             self.assertEqual(list(by_detector["handle"]), ["F002"])
 
     def test_day_filter_keeps_the_daily_budget(self):
+        # --day picks one day and keeps that day's top-K, so it never widens
+        # past the budget the way a host or detector filter does
         with tempfile.TemporaryDirectory() as tmp:
             run = self._run(Path(tmp))
             same_day = cli._select_families(
@@ -425,6 +467,8 @@ class QueueSelectionTests(unittest.TestCase):
             self.assertEqual(len(same_day), 1)
 
     def test_unknown_day_is_rejected(self):
+        # a mistyped date would print an empty queue that reads as a quiet
+        # day, so it exits and lists the days the run actually covers
         with tempfile.TemporaryDirectory() as tmp:
             run = self._run(Path(tmp))
             with self.assertRaises(SystemExit):
@@ -433,6 +477,8 @@ class QueueSelectionTests(unittest.TestCase):
                 )
 
     def test_review_state_filter_matches_recorded_decision(self):
+        # decisions live in reviews.jsonl beside the run, so --review-state
+        # finds F002 by family_id after the run was reopened from disk
         with tempfile.TemporaryDirectory() as tmp:
             run = self._run(Path(tmp))
             cli.append_review(
@@ -447,6 +493,8 @@ class QueueSelectionTests(unittest.TestCase):
 
 class LfsTests(unittest.TestCase):
     def test_pointer_file_detected(self):
+        # a clone without `git lfs pull` gets a text stub where the alerts
+        # should be, and json parsing it would fail much later and worse
         with tempfile.TemporaryDirectory() as tmp:
             pointer = Path(tmp) / "big.json"
             pointer.write_text(

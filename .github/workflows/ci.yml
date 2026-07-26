@@ -50,4 +50,4 @@ jobs:
         run: python -m pip install ruff
 
       - name: Check
-        run: ruff check core meerkat tests
+        run: ruff check core meerkat bench tests
