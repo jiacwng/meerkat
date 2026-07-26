@@ -1,10 +1,11 @@
 name: CI
 
-# every branch, not just main. A topic branch that has never been tested is not
-# ready to open a pull request from.
+# pull_request covers every branch that is proposed for merge, and push covers
+# main itself. Running both on every branch fired the matrix twice per commit and
+# left two check runs per required name.
 on:
   push:
-    branches-ignore: []
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
