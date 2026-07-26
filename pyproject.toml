@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=68"]
+# 77 is the first release that reads the PEP 639 license and license-files fields
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,11 +9,15 @@ version = "1.0.0"
 description = "SOC alert-triage: rank a daily review queue with ATT&CK context"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+# the wheel carries core/data/attack_lookup.json, so it carries MITRE's notice too
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Wang Jiacheng", email = "jiacheng.wang@eurecom.fr" }]
 dependencies = [
-    "pandas>=2.0",
+    # the csv export sanitises every cell with DataFrame.map, which is 2.1
+    "pandas>=2.1",
     "scikit-learn>=1.3",
     "rich>=13.0",
-    "matplotlib>=3.7",
     "skops>=0.11",
 ]
 
@@ -21,6 +26,10 @@ meerkat = "meerkat.cli:main"
 
 [tool.setuptools]
 packages = ["core", "meerkat"]
+
+[tool.setuptools.package-data]
+# attack_mapping reads these at import, so an install without them cannot start
+core = ["data/*.json"]
 
 [tool.ruff]
 line-length = 88
