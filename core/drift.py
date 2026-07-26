@@ -49,6 +49,10 @@ class TrainingProfile:
     feature_bins: dict[str, tuple[tuple[float, ...], tuple[float, ...]]] = field(
         default_factory=dict
     )
+    # the real median. Reading it off the middle bin edge is wrong the moment
+    # deciles collapse, and a binary feature then reported a training median of
+    # 1.0 against a current 0.0 while PSI correctly said nothing had moved.
+    feature_medians: dict[str, float] = field(default_factory=dict)
     session_score_bins: tuple[tuple[float, ...], tuple[float, ...]] = ((), ())
     family_score_bins: tuple[tuple[float, ...], tuple[float, ...]] = ((), ())
     detector_mix: dict[str, float] = field(default_factory=dict)
@@ -101,6 +105,11 @@ def build_profile(
             name: _reference(X[name].to_numpy())
             for name in X.columns
             if not name.startswith("role_")
+        },
+        feature_medians={
+            name: float(np.nanmedian(X[name].to_numpy(dtype=float)))
+            for name in X.columns
+            if not name.startswith("role_") and len(X)
         },
         session_score_bins=_reference(np.asarray(session_scores)),
         family_score_bins=(
@@ -161,7 +170,11 @@ def compare_profile(
             name=name,
             psi=psi,
             verdict=verdict_for(psi),
-            training_median=float(edges[len(edges) // 2]) if edges else float("nan"),
+            # getattr, because skops restores a field a stored profile never had
+            # as absent. A bundle written before this field existed still reports.
+            training_median=getattr(profile, "feature_medians", {}).get(
+                name, float("nan")
+            ),
             current_median=(
                 float(np.nanmedian(current)) if len(current) else float("nan")
             ),

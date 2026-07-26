@@ -296,7 +296,7 @@ class ClientRetrainingTests(unittest.TestCase):
         # those coefficients came from out-of-fold folds across eight
         # environments, which one client cannot reproduce, so they are kept
         retrained = refit_forest(
-            self.bundle, self.client, self._prior(4),
+            self.bundle, self.client, self._prior(3),
             n_estimators=10, min_positives=1,
         )
         np.testing.assert_array_equal(
@@ -308,7 +308,7 @@ class ClientRetrainingTests(unittest.TestCase):
         # the calibrator is defined across environments too, so the client
         # keeps the same object and its confidence stays comparable
         retrained = refit_forest(
-            self.bundle, self.client, self._prior(4),
+            self.bundle, self.client, self._prior(3),
             n_estimators=10, min_positives=1,
         )
         self.assertIs(retrained.calibrator, self.bundle.calibrator)
@@ -317,7 +317,7 @@ class ClientRetrainingTests(unittest.TestCase):
         # the point of a retrain is a forest fitted on the client's own
         # alerts, so the shipped one is dropped rather than fitted further
         retrained = refit_forest(
-            self.bundle, self.client, self._prior(4),
+            self.bundle, self.client, self._prior(3),
             n_estimators=10, min_positives=1,
         )
         self.assertIsNot(retrained.forest, self.bundle.forest)
@@ -326,7 +326,7 @@ class ClientRetrainingTests(unittest.TestCase):
         # a client forest scores lower and tighter, so the AIT means in the
         # scaler would put every family the same distance from centre
         retrained = refit_forest(
-            self.bundle, self.client, self._prior(4),
+            self.bundle, self.client, self._prior(3),
             n_estimators=10, min_positives=1,
         )
         before = self.bundle.reranker.model.named_steps["scale"].mean_

@@ -71,6 +71,58 @@ class TestQueueBudget(unittest.TestCase):
         self.assertIsNone(parser.parse_args(["queue"]).budget)
         self.assertEqual(parser.parse_args(["queue", "--budget", "5"]).budget, 5)
 
+class TestInventoryScaffold(unittest.TestCase):
+    # the scaffold keys on the agent address, because that is what a session keys
+    # on. Grouping by agent.name collapsed every machine behind a manager
+    # reporting one name into a single asset sharing one set of roles.
+    def records(self) -> list[str]:
+        import json
+        rows = [
+            {"agent": {"name": "wazuh-client", "ip": "10.0.0.1"},
+             "predecoder": {"hostname": "mail"}},
+            {"agent": {"name": "wazuh-client", "ip": "10.0.0.2"}},
+            {"agent": {"name": "wazuh-client", "ip": "10.0.0.1"},
+             "predecoder": {"hostname": "mail"}},
+        ]
+        return [json.dumps(r) for r in rows]
+
+    def scaffold(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from meerkat.cli import build_parser, cmd_inventory
+
+        directory = Path(tempfile.mkdtemp())
+        (directory / "acme_wazuh.json").write_text(
+            "\n".join(self.records()) + "\n", encoding="utf-8"
+        )
+        args = build_parser().parse_args(
+            ["inventory", "acme", "--input", str(directory)]
+        )
+        cmd_inventory(args)
+        return json.loads(
+            (directory / "inventory" / "acme.json").read_text(encoding="utf-8")
+        )
+
+    def test_one_asset_per_address_not_per_agent_name(self):
+        assets = self.scaffold()["assets"]
+        self.assertEqual(len(assets), 2)
+        self.assertEqual(
+            sorted(a["ip_addresses"][0] for a in assets), ["10.0.0.1", "10.0.0.2"]
+        )
+
+    def test_the_machine_s_own_hostname_wins_over_the_collector_name(self):
+        assets = {a["ip_addresses"][0]: a["hostname"] for a in self.scaffold()["assets"]}
+        self.assertEqual(assets["10.0.0.1"], "mail")
+
+    def test_an_address_with_no_hostname_is_labelled_by_its_address(self):
+        # never by the agent name, which would give several machines one label
+        assets = {a["ip_addresses"][0]: a["hostname"] for a in self.scaffold()["assets"]}
+        self.assertEqual(assets["10.0.0.2"], "10.0.0.2")
+
+    def test_roles_start_empty_so_triage_can_warn(self):
+        self.assertTrue(all(a["roles"] == [] for a in self.scaffold()["assets"]))
 
 if __name__ == "__main__":
     unittest.main()

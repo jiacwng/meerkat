@@ -41,16 +41,38 @@ class Inventory:
 
 
 def load_inventory(path: Path) -> Inventory:
-    config = json.loads(path.read_text(encoding="utf-8"))
+    # this is the one file the tool asks a person to hand-edit, so a trailing
+    # comma or a dropped key is the expected failure and must not be a traceback
+    try:
+        config = json.loads(path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{path.name} is not valid JSON: {error.msg}") from error
+    if not isinstance(config, dict) or "assets" not in config:
+        raise ValueError(
+            f'{path.name} must be an object with an "assets" list; '
+            "`meerkat inventory` writes one in the right shape"
+        )
     assets_by_ip = {}
     ip_by_hostname = {}
 
     unknown_roles: set[str] = set()
     for item in config["assets"]:
-        # "roles" is the documented key, "groups" is what AIT and Wazuh use
-        raw_groups = tuple(
-            str(group) for group in (item.get("roles") or item.get("groups") or [])
-        )
+        # "roles" is the documented key, "groups" is what AIT and Wazuh use.
+        # a string is iterable, so "webserver" used to become six one-letter
+        # roles and the asset silently ended up with none
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"{path.name}: every entry under \"assets\" must be an object"
+            )
+        for required in ("hostname", "ip_addresses"):
+            if required not in item:
+                raise ValueError(
+                    f"{path.name}: an asset is missing \"{required}\""
+                )
+        declared = item.get("roles") or item.get("groups") or []
+        if isinstance(declared, str):
+            declared = [declared]
+        raw_groups = tuple(str(group) for group in declared)
         # the attacker machine never enters the inventory, grouping alerts on it
         # would be reading the answer
         if "attacker" in raw_groups:
@@ -74,7 +96,8 @@ def load_inventory(path: Path) -> Inventory:
             ip_by_hostname[asset.hostname.casefold()] = asset.ip_addresses[0]
 
     return Inventory(
-        company=str(config["company"]),
+        # the company name is only a label, so a file without one still loads
+        company=str(config.get("company", path.stem)),
         assets_by_ip=assets_by_ip,
         ip_by_hostname=ip_by_hostname,
         unknown_roles=tuple(sorted(unknown_roles)),

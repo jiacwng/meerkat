@@ -70,8 +70,12 @@ def _count_union(values: pd.Series) -> int:
 
 
 def _split_values(values: pd.Series) -> frozenset[str]:
+    # cast before filling. These columns are categorical, and pandas refuses to
+    # fill a category that does not already exist, so a client running one
+    # detector crashed here: the AIT corpus only worked because its miner rows
+    # happened to contribute the empty string as a category.
     found = set()
-    for value in values.fillna("").astype(str):
+    for value in values.astype(str).fillna(""):
         found.update(part for part in value.split(";") if part)
     return frozenset(found)
 
@@ -131,7 +135,7 @@ def build_sessions(
         work["detector_source"], work["severity"]
     )
     work["_has_technique"] = (
-        work["native_technique_ids"].fillna("").astype(str).ne("")
+        work["native_technique_ids"].astype(str).fillna("").ne("")
     )
     work["_asset_roles"] = [
         _asset_roles(str(entity), inventory)

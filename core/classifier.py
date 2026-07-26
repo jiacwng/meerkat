@@ -165,6 +165,14 @@ def fit_soft_labels(
     # as clean teaches the forest that undetected attacks are normal. With no
     # reviewed-period file every session counts as reviewed and this drops out.
     negative = ~in_bag
+    if not negative.any() and reviewed is None:
+        # every session inside an incident leaves nothing to contrast against, and
+        # the forest then scores every session 1.0. The mirror case was already
+        # refused; this one used to return a degenerate ranker in silence.
+        raise ValueError(
+            "every session falls inside an incident, so there is nothing to "
+            "learn a negative from; supply incidents covering part of the period"
+        )
     if reviewed is not None:
         negative = negative & np.asarray(reviewed, dtype=bool)
         if (~in_bag).any() and not negative.any():
@@ -348,7 +356,7 @@ def load_model(path: Path) -> object:
         raise UntrustedBundleError(
             f"{path.name} is not a skops bundle. Loading it would mean unpickling "
             "a file this build cannot verify, which runs whatever it contains. "
-            "Retrain with `meerkat train`, or fetch a bundle written by this "
+            "Retrain with `meerkat retrain`, or fetch a bundle written by this "
             "version of Meerkat."
         )
     # skops lists every type needing explicit trust, ours included, so the
@@ -358,7 +366,7 @@ def load_model(path: Path) -> object:
         raise UntrustedBundleError(
             f"{path.name} contains types this build does not trust: "
             f"{', '.join(sorted(unexpected))}. It was not written by "
-            f"`meerkat train`; refusing to load it."
+            f"`meerkat retrain`; refusing to load it."
         )
     return _from_wire(sio.load(path, trusted=list(TRUSTED_TYPES)))
 

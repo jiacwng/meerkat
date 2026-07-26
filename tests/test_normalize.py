@@ -516,13 +516,22 @@ class RawScenarioTests(unittest.TestCase):
     def test_classifies_raw_wazuh_records(self):
         # the AIT wazuh file carries every suricata alert twice, decoded once
         # as json and once as snort, so the snort copy is dropped
-        wazuh = {"decoder": {"name": "sshd"}, "data": {}}
+        # every real wazuh record carries rule and agent, so a record without
+        # them is not claimed: the extractor would only reach a KeyError, which
+        # a user then reads as a traceback
+        wazuh = {"decoder": {"name": "sshd"}, "data": {},
+                 "rule": {"id": "1", "level": 5, "description": "d"},
+                 "agent": {"name": "w", "ip": "10.0.0.1"}}
         suricata = {"decoder": {"name": "json"}, "data": {"alert": {}}}
         duplicate = {"decoder": {"name": "snort"}, "data": {"alert": {}}}
 
         self.assertEqual(normalize.classify_wazuh_record(wazuh), "wazuh")
         self.assertEqual(normalize.classify_wazuh_record(suricata), "suricata")
         self.assertEqual(normalize.classify_wazuh_record(duplicate), "")
+        self.assertEqual(normalize.classify_wazuh_record({}), "")
+        self.assertEqual(
+            normalize.classify_wazuh_record({"rule": {"id": "1"}}), ""
+        )
 
     def test_normalize_scenario_combines_raw_files_and_skips_duplicate(self):
         # source_file and source_position are how `meerkat inspect --raw` finds

@@ -54,6 +54,23 @@ def load_incidents(path: Path) -> pd.DataFrame:
     frame["verdict"] = (
         frame["verdict"].str.strip().str.lower().str.replace(" ", "_")
     )
+    # a swapped start and end matches nothing and used to be diagnosed as
+    # "every incident is recent". A non-finite time fails both sides of the
+    # holdout comparison, so the row vanished from training AND from scoring.
+    finite = frame["start"].notna() & frame["end"].notna()
+    finite &= frame["start"].abs().ne(float("inf")) & frame["end"].abs().ne(float("inf"))
+    if not finite.all():
+        raise ValueError(
+            f"{path} has {int((~finite).sum())} row(s) whose start or end is not "
+            "a finite number; times are epoch seconds"
+        )
+    inverted = frame["start"] > frame["end"]
+    if inverted.any():
+        raise ValueError(
+            f"{path} has {int(inverted.sum())} row(s) whose start is after its "
+            "end; check the column order"
+        )
+
     kept = frame[frame["verdict"].isin(POSITIVE_VERDICTS)].reset_index(drop=True)
     if kept.empty:
         # otherwise this surfaces much later as "0 sessions fall inside an incident"

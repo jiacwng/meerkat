@@ -49,6 +49,7 @@ from core.incidents import (
 )
 from core.inventory import load_inventory
 from core.normalize import (
+    AlertFileError,
     iter_normalized_rows,
     load_attack_windows,
     normalize_scenario,
@@ -87,7 +88,22 @@ DETECTOR_LABELS = {"wazuh": "Wazuh", "suricata": "Suricata", "aminer": "AMiner"}
 # triggered the alert, so an unescaped one can raise MarkupError and take out the
 # whole queue view, draw a live hyperlink inside evidence text, or clear the
 # analyst's terminal mid-table. Every alert-derived string goes through safe().
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+# C0 and C1, plus the bidi overrides: rich strips neither, and a bidi override
+# reorders the line it lands in and knocks the table's columns out of alignment
+# C0 and C1, plus the bidi overrides. rich strips neither, and a bidi
+# override reorders the line it lands in and knocks the table's columns out
+# of alignment. Built from code points so the pattern never has to appear as
+# literal control characters in this file.
+_CONTROL_RANGES = (
+    (0x00, 0x09), (0x0B, 0x20), (0x7F, 0xA0), (0x202A, 0x202F), (0x2066, 0x206A)
+)
+_CONTROL = re.compile(
+    "[{}]".format("".join(
+        chr(point)
+        for low, high in _CONTROL_RANGES
+        for point in range(low, high)
+    ))
+)
 
 
 def safe(value: object) -> str:
@@ -124,7 +140,8 @@ def _now_iso() -> str:
 
 
 def new_run_id(company: str) -> str:
-    return safe_run_id(f"{company}-{datetime.now(UTC):%Y%m%d-%H%M%S}")
+    stamp = f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{datetime.now(UTC).microsecond // 1000:03d}"
+    return safe_run_id(f"{company}-{stamp}")
 
 
 def _family_label(alert_slice: pd.DataFrame) -> str:
@@ -223,6 +240,13 @@ def save_run(
     alerts: pd.DataFrame,
 ) -> Path:
     directory = runs_dir / run_id
+    # never write into a finished run. Two triages in the same millisecond used
+    # to interleave their pickles and the later latest.txt won, with both
+    # reporting success.
+    suffix = 1
+    while (directory / "run.json").exists():
+        suffix += 1
+        directory = runs_dir / f"{run_id}-{suffix}"
     directory.mkdir(parents=True, exist_ok=True)
     families.to_pickle(directory / "families.pkl")
     sessions.to_pickle(directory / "sessions.pkl")
@@ -233,7 +257,7 @@ def save_run(
     )
     # only now the run is complete, so the latest pointer never names a run that
     # failed halfway through
-    (runs_dir / "latest.txt").write_text(run_id, encoding="utf-8")
+    (runs_dir / "latest.txt").write_text(directory.name, encoding="utf-8")
     return directory
 
 
@@ -757,7 +781,36 @@ def render_distinct(alert_slice: pd.DataFrame, field: str) -> None:
 
 # sklearn warns once per estimator on a version mismatch, which is a wall of
 # noise for one fact
+# every command checked this for itself and `drift` did not, so a missing
+# bundle raised a traceback there and a clean message everywhere else. Call it
+# early, before reading any alerts, so the answer is immediate.
+#
+# There are two ways to arrive with no bundle and they need different answers.
+# DEFAULT_MODEL is relative to the working directory and models/ is not part of
+# the installed package, so running from anywhere but a clone finds nothing at
+# all. Inside a clone the file is usually there but unfetched from Git LFS.
+def _require_bundle(path: Path) -> None:
+    if path.exists():
+        return
+    if path == DEFAULT_MODEL and not path.parent.exists():
+        errors.print(
+            f"[red]no model at {path}[/red]\n"
+            f"{path} is relative to the current directory, and models/ is not "
+            "part of the installed package. Run from a clone of the "
+            "repository, or pass --model with the path to a bundle.\n"
+        )
+    else:
+        errors.print(
+            f"[red]no model at {path}[/red]\n"
+            "if this is a clone, the bundle is stored with Git LFS:\n\n"
+            "  git lfs install\n"
+            "  git lfs pull\n"
+        )
+    raise SystemExit(EXIT_ERROR)
+
+
 def _load_bundle(path: Path):
+    _require_bundle(path)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         bundle = load_model(path)
@@ -770,7 +823,7 @@ def _load_bundle(path: Path):
         console.print(
             f"[yellow]note[/yellow] the bundled model was trained with a "
             f"different scikit-learn than the installed {sklearn.__version__}. "
-            "It loads and scores normally; retrain with `meerkat train` to "
+            "It loads and scores normally; retrain with `meerkat retrain` to "
             "silence this."
         )
     # the hash says the file is unchanged since it was written. It says nothing
@@ -786,7 +839,7 @@ def _load_bundle(path: Path):
         errors.print(
             f"[red]warning[/red] {path.name} does not match the sha256 in "
             f"{path.name}.json, so it changed after it was written. Retrain with "
-            "`meerkat train` rather than trusting it."
+            "`meerkat retrain` rather than trusting it."
         )
     return bundle
 
@@ -832,18 +885,18 @@ def _score_company(
     aminer_file: Path | None = None,
 ):
     inventory = load_inventory(inventory_path)
-    # asset role is the model's largest feature block. An inventory scaffolded by
-    # `meerkat inventory` has empty roles until someone fills them in, and the
-    # queue silently gets much worse rather than failing, so say it here.
+    # an inventory scaffolded by `meerkat inventory` has empty roles until
+    # someone fills them in, and the queue changes quietly rather than failing,
+    # so the condition is worth reporting. What it costs was measured on one
+    # benchmark, so report the state and leave the decision alone.
     unroled = inventory.assets_without_roles()
     if unroled:
         share = len(unroled) / max(len(set(inventory.assets_by_ip.values())), 1)
         console.print(
             f"[yellow]{len(unroled)} assets have no roles[/yellow] "
-            f"({share:.0%} of the inventory). Asset role is the largest feature "
-            "block in the model; on the benchmark an empty inventory costs more "
-            "coverage than dropping a whole detector. Fill roles in "
-            f"{inventory_path.name} using `meerkat inventory --list-roles`."
+            f"({share:.0%} of {inventory_path.name}). Their alerts are scored "
+            "without the role features. `meerkat inventory --list-roles` lists "
+            "the vocabulary."
         )
     if inventory.unknown_roles:
         console.print(
@@ -894,11 +947,8 @@ def _window_metrics(families, budget: int, total_windows: int) -> dict:
 
 
 def cmd_triage(args) -> None:
-    if not args.model.exists():
-        errors.print(
-            f"[red]no model at {args.model}[/red]  run `meerkat train` first"
-        )
-        raise SystemExit(EXIT_ERROR)
+    _require_bundle(args.model)
+    require_directory(args.input)
     company = resolve_company(args)
     if args.inventory is None:
         args.inventory = args.input / "inventory" / f"{company}.json"
@@ -967,7 +1017,9 @@ def _select_families(
     if day:
         dates = families["day"].map(fmt_date)
         if day not in set(dates):
-            console.print(
+            # stderr, or `queue --json | jq` gets 46 bytes of prose on stdout and
+            # fails to parse, which is the contract stated at the top of this file
+            errors.print(
                 f"[red]no day {day} in this run[/red]  available: "
                 + ", ".join(sorted(set(run.families["day"].map(fmt_date))))
             )
@@ -982,7 +1034,7 @@ def _select_families(
         families = families[families["detector_source"].astype(str).eq(detector)]
     if rule:
         families = families[
-            families["rule_id"].astype(str).str.contains(rule, case=False)
+            families["rule_id"].astype(str).str.contains(rule, case=False, regex=False)
         ]
     if review_state:
         reviews = current_reviews(run.directory)
@@ -1354,13 +1406,12 @@ def compare_models(
 def cmd_retrain(args) -> None:
     _require(args.incidents, "incident records")
     _require(args.inventory, "inventory")
-    if not args.model.exists():
-        errors.print(f"[red]no bundle at {args.model}[/red]  it is the starting point")
-        raise SystemExit(EXIT_ERROR)
+    _require_bundle(args.model)
+    require_directory(args.input)
     company = resolve_company(args)
 
-    inventory = load_inventory(args.inventory)
-    incidents = load_incidents(args.incidents)
+    inventory = _load_or_exit(load_inventory, args.inventory, "the inventory")
+    incidents = _load_or_exit(load_incidents, args.incidents, "the incident records")
     unresolved = unresolved_hosts(incidents, inventory)
     if unresolved:
         console.print(
@@ -1466,6 +1517,7 @@ RULE_CARDINALITY_WARN = 0.5
 
 
 def cmd_check(args) -> None:
+    require_directory(args.input)
     company = resolve_company(args)
     if args.inventory is None:
         args.inventory = args.input / "inventory" / f"{company}.json"
@@ -1486,7 +1538,7 @@ def cmd_check(args) -> None:
         else:
             console.print(f"  [dim]absent[/dim] {label:19} {path.name}")
 
-    inventory = load_inventory(args.inventory)
+    inventory = _load_or_exit(load_inventory, args.inventory, "the inventory")
     # one generator drains the first file before reaching the second, so a flat
     # sample of a company with 4,056 miner and 32,302 host alerts reports the miner
     # alone. Take a share from each file instead.
@@ -1534,20 +1586,23 @@ def cmd_check(args) -> None:
     if len(unmatched):
         share = len(unmatched) / len(frame)
         names = sorted(set(unmatched.astype(str)))[:5]
-        errors.print(
+        # a network alert names both ends of a connection, so internet addresses
+        # appear here and can never be in an asset inventory. Report it without
+        # failing: the exit code is for things an operator can act on.
+        console.print(
             f"[yellow]{share:.0%} of alerts are on hosts outside the inventory"
             f"[/yellow]  {', '.join(safe(n) for n in names)}\n"
-            "  those alerts score with no asset roles, and roles are the model's "
-            "largest feature block"
+            "  those alerts are scored without role features. A network alert "
+            "names both ends of a connection, so addresses outside your estate "
+            "appear here too."
         )
-        problems += 1
 
     unroled = inventory.assets_without_roles()
     if unroled:
         errors.print(
             f"[yellow]{len(unroled)} inventory assets have no roles[/yellow]  "
-            "on the benchmark an empty inventory costs more coverage than dropping "
-            f"a whole detector. `meerkat inventory --list-roles` lists the vocabulary."
+            "their alerts are scored without the role features. "
+            "`meerkat inventory --list-roles` lists the vocabulary."
         )
         problems += 1
     if inventory.unknown_roles:
@@ -1565,9 +1620,10 @@ def cmd_check(args) -> None:
     if ratio > RULE_CARDINALITY_WARN and len(frame) >= 500:
         errors.print(
             f"[yellow]{frame['rule_id'].nunique()} distinct rule ids across "
-            f"{len(frame)} alerts[/yellow]  a rule id should name a kind of alert "
-            "rather than one occurrence. At this ratio sessions cannot group and "
-            "rule rarity carries no signal."
+            f"{len(frame)} alerts[/yellow]  sessions group on rule id, so "
+            "Meerkat reads it as naming a kind of alert rather than one "
+            "occurrence. At this ratio sessions do not group and rule rarity "
+            "carries no signal."
         )
         problems += 1
 
@@ -1586,9 +1642,13 @@ def cmd_check(args) -> None:
 # --------------------------------------------------------------------------
 
 VERDICT_STYLE = {"stable": "green", "moderate": "yellow", "major": "red"}
+# measured: with no shift on either side, 85% of features read "major" at 10
+# training sessions and 50% at 30. By 300 it is 0%.
+DRIFT_MIN_TRAINING = 300
 
 
 def cmd_drift(args) -> None:
+    require_directory(args.input)
     company = resolve_company(args)
     if args.inventory is None:
         args.inventory = args.input / "inventory" / f"{company}.json"
@@ -1602,7 +1662,7 @@ def cmd_drift(args) -> None:
         )
         raise SystemExit(EXIT_ERROR)
 
-    inventory = load_inventory(args.inventory)
+    inventory = _load_or_exit(load_inventory, args.inventory, "the inventory")
     alerts = normalize_scenario(
         args.input, None, company, args.inventory,
         wazuh_file=args.wazuh_file, aminer_file=args.aminer_file,
@@ -1627,6 +1687,13 @@ def cmd_drift(args) -> None:
         f"  sessions on hosts outside the inventory: [bold]{outside:.1%}[/bold]"
         f"  (training had {1 - profile.inventory_coverage:.1%})"
     )
+
+    if profile.n_sessions < DRIFT_MIN_TRAINING:
+        console.print(
+            f"[yellow]this model was fitted on {profile.n_sessions} sessions"
+            f"[/yellow]  below about {DRIFT_MIN_TRAINING} the comparison is mostly "
+            "noise: unmoved features read as major drift roughly half the time"
+        )
 
     drifts = compare_profile(profile, X)
     table = Table(title="feature drift, worst first", title_justify="left",
@@ -1660,8 +1727,8 @@ def cmd_drift(args) -> None:
     if major or unseen > UNSEEN_RULE_WARN:
         console.print(
             f"[yellow]{len(major)} feature(s) past PSI {PSI_MAJOR}[/yellow]  "
-            "this says the input moved, not that the queue is wrong. Retraining on "
-            "your own incidents is what closes the gap."
+            "this reports that the input moved. It does not measure whether the "
+            "ranking is still right, which needs confirmed outcomes."
         )
         raise SystemExit(EXIT_DRIFT)
     console.print(f"[green]no major drift[/green]  worst PSI {drifts[0].psi:.3f}"
@@ -1694,6 +1761,10 @@ def cmd_export(args) -> None:
 
 
 def _csv_safe(value):
+    # strip control characters first: this file is opened in a spreadsheet and
+    # cat'd in a terminal, and rule names and hostnames are attacker-written
+    if isinstance(value, str):
+        value = _CONTROL.sub("", value)
     # a hostname is attacker-controlled and Excel evaluates a cell starting with
     # = + - or @, so quote the leading character rather than the whole cell
     if isinstance(value, str) and value[:1] in "=+-@\t\r":
@@ -1735,14 +1806,7 @@ def cmd_demo(args) -> None:
             )
             raise SystemExit(EXIT_ERROR)
 
-    if not args.model.exists():
-        errors.print(
-            f"[red]no model at {args.model}[/red]\n"
-            "the bundle is stored with Git LFS. fetch it with:\n\n"
-            "  git lfs install\n"
-            "  git lfs pull\n"
-        )
-        raise SystemExit(EXIT_ERROR)
+    _require_bundle(args.model)
 
     # the event-label CSVs are evaluation ground truth and are not shipped, so
     # a clone triages without them and simply reports no window coverage
@@ -1781,8 +1845,37 @@ def safe_run_id(run_id: str) -> str:
     return cleaned
 
 
+def _load_or_exit(load, path: Path, what: str):
+    # core raises ValueError with a message written for a person. Letting it
+    # escape turned every one of them into a traceback.
+    try:
+        return load(path)
+    except (ValueError, OSError) as error:
+        errors.print(f"[red]{what} could not be read[/red]  {error}")
+        raise SystemExit(EXIT_ERROR)
+
+
 def _raw_dir_for(run: RunState, args) -> Path:
     return args.raw_dir or Path(run.meta.get("input", str(DEFAULT_INPUT)))
+
+
+def require_directory(path: Path) -> None:
+    # a missing directory used to fall through to the inventory check, so a
+    # first-time user with nothing in place was told the inventory was missing.
+    # The inventory is written from the alerts, so that is the wrong end.
+    if not path.exists():
+        errors.print(
+            f"[red]no alert directory at {path}[/red]  create it and put your "
+            "detector exports inside, or point --input at the folder that "
+            "already holds them."
+        )
+        raise SystemExit(EXIT_ERROR)
+    if not path.is_dir():
+        errors.print(
+            f"[red]--input must be a directory[/red]  {path} is a file. Point it "
+            "at the folder holding your alert exports."
+        )
+        raise SystemExit(EXIT_ERROR)
 
 
 def resolve_company(args) -> str:
@@ -1792,6 +1885,13 @@ def resolve_company(args) -> str:
     if getattr(args, "company", None):
         return args.company
     return safe_run_id(args.input.resolve().name)
+
+
+def _positive_float(value: str) -> float:
+    number = float(value)
+    if not number > 0 or number != number or number in (float("inf"),):
+        raise argparse.ArgumentTypeError("must be a finite number above 0")
+    return number
 
 
 def _add_alert_files(parser) -> None:
@@ -1860,7 +1960,7 @@ def build_parser() -> argparse.ArgumentParser:
     triage.add_argument("--labels", type=Path, default=None,
                         help="optional label CSV, for evaluation only")
     triage.add_argument("--event-csv-dir", type=Path, default=None)
-    triage.add_argument("--budget", type=int, default=10)
+    triage.add_argument("--budget", type=_positive, default=10)
     triage.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     triage.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
     triage.set_defaults(func=cmd_triage)
@@ -1914,10 +2014,20 @@ def build_parser() -> argparse.ArgumentParser:
     export = sub.add_parser("export", help="export an artifact (support)")
     export_sub = export.add_subparsers(dest="artifact", required=True)
     navigator = export_sub.add_parser(
-        "navigator", help="ATT&CK Navigator layer of observed techniques"
+        "navigator",
+        help="ATT&CK Navigator layer of the techniques seen in a saved run",
+        description="Writes an ATT&CK Navigator layer from one saved run: the "
+                    "latest, or --run ID. By default it covers every alert in "
+                    "that run, including alerts whose family never entered the "
+                    "queue. The layer is written inside that run's directory, "
+                    "so runs do not overwrite each other. There is no combined "
+                    "layer across runs; `meerkat runs` lists what is available.",
     )
     navigator.add_argument("--output", type=Path, default=None)
-    navigator.add_argument("--queue-only", action="store_true")
+    navigator.add_argument(
+        "--queue-only", action="store_true",
+        help="only alerts belonging to families that entered the queue",
+    )
     _add_run_selector(navigator)
     navigator.set_defaults(func=cmd_export)
 
@@ -1934,7 +2044,7 @@ def build_parser() -> argparse.ArgumentParser:
     demo = sub.add_parser("demo", help="run the bundled russellmitchell demo")
     demo.add_argument("--raw-dir", type=Path, default=DEMO_RAW)
     demo.add_argument("--model", type=Path, default=DEFAULT_MODEL)
-    demo.add_argument("--budget", type=int, default=10)
+    demo.add_argument("--budget", type=_positive, default=10)
     demo.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
     demo.set_defaults(func=cmd_demo)
 
@@ -1996,13 +2106,13 @@ def build_parser() -> argparse.ArgumentParser:
                          help="bundle to start from; its re-ranker is kept")
     retrain.add_argument("--out", type=Path, default=Path("models/retrained.skops"))
     retrain.add_argument("--holdout-days", type=_positive, default=7)
-    retrain.add_argument("--budget", type=int, default=10)
+    retrain.add_argument("--budget", type=_positive, default=10)
     tuning = retrain.add_argument_group(
         "tuning",
         "defaults are what the benchmark shipped with; leave them alone unless "
         "you are measuring something",
     )
-    tuning.add_argument("--prior-k", type=float, default=1.0,
+    tuning.add_argument("--prior-k", type=_positive_float, default=1.0,
                         help="bag-size discount; a ticket contributes k/n per "
                              "session and k=1 keeps every ticket's total at 1.0")
     tuning.add_argument("--min-positives", type=_positive, default=10)
@@ -2022,14 +2132,23 @@ def cmd_inventory(args) -> None:
         for role, origin in role_sources().items():
             console.print(f"  {role:20} {origin}")
         return
+    require_directory(args.input)
     company = resolve_company(args)
     # scaffolding reads the same file triage will, so a differently named export
     # scaffolds as readily as the benchmark's convention
-    source, _ = resolve_alert_files(args.input, company)
+    try:
+        source, _ = resolve_alert_files(args.input, company)
+    except FileNotFoundError as error:
+        errors.print(f"[red]{error}[/red]")
+        raise SystemExit(EXIT_ERROR)
     _require(source, "wazuh alerts")
     out = args.out or (args.input / "inventory" / f"{company}.json")
 
-    by_name: dict[str, set[str]] = {}
+    # One asset per agent address, because that is what the pipeline keys a
+    # session on. Grouping by agent.name instead collapsed every machine behind a
+    # manager reporting one name into a single asset, and they then shared one set
+    # of roles: on the bundled data that turned ten machines into one.
+    names: dict[str, str] = {}
     read = 0
     with source.open(encoding="utf-8") as handle:
         for line in handle:
@@ -2037,28 +2156,31 @@ def cmd_inventory(args) -> None:
                 break
             read += 1
             try:
-                agent = (json.loads(line).get("agent") or {})
+                record = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            name = str(agent.get("name") or "").strip()
-            if not name:
-                continue
-            addresses = by_name.setdefault(name, set())
+            agent = record.get("agent") or {}
             address = str(agent.get("ip") or "").strip()
-            if address:
-                addresses.add(address)
+            if not address:
+                continue
+            # predecoder.hostname is what the machine calls itself. Falling back
+            # to the address rather than the agent name matches how
+            # extract_wazuh_fields labels a host, and avoids three machines all
+            # being called after the collector.
+            hostname = str((record.get("predecoder") or {}).get("hostname") or "")
+            names.setdefault(address, hostname.strip() or address)
 
-    if not by_name:
-        errors.print(f"[red]no agent names found in {source.name}[/red]")
+    if not names:
+        errors.print(f"[red]no agent addresses found in {source.name}[/red]")
         raise SystemExit(EXIT_ERROR)
 
     assets = [
         {
-            "hostname": name,
-            "ip_addresses": sorted(by_name[name]),
+            "hostname": names[address],
+            "ip_addresses": [address],
             "roles": [],
         }
-        for name in sorted(by_name)
+        for address in sorted(names)
     ]
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
@@ -2073,11 +2195,14 @@ def cmd_inventory(args) -> None:
             f"[yellow]{len(missing)} assets have no address[/yellow]  "
             + ", ".join(missing[:5])
         )
+    # what this says is what the model does with roles. How much they are worth
+    # was measured on one benchmark and does not transfer as a promise, so the
+    # number stays in the report rather than in an instruction to the user.
     console.print(
-        "[yellow]roles are empty and must be filled in[/yellow]  asset role is the "
-        "model's largest single feature, so an inventory without roles scores worse"
+        "[yellow]roles are empty[/yellow]  the model reads asset role as a "
+        "feature; assets left without one are scored without it"
     )
-    console.print("choose from: " + ", ".join(CANONICAL_ROLES))
+    console.print("roles available: " + ", ".join(CANONICAL_ROLES))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -2088,7 +2213,13 @@ def main(argv: list[str] | None = None) -> None:
             stream.reconfigure(encoding="utf-8")
     parser = build_parser()
     args = parser.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except AlertFileError as error:
+        # the message already names the file and the line, which is the whole
+        # point: one bad record in a 45 MB export should not print a traceback
+        errors.print(f"[red]{error}[/red]")
+        raise SystemExit(EXIT_ERROR)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ import json
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -134,7 +134,13 @@ def get_timestamp(record: dict, detector: str) -> float:
     # wazuh/suricata store an ISO-8601 string ending in "Z" for UTC
     if detector == "aminer":
         return float(record["LogData"]["Timestamps"][0])
-    return datetime.fromisoformat(record["@timestamp"]).timestamp()
+    stamp = datetime.fromisoformat(record["@timestamp"])
+    # a SIEM export that omits the zone is otherwise read in the reading
+    # machine's local time, so the same file lands in different days, sessions
+    # and attack windows depending on who runs it
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    return stamp.timestamp()
 
 
 def extract_wazuh_fields(
@@ -151,6 +157,11 @@ def extract_wazuh_fields(
         asset = inventory.assets_by_ip.get(agent_ip)
         host = asset.hostname if asset else agent_ip or agent["name"]
     mitre = rule.get("mitre") or {}
+    # a single id is sometimes a bare string, and a string is iterable, so
+    # "T1059" used to join to "T;1;0;5;9" and technique_count read 5 not 1
+    mitre_ids = mitre.get("id") or []
+    if isinstance(mitre_ids, str):
+        mitre_ids = [mitre_ids]
     native_event_id = str(data.get("id") or "")
     http_status = float("nan")
     if native_event_id.isdigit() and 100 <= int(native_event_id) <= 599:
@@ -163,7 +174,7 @@ def extract_wazuh_fields(
         entity_in_inventory=agent_ip in inventory,
         severity=float(rule["level"]),
         # mitre IDs fields have multiple values so we join them
-        native_technique_ids=";".join(mitre.get("id") or []),
+        native_technique_ids=";".join(str(one) for one in mitre_ids),
         rule_id=str(rule.get("id", "")),
         native_event_id=native_event_id,
         source_user=str(data.get("srcuser") or ""),
@@ -404,6 +415,11 @@ def classify_wazuh_record(record: dict) -> str:
         return ""
     if "alert" in record.get("data", {}):
         return "suricata"
+    # a wazuh alert always carries rule and agent. Claiming anything else is one
+    # sent the extractor straight into a KeyError the user then read as a
+    # traceback, so an object without them is not recognised rather than fatal.
+    if not isinstance(record.get("rule"), dict) or "agent" not in record:
+        return ""
     return "wazuh"
 
 
@@ -506,6 +522,8 @@ def normalize(
 
     with alerts_path.open(encoding="utf-8") as fh:
         for position, line in enumerate(fh):
+            if not line.strip():
+                continue
             record = json.loads(line)
             row = normalize_record(
                 record,
@@ -566,6 +584,31 @@ def sniff_alert_family(path: Path, max_lines: int = SNIFF_LINES) -> str:
     except OSError:
         return ""
     return ""
+
+
+class AlertFileError(Exception):
+    pass
+
+
+def read_alert_record(line: str, path: Path, position: int) -> dict | None:
+    # a malformed record names its file and line. Returning None means "skip a
+    # blank"; anything else is fatal, because silently dropping records would
+    # change the answer without saying so.
+    if not line.strip():
+        return None
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError as error:
+        raise AlertFileError(
+            f"{path.name} line {position + 1} is not valid JSON: {error.msg}. "
+            "Alert files are JSON lines, one object per line."
+        ) from error
+    if not isinstance(record, dict):
+        raise AlertFileError(
+            f"{path.name} line {position + 1} is a {type(record).__name__}, "
+            "not an alert object."
+        )
+    return record
 
 
 def resolve_alert_files(
@@ -645,14 +688,17 @@ def iter_normalized_rows(
         from core.event_labels import load_scenario_labels
         _, _, _, event_labels = load_scenario_labels(event_csv_dir, scenario)
         if have_aminer and have_wazuh:
-            with wazuh_path.open(encoding="utf-8") as fh:
+            with wazuh_path.open(encoding="utf-8-sig") as fh:
                 aminer_offset = sum(1 for _ in fh)
 
     if have_aminer:
-        with aminer_path.open(encoding="utf-8") as fh:
+        with aminer_path.open(encoding="utf-8-sig") as fh:
             for position, line in enumerate(fh):
+                record = read_alert_record(line, aminer_path, position)
+                if record is None:
+                    continue
                 row = normalize_record(
-                    json.loads(line),
+                    record,
                     "aminer",
                     windows,
                     inventory,
@@ -664,9 +710,14 @@ def iter_normalized_rows(
                 yield row
 
     if have_wazuh:
-        with wazuh_path.open(encoding="utf-8") as fh:
+        with wazuh_path.open(encoding="utf-8-sig") as fh:
             for position, line in enumerate(fh):
-                record = json.loads(line)
+                # a concatenated export often carries a blank line between parts,
+                # and one of them used to abort the whole run. position still
+                # advances, so the event-label join stays aligned.
+                record = read_alert_record(line, wazuh_path, position)
+                if record is None:
+                    continue
                 detector = classify_wazuh_record(record)
                 if detector:
                     row = normalize_record(
