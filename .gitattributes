@@ -2,3 +2,6 @@
 # of JSON and are better kept as ordinary git objects.
 data/raw/*_wazuh.json  filter=lfs diff=lfs merge=lfs -text
 data/raw/*_aminer.json filter=lfs diff=lfs merge=lfs -text
+
+# model bundles are multi-MB binaries
+*.skops filter=lfs diff=lfs merge=lfs -text

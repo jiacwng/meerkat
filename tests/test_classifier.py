@@ -10,6 +10,8 @@ from core import classifier
 
 class ClassifierTests(unittest.TestCase):
     def test_model_scores_boolean_session_targets(self):
+        # predict_scores reads column 1 of predict_proba, so the forest has to
+        # keep False before True or every ranking score comes out inverted
         X = pd.DataFrame({"signal": [0.0, 0.1, 0.9, 1.0]})
         target = pd.Series([False, False, True, True])
 
@@ -21,6 +23,8 @@ class ClassifierTests(unittest.TestCase):
         self.assertGreater(scores[3], scores[0])
 
     def test_sigmoid_calibrator_returns_increasing_probabilities(self):
+        # the confidence percentage is display only, so it has to stay monotone
+        # in the ranking score or the queue order and the number disagree
         scores = np.array([0.0, 0.1, 0.2, 0.8, 0.9, 1.0])
         target = np.array([0, 0, 0, 1, 1, 1])
 
@@ -31,6 +35,8 @@ class ClassifierTests(unittest.TestCase):
         self.assertTrue(np.all((probabilities >= 0) & (probabilities <= 1)))
 
     def test_explanation_reports_active_globally_important_features(self):
+        # a feature sitting at 0 on this row is skipped, so an all-zero column
+        # never turns up among the reasons shown beside a family
         X = pd.DataFrame({
             "volume": [0.0, 0.1, 0.9, 1.0],
             "role_server": [0.0, 0.0, 1.0, 1.0],
@@ -46,6 +52,8 @@ class ClassifierTests(unittest.TestCase):
         self.assertTrue(all(name != "inactive" for name, _, _ in explanation))
 
     def test_model_round_trip(self):
+        # every read command reopens a bundle skops wrote, so a reloaded forest
+        # has to score an unseen row identically to the one still in memory
         model = classifier.fit_model(
             pd.DataFrame({"signal": [0.0, 1.0]}),
             pd.Series([False, True]),
@@ -63,6 +71,8 @@ class ClassifierTests(unittest.TestCase):
         )
 
     def test_family_reranker_scores_family_aggregates(self):
+        # role columns are rebuilt from asset_roles at predict time, so their
+        # sorted order is pinned or a family's role lands in the wrong column
         rows = []
         for position, positive in enumerate((False, False, True, True)):
             signal = float(positive)
