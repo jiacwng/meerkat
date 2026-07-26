@@ -843,8 +843,12 @@ class HostileBundleTests(unittest.TestCase):
         self.assertIn("malformed", str(caught.exception))
 
     def test_the_shipped_bundle_passes_the_structural_check(self):
+        # a checkout without LFS leaves the pointer file in place, so the bundle
+        # exists and is not a bundle. CI does not fetch LFS, and existence alone
+        # let this run there against three lines of text.
+        from meerkat.cli import _is_lfs_pointer
         path = Path(__file__).resolve().parent.parent / "models/meerkat_bundle.skops"
-        if not path.exists():
+        if not path.exists() or _is_lfs_pointer(path):
             self.skipTest("the bundle is not fetched")
         classifier.load_model(path)
 
