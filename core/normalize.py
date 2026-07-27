@@ -10,7 +10,7 @@ from __future__ import annotations
 import csv
 import json
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -130,7 +130,9 @@ def get_timestamp(record: dict, detector: str) -> float:
     # wazuh/suricata store an ISO-8601 string ending in "Z" for UTC
     if detector == "aminer":
         return float(record["LogData"]["Timestamps"][0])
-    stamp = datetime.fromisoformat(record["@timestamp"])
+    # elastic renames the field to @timestamp when it indexes the alert; wazuh's
+    # own alerts.json keeps the name it wrote, so read whichever is there
+    stamp = datetime.fromisoformat(record.get("@timestamp") or record["timestamp"])
     # a SIEM export that omits the zone is otherwise read in the reading
     # machine's local time, so the same file lands in different days, sessions
     # and attack windows depending on who runs it
@@ -417,7 +419,20 @@ def extract_aminer_fields(
     )
 
 
+# suricata writes eve.json itself, and wazuh republishes the same record inside
+# its own envelope. Folding the flat one into that envelope keeps a single
+# suricata reader, severity scale and detector name.
+def as_wrapped_suricata(record: dict) -> dict | None:
+    if record.get("event_type") != "alert" or "alert" not in record:
+        return None
+    stamp = record.get("timestamp")
+    if not stamp:
+        return None
+    return {"@timestamp": stamp, "data": record}
+
+
 def classify_wazuh_record(record: dict) -> str:
+    # wazuh reads the alert from fast.log and from eve.json, so drop the text one
     if record.get("decoder", {}).get("name") == "snort":
         return ""
     if "alert" in record.get("data", {}):
@@ -524,7 +539,17 @@ def finalize_normalized_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 WAZUH_FAMILY = "wazuh"
 AMINER_FAMILY = "aminer"
+SURICATA_FAMILY = "suricata"
+# files are read in this order, so two runs of one directory agree. suricata's
+# own file comes before the wazuh export that forwards it, so the copy kept is
+# the one the sensor wrote and not wazuh's re-encoding of it
+FAMILY_ORDER = (AMINER_FAMILY, SURICATA_FAMILY, WAZUH_FAMILY)
+# the official label csv counts the wazuh file's rows first and the miner's last
+LABEL_ORDER = (WAZUH_FAMILY, SURICATA_FAMILY, AMINER_FAMILY)
 SNIFF_LINES = 5
+# an alert export is one json object per line, so a longer line belongs to some
+# other file and saying so should not pull it into memory first
+SNIFF_LINE_BYTES = 1 << 20
 
 
 def classify_alert_family(record: dict) -> str:
@@ -540,6 +565,11 @@ def classify_alert_family(record: dict) -> str:
     data = record.get("data")
     if isinstance(data, dict) and "alert" in data:
         return WAZUH_FAMILY
+    # a native eve.json line names its own payload: an alert carries "alert", a
+    # dns event carries "dns". No rule and no agent, so wazuh did not write it.
+    event_type = record.get("event_type")
+    if isinstance(event_type, str) and isinstance(record.get(event_type), dict):
+        return SURICATA_FAMILY
     return ""
 
 
@@ -550,13 +580,14 @@ def sniff_alert_family(path: Path, max_lines: int = SNIFF_LINES) -> str:
     try:
         with path.open(encoding="utf-8", errors="replace") as fh:
             read = 0
-            for line in fh:
+            while read < max_lines:
+                line = fh.readline(SNIFF_LINE_BYTES)
+                if not line:
+                    break
                 line = line.strip()
                 if not line:
                     continue
                 read += 1
-                if read > max_lines:
-                    break
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
@@ -602,42 +633,64 @@ def read_alert_record(line: str, path: Path, position: int) -> dict | None:
     return record
 
 
+def sort_alert_files(files: list[tuple[Path, str]]) -> list[tuple[Path, str]]:
+    return sorted(
+        files, key=lambda pair: (FAMILY_ORDER.index(pair[1]), pair[0].name)
+    )
+
+
 def resolve_alert_files(
     raw_dir: Path,
     scenario: str,
     wazuh_path: Path | None = None,
     aminer_path: Path | None = None,
-) -> tuple[Path, Path]:
+) -> list[tuple[Path, str]]:
     # <company>_wazuh.json is AIT's layout and stays the convenient default, but a
     # real export is called whatever the SIEM called it, so either file can be named
-    # outright. Returns both paths whether or not they exist; callers test that.
+    # outright. Every file listed exists, and every one of them is read.
     default_wazuh = raw_dir / f"{scenario}_wazuh.json"
     default_aminer = raw_dir / f"{scenario}_aminer.json"
     resolved_wazuh = wazuh_path or default_wazuh
     resolved_aminer = aminer_path or default_aminer
-    if resolved_wazuh.exists() or resolved_aminer.exists():
-        return resolved_wazuh, resolved_aminer
+    named = [
+        pair
+        for pair in (
+            (resolved_wazuh, WAZUH_FAMILY),
+            (resolved_aminer, AMINER_FAMILY),
+        )
+        if pair[0].exists()
+    ]
+    # --wazuh-file and --aminer-file name the export to read, so the directory
+    # around them is not consulted at all
+    explicit = {WAZUH_FAMILY: wazuh_path, AMINER_FAMILY: aminer_path}
+    if named and any(path is not None for path in explicit.values()):
+        return sort_alert_files(named)
 
-    # nothing under the convention, so the name stops mattering: read the head of
-    # each json file and let its format say which detector wrote it. Two exports
-    # of the same family means a directory of archives, and first by name is both
-    # the earliest for a dated name and the same choice on every run.
+    # read the head of each json file and let its format say which detector wrote
+    # it, so an export is found whatever the file happens to be called
     found = (
         sorted(raw_dir.glob("*.json"), key=lambda path: path.name)
         if raw_dir.is_dir() else []
     )
-    by_family: dict[str, Path] = {}
-    for candidate in found:
-        family = sniff_alert_family(candidate)
-        if family and family not in by_family:
-            by_family[family] = candidate
-    if by_family:
-        sniffed_wazuh = wazuh_path or by_family.get(WAZUH_FAMILY) or default_wazuh
-        sniffed_aminer = aminer_path or by_family.get(AMINER_FAMILY) or default_aminer
-        # an explicit path that does not exist is a typo worth reporting, so only
-        # take the sniffed pair once something in it is actually readable
-        if sniffed_wazuh.exists() or sniffed_aminer.exists():
-            return sniffed_wazuh, sniffed_aminer
+    sniffed = [
+        (candidate, family)
+        for candidate in found
+        if (family := sniff_alert_family(candidate))
+    ]
+
+    if named:
+        # the convention names a file per family and says nothing about a third,
+        # so a suricata eve.json beside <company>_wazuh.json is still read
+        covered = {family for _, family in named}
+        return sort_alert_files(
+            named + [pair for pair in sniffed if pair[1] not in covered]
+        )
+
+    # an explicit path that does not exist is a typo worth reporting, so the
+    # family it named is not filled in from the directory instead
+    usable = [pair for pair in sniffed if explicit.get(pair[1]) is None]
+    if usable:
+        return sort_alert_files(usable)
 
     names = [p.name for p in found]
     hint = (
@@ -652,6 +705,51 @@ def resolve_alert_files(
     )
 
 
+def read_family_record(record: dict, family: str) -> tuple[dict, str] | None:
+    if family == AMINER_FAMILY:
+        return record, "aminer"
+    if family == SURICATA_FAMILY:
+        wrapped = as_wrapped_suricata(record)
+        # eve.json interleaves flow, dns, tls and stats lines with the alerts
+        return (wrapped, "suricata") if wrapped is not None else None
+    detector = classify_wazuh_record(record)
+    return (record, detector) if detector else None
+
+
+def suricata_fingerprint(record: dict) -> tuple:
+    # wazuh's decoder writes every eve number back as a string, so the forwarded
+    # copy has to compare equal to the line suricata wrote itself
+    data = record.get("data") or {}
+    alert = data.get("alert") or {}
+
+    def number(value: object) -> object:
+        try:
+            return int(float(value))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return value
+
+    return (
+        data.get("timestamp"),
+        number(alert.get("signature_id")),
+        number(data.get("flow_id")),
+    )
+
+
+def label_offsets(files: Sequence[tuple[Path, str]]) -> dict[Path, int]:
+    # labels are positional per file, so a file's own labels start after every
+    # line of every file the csv counted before it
+    ordered = sorted(files, key=lambda pair: LABEL_ORDER.index(pair[1]))
+    offsets: dict[Path, int] = {}
+    offset = 0
+    for index, (path, _) in enumerate(ordered):
+        offsets[path] = offset
+        # counting the last file would read it twice for an offset nobody uses
+        if index + 1 < len(ordered):
+            with path.open(encoding="utf-8-sig", errors="replace") as fh:
+                offset += sum(1 for _ in fh)
+    return offsets
+
+
 def iter_normalized_rows(
     raw_dir: Path,
     labels_path: Path | None,
@@ -660,72 +758,64 @@ def iter_normalized_rows(
     event_csv_dir: Path | None = None,
     wazuh_file: Path | None = None,
     aminer_file: Path | None = None,
+    files: Sequence[tuple[Path, str]] | None = None,
 ) -> Iterator[dict]:
-    wazuh_path, aminer_path = resolve_alert_files(
-        raw_dir, scenario, wazuh_file, aminer_file
+    # a caller that has already resolved the directory can hand the files back,
+    # which is how `check` samples a share of each of them
+    resolved = (
+        list(files) if files is not None
+        else resolve_alert_files(raw_dir, scenario, wazuh_file, aminer_file)
     )
-    # the miner is optional; the wazuh file carries both wazuh and suricata
-    have_aminer = aminer_path.exists()
-    have_wazuh = wazuh_path.exists()
     # an unseen company has no label file, so it carries no attack windows
     windows = load_attack_windows(labels_path, scenario) if labels_path else []
     inventory = load_inventory(inventory_path)
 
-    # the label CSV follows raw file order, wazuh then aminer, so the wazuh half
-    # stays aligned at offset 0 whether or not aminer is there
     event_labels: list[str] | None = None
-    aminer_offset = 0
+    offsets: dict[Path, int] = {}
     if event_csv_dir is not None:
         from core.event_labels import load_scenario_labels
         _, _, _, event_labels = load_scenario_labels(event_csv_dir, scenario)
-        if have_aminer and have_wazuh:
-            with wazuh_path.open(encoding="utf-8-sig", errors="replace") as fh:
-                aminer_offset = sum(1 for _ in fh)
+        offsets = label_offsets(resolved)
+
+    # a wazuh agent that tails /var/log/suricata/eve.json forwards the same alert
+    # the file already holds, so with both in the directory it arrives twice. Two
+    # copies in one file are two events the sensor logged; only the second file
+    # is a duplicate, and that is the only case worth the memory of a key set.
+    sources = [f for _, f in resolved if f in (WAZUH_FAMILY, SURICATA_FAMILY)]
+    watch_duplicates = len(sources) > 1
+    seen: set[tuple] = set()
 
     # a log line is attacker-influenced, so one bad byte anywhere in a 45MB export
     # would otherwise take the whole ingest down with a UnicodeDecodeError. The
     # replacement character still parses as JSON and still counts as one line, so
     # the event-label join stays aligned.
-    if have_aminer:
-        with aminer_path.open(encoding="utf-8-sig", errors="replace") as fh:
-            for position, line in enumerate(fh):
-                record = read_alert_record(line, aminer_path, position)
-                if record is None:
-                    continue
-                row = normalize_record(
-                    record,
-                    "aminer",
-                    windows,
-                    inventory,
-                )
-                row["source_file"] = aminer_path.name
-                row["source_position"] = position
-                if event_labels is not None:
-                    row["event_label"] = event_labels[aminer_offset + position]
-                yield row
-
-    if have_wazuh:
-        with wazuh_path.open(encoding="utf-8-sig", errors="replace") as fh:
+    for path, family in resolved:
+        offset = offsets.get(path, 0)
+        mine: set[tuple] = set()
+        with path.open(encoding="utf-8-sig", errors="replace") as fh:
             for position, line in enumerate(fh):
                 # a concatenated export often carries a blank line between parts,
                 # and one of them used to abort the whole run. position still
                 # advances, so the event-label join stays aligned.
-                record = read_alert_record(line, wazuh_path, position)
+                record = read_alert_record(line, path, position)
                 if record is None:
                     continue
-                detector = classify_wazuh_record(record)
-                if detector:
-                    row = normalize_record(
-                        record,
-                        detector,
-                        windows,
-                        inventory,
-                    )
-                    row["source_file"] = wazuh_path.name
-                    row["source_position"] = position
-                    if event_labels is not None:
-                        row["event_label"] = event_labels[position]
-                    yield row
+                alert = read_family_record(record, family)
+                if alert is None:
+                    continue
+                parsed, detector = alert
+                if watch_duplicates and detector == "suricata":
+                    fingerprint = suricata_fingerprint(parsed)
+                    if fingerprint in seen:
+                        continue
+                    mine.add(fingerprint)
+                row = normalize_record(parsed, detector, windows, inventory)
+                row["source_file"] = path.name
+                row["source_position"] = position
+                if event_labels is not None:
+                    row["event_label"] = event_labels[offset + position]
+                yield row
+        seen |= mine
 
 
 def iter_normalized_chunks(

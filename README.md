@@ -16,7 +16,7 @@
   <a href="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml">
     <img src="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml/badge.svg" alt="CI status">
   </a>
-  <img src="https://img.shields.io/badge/tests-355%20passing-brightgreen" alt="355 tests passing">
+  <img src="https://img.shields.io/badge/tests-398%20passing-brightgreen" alt="398 tests passing">
   <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 to 3.13">
   <img src="https://img.shields.io/badge/license-MIT-informational" alt="MIT license">
 </p>
@@ -162,8 +162,9 @@ and `--all`, recuts with `--budget`, and emits `--json`.
 
 Put your alert exports in a directory named `alerts`. Meerkat looks for
 `alerts_wazuh.json` and `alerts_aminer.json` first, then falls back to reading
-each `.json` file's opening lines to recognise it. Only the first file per
-detector is used. `--wazuh-file`, `--aminer-file` and `--input` override.
+each `.json` file's opening lines to recognise it. Every file it recognises is
+read, including a Suricata `eve.json` next to a Wazuh export. `--wazuh-file`,
+`--aminer-file` and `--input` override.
 
 The captures below come from a different directory of alerts than `meerkat demo`
 scores, so their counts do not match the figure above.

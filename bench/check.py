@@ -22,7 +22,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bench.evaluate import SCENARIOS
-from core.normalize import load_attack_windows, resolve_alert_files
+from core.normalize import (
+    AMINER_FAMILY,
+    SURICATA_FAMILY,
+    WAZUH_FAMILY,
+    load_attack_windows,
+    resolve_alert_files,
+)
 
 ZENODO_RECORD = "8263181"
 ZENODO_URL = "https://zenodo.org/records/8263181"
@@ -80,13 +86,18 @@ def _resolve_pair(raw_dir: Path, scenario: str) -> tuple[Path, Path]:
     # <scenario>_wazuh.json here and disagreeing with it later. Finding nothing
     # raises there, which for a check is the answer rather than a failure: fall
     # back to the two paths bench/README.md tells the reader to fill.
+    default_wazuh = raw_dir / f"{scenario}_wazuh.json"
+    default_aminer = raw_dir / f"{scenario}_aminer.json"
     try:
-        return resolve_alert_files(raw_dir, scenario)
+        resolved = resolve_alert_files(raw_dir, scenario)
     except FileNotFoundError:
-        return (
-            raw_dir / f"{scenario}_wazuh.json",
-            raw_dir / f"{scenario}_aminer.json",
-        )
+        return default_wazuh, default_aminer
+    # the table has one column per detector, so name the first file of each
+    network = (WAZUH_FAMILY, SURICATA_FAMILY)
+    return (
+        next((p for p, f in resolved if f in network), default_wazuh),
+        next((p for p, f in resolved if f == AMINER_FAMILY), default_aminer),
+    )
 
 
 def _count_windows(labels_path: Path, scenario: str) -> int:
