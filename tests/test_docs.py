@@ -161,6 +161,26 @@ class WalkthroughCaptureTests(unittest.TestCase):
                 self.assertNotIn(f"{int(counts.group(group)):,}", figure)
 
 
+class BadgeTests(unittest.TestCase):
+    # the badge drifted three times because nothing checked it. Counting by
+    # loading rather than running keeps this cheap inside the suite it counts.
+    def test_the_badge_matches_what_a_clone_would_run(self):
+        import re
+
+        loader = unittest.TestLoader()
+
+        def found(pattern: str) -> int:
+            suite = loader.discover(str(ROOT / "tests"), pattern=pattern,
+                                    top_level_dir=str(ROOT))
+            return suite.countTestCases()
+
+        # test_m8_*.py is gitignored, so a clone never sees those
+        clone = found("test_*.py") - found("test_m8_*.py")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        claimed = int(re.search(r"tests-(\d+)%20passing", readme).group(1))
+        self.assertEqual(claimed, clone)
+
+
 @unittest.skipUnless(
     HAS_RUN,
     "needs a saved run; produced locally by `meerkat demo`, absent in CI "
