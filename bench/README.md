@@ -63,6 +63,22 @@ environment, and names every missing or unreadable file by path. Run it until al
 eight environments come back clean. `train` and `evaluate` on a half-placed
 dataset produce numbers that answer a different question.
 
+## Deciding whether to re-run
+
+`evaluate` reads 2.7 GB and fits twenty-four models, so it is worth knowing first
+whether anything can have changed:
+
+```bash
+python -m bench.digest
+```
+
+It hashes every column of every row of the normalized frame for one environment.
+The same digest means the same sessions, features, scores and queue, so the table
+cannot have moved and there is nothing to re-run. It exits non-zero when the
+digest differs from the recorded one, which is the signal to spend the hours. The
+recorded value only needs the demo environment, so unlike the rest of `bench/` it
+runs from a clone.
+
 `bench.train` writes `models/meerkat_bundle.skops` and a `.skops.json` sidecar
 recording the scikit-learn version, the training environments and a SHA-256 of
 the bundle. `--holdout russellmitchell` is what the shipped bundle was built
