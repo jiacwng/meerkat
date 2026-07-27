@@ -240,8 +240,9 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertTrue(fields.entity_in_inventory)
 
     def test_aminer_syslog_hostname_does_not_change_entity(self):
-        # a syslog line can name any host in its text, so only a logstash path
-        # moves the entity and a local /var/log/auth.log leaves it alone
+        # a syslog line can name any host in its text, so a miner whose id
+        # already names a machine keeps it. Only an id that resolves to nothing
+        # falls through to the log line.
         record = aminer_record(
             "192.168.98.239",
             "Jan 19 02:45:26 walker-mail dhclient[408]: DHCPREQUEST",
@@ -257,6 +258,35 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertEqual(fields.host, "walker-mail")
         self.assertEqual(fields.entity_id, "192.168.98.239")
         self.assertEqual(fields.observer_id, "192.168.98.239")
+
+    def test_a_central_miner_takes_the_host_from_the_log_line(self):
+        # one miner reading forwarded logs reports the same id for every host.
+        # Without this the whole estate groups onto one entity, scores with no
+        # asset roles, and finds no cross-detector corroboration, because
+        # detectors_nearby_10m keys on entity_id.
+        record = aminer_record(
+            "aminer-collector-1",
+            '{"host": {"name": "web01"}, "message": "sshd auth failure"}',
+        )
+        record["LogData"]["LogResources"] = ["/var/log/auth.log"]
+        assets = company_inventory(("web01", "10.0.0.7", ("server",)))
+
+        fields = normalize.extract_aminer_fields(record, assets)
+
+        self.assertEqual(fields.entity_id, "10.0.0.7")
+        self.assertEqual(fields.observer_id, "aminer-collector-1")
+
+    def test_a_log_line_naming_nothing_leaves_the_miner_id_alone(self):
+        # the fallback is for recovering a host, not for inventing one
+        record = aminer_record(
+            "aminer-collector-1", '{"host": {"name": "not-in-inventory"}}'
+        )
+        record["LogData"]["LogResources"] = ["/var/log/auth.log"]
+        assets = company_inventory(("web01", "10.0.0.7", ("server",)))
+
+        fields = normalize.extract_aminer_fields(record, assets)
+
+        self.assertEqual(fields.entity_id, "aminer-collector-1")
 
 
 class NativeMappingTests(unittest.TestCase):
