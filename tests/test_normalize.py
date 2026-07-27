@@ -240,9 +240,7 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertTrue(fields.entity_in_inventory)
 
     def test_aminer_syslog_hostname_does_not_change_entity(self):
-        # a syslog line can name any host in its text, so a miner whose id
-        # already names a machine keeps it. Only an id that resolves to nothing
-        # falls through to the log line.
+        # an id that already names a machine is kept, whatever the log line says
         record = aminer_record(
             "192.168.98.239",
             "Jan 19 02:45:26 walker-mail dhclient[408]: DHCPREQUEST",
@@ -260,10 +258,7 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertEqual(fields.observer_id, "192.168.98.239")
 
     def test_a_central_miner_takes_the_host_from_the_log_line(self):
-        # one miner reading forwarded logs reports the same id for every host.
-        # Without this the whole estate groups onto one entity, scores with no
-        # asset roles, and finds no cross-detector corroboration, because
-        # detectors_nearby_10m keys on entity_id.
+        # without this the whole estate groups onto one entity
         record = aminer_record(
             "aminer-collector-1",
             '{"host": {"name": "web01"}, "message": "sshd auth failure"}',
@@ -287,6 +282,25 @@ class EntityAttributionTests(unittest.TestCase):
         fields = normalize.extract_aminer_fields(record, assets)
 
         self.assertEqual(fields.entity_id, "aminer-collector-1")
+
+
+class ReaderRegistryTests(unittest.TestCase):
+    def test_an_unknown_detector_is_named_rather_than_read_as_aminer(self):
+        # this used to raise KeyError: 'AMiner' for a detector nobody configured
+        record = {"timestamp": 1.0, "host": "web01", "anomaly": "new user agent"}
+        with self.assertRaises(ValueError) as caught:
+            normalize.normalize_record(
+                record, "loglizer", [], inventory.Inventory("acme", {}, {})
+            )
+        message = str(caught.exception)
+        self.assertIn("loglizer", message)
+        self.assertIn("wazuh", message)
+
+    def test_every_detector_the_classifiers_emit_has_a_reader(self):
+        # the classifiers emit these names, so the table has to match them
+        self.assertEqual(
+            set(normalize.READERS), {"wazuh", "suricata", "aminer"}
+        )
 
 
 class NativeMappingTests(unittest.TestCase):
