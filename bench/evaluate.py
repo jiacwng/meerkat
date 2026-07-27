@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from math import comb
 from pathlib import Path
 
 import numpy as np
@@ -70,6 +71,7 @@ class CrossScenarioReport:
     per_fold: pd.DataFrame
     calibration: pd.DataFrame
     calibration_summary: pd.DataFrame
+    sign_tests: pd.DataFrame
 
 def load_scenarios(
     raw_dir: Path,
@@ -249,11 +251,22 @@ def _queue_metrics(
         duplicate_rates.append(1.0 - len(unique) / len(day_queue))
         distinct_entities.append(day_queue["entity_id"].nunique())
 
+    # coverage alone rewards big items, so every row carries what the queue
+    # costs to read: the alerts inside it, and their share of each day
+    day_volume = families.groupby("day", observed=True)["alert_count"].sum()
+    day_shares = [
+        queued_alerts / day_volume[day]
+        for day, queued_alerts
+        in queue.groupby("day", observed=True)["alert_count"].sum().items()
+    ]
+
     return {
         "budget": budget,
         "queued": len(queue),
         "strict_windows": len(strict_windows),
         "temporal_overlap_windows": len(temporal_overlap_windows),
+        "alerts_in_queue": int(queue["alert_count"].sum()),
+        "share_of_day_alerts": float(np.mean(day_shares)) if day_shares else 0.0,
         "precision": float(queue["family_positive"].mean()),
         "labelled_alert_coverage": float(
             queue["labelled_alert_count"].sum() / total_labelled_alerts
@@ -293,8 +306,94 @@ def _family_severity(scored, families):
     return pd.Series(per_family.reindex(keys).to_numpy(), index=families.index)
 
 
+# one item per day covers every window present at the cost of the whole day.
+# Any grouping or ranking has to beat this row to have bought anything.
+def _floor_metrics(
+    families: pd.DataFrame,
+    total_labelled_alerts: int,
+    budget: int,
+) -> dict[str, float | int]:
+    strict = frozenset().union(*families["labelled_windows"])
+    temporal = frozenset().union(*families["temporal_overlap_windows"])
+    labelled = int(families["labelled_alert_count"].sum())
+    return {
+        "budget": budget,
+        "queued": int(families["day"].nunique()),
+        "strict_windows": len(strict),
+        "temporal_overlap_windows": len(temporal),
+        "alerts_in_queue": int(families["alert_count"].sum()),
+        "share_of_day_alerts": 1.0,
+        "precision": float("nan"),
+        "labelled_alert_coverage": (
+            labelled / total_labelled_alerts if total_labelled_alerts else 0.0
+        ),
+        "distinct_categories": len(
+            frozenset().union(*families["event_categories"])
+        ),
+        "ndcg": float("nan"),
+        "daily_duplicate_concentration": float("nan"),
+        "daily_distinct_entities": float("nan"),
+        "median_family_alerts": float("nan"),
+        "p90_family_alerts": float("nan"),
+        "median_child_sessions": float("nan"),
+        "p90_child_sessions": float("nan"),
+    }
+
+
+def _exact_sign_p(deltas: list[int]) -> tuple[float, int]:
+    # ties carry no direction, so they drop out and the test runs on what is left
+    nonzero = [delta for delta in deltas if delta != 0]
+    n_eff = len(nonzero)
+    if n_eff == 0:
+        return float("nan"), 0
+    positive = sum(1 for delta in nonzero if delta > 0)
+    tail = sum(comb(n_eff, i) for i in range(min(positive, n_eff - positive) + 1))
+    return min(1.0, 2 * tail / 2 ** n_eff), n_eff
+
+
+# seeds are replicates of the same experiment, so each is tested on its own and
+# never averaged into the others first
+def sign_tests(
+    per_fold: pd.DataFrame,
+    reference: str = "family re-ranker",
+) -> pd.DataFrame:
+    rows = []
+    rankers = [
+        ranker for ranker in per_fold["ranker"].unique()
+        if ranker != reference and not ranker.startswith("floor")
+    ]
+    for budget in sorted(per_fold["budget"].unique()):
+        for ranker in rankers:
+            for seed in sorted(per_fold["seed"].unique()):
+                slice_ = per_fold[
+                    per_fold["budget"].eq(budget) & per_fold["seed"].eq(seed)
+                ]
+                paired = slice_.pivot_table(
+                    index="scenario", columns="ranker", values="strict_windows"
+                )
+                deltas = (paired[reference] - paired[ranker]).astype(int)
+                p_value, n_eff = _exact_sign_p(list(deltas))
+                rows.append({
+                    "budget": budget,
+                    "against": ranker,
+                    "seed": seed,
+                    "deltas": " ".join(str(delta) for delta in deltas),
+                    "n_eff": n_eff,
+                    # below five informative folds no p under .05 is reachable,
+                    # so the verdict says so instead of printing a number
+                    "p": p_value if n_eff >= 5 else float("nan"),
+                    "verdict": (
+                        f"p={p_value:.3f}" if n_eff >= 5
+                        else f"not separable (n_eff={n_eff})"
+                    ),
+                })
+    return pd.DataFrame(rows)
+
+
 def _summarize(per_fold: pd.DataFrame) -> pd.DataFrame:
     averages = per_fold.groupby(["ranker", "budget"], as_index=False).agg(
+        alerts_in_queue=("alerts_in_queue", "mean"),
+        share_of_day_alerts=("share_of_day_alerts", "mean"),
         precision=("precision", "mean"),
         labelled_alert_coverage=("labelled_alert_coverage", "mean"),
         distinct_categories=("distinct_categories", "mean"),
@@ -421,6 +520,15 @@ def evaluate_scenarios(
                             budget,
                         ),
                     })
+            for budget in budgets:
+                metric_rows.append({
+                    "seed": seed,
+                    "scenario": test_scenario,
+                    "ranker": "floor: one item per day",
+                    **_floor_metrics(
+                        families, total_labelled[test_scenario], budget
+                    ),
+                })
             families["ranking_score"] = learned
 
     per_fold = pd.DataFrame(metric_rows)
@@ -430,6 +538,7 @@ def evaluate_scenarios(
         per_fold=per_fold,
         calibration=calibration,
         calibration_summary=_summarize_calibration(calibration),
+        sign_tests=sign_tests(per_fold),
     )
 
 def build_bundle(
@@ -520,6 +629,8 @@ def main() -> None:
         seeds=seeds,
     )
     print(report.summary.to_string(index=False))
+    print("\nSign tests against the re-ranker, per seed")
+    print(report.sign_tests.to_string(index=False))
     print("\nCalibration")
     print(report.calibration_summary.to_string(index=False))
 
@@ -527,6 +638,7 @@ def main() -> None:
         args.output_dir.mkdir(parents=True, exist_ok=True)
         report.summary.to_csv(args.output_dir / "summary.csv", index=False)
         report.per_fold.to_csv(args.output_dir / "per_fold.csv", index=False)
+        report.sign_tests.to_csv(args.output_dir / "sign_tests.csv", index=False)
         report.calibration.to_csv(args.output_dir / "calibration.csv", index=False)
         report.calibration_summary.to_csv(
             args.output_dir / "calibration_summary.csv", index=False

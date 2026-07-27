@@ -506,7 +506,14 @@ class ScenarioEvaluationTests(unittest.TestCase):
         self.assertEqual(len(report.calibration), 3)
         self.assertEqual(len(report.calibration_summary), 1)
         self.assertIn("pooled_calibrated_brier", report.calibration_summary)
-        self.assertTrue((report.per_fold["daily_duplicate_concentration"] == 0).all())
+        # the floor row is one whole day per item, so per-queue columns are NaN
+        ranked = report.per_fold[
+            ~report.per_fold["ranker"].str.startswith("floor")
+        ]
+        self.assertTrue((ranked["daily_duplicate_concentration"] == 0).all())
+        self.assertIn("floor: one item per day", rankers)
+        self.assertIn("alerts_in_queue", report.per_fold)
+        self.assertIn("share_of_day_alerts", report.per_fold)
         self.assertIn("strict_windows", report.per_fold)
         self.assertIn("temporal_overlap_windows", report.per_fold)
         self.assertIn("strict_windows_mean", report.summary)
