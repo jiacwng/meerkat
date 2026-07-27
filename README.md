@@ -61,7 +61,9 @@ layer, which leaves the question the [report](docs/report/meerkat.pdf) is about.
 
 Meerkat reads **Wazuh** (runs on each machine, watches logs and processes),
 **Suricata** (watches network traffic) and **AMiner** (flags unusual log lines).
-The first two are enough to run; the third improves coverage.
+The first two are enough to run; the third improves coverage. Suricata alerts are
+read from the Wazuh file, so point Wazuh at Suricata's `eve.json`; a standalone
+`eve.json` is not read.
 
 ### How alerts are grouped
 
