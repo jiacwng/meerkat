@@ -10,7 +10,7 @@ from __future__ import annotations
 import csv
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -302,6 +302,15 @@ def extract_aminer_fields(
                 break
 
     reported_hosts = aminer_host_candidates(record)
+    # a central miner gives every host the same id, so read the host from the log
+    if entity_id not in inventory.assets_by_ip:
+        for name in sorted(reported_hosts):
+            resolved = inventory.ip_by_hostname.get(name.casefold())
+            if resolved is None and name in inventory.assets_by_ip:
+                resolved = name
+            if resolved:
+                entity_id = resolved
+                break
     asset = inventory.assets_by_ip.get(entity_id)
     if len(reported_hosts) == 1:
         host = next(iter(reported_hosts))
@@ -421,18 +430,27 @@ def classify_wazuh_record(record: dict) -> str:
     return "wazuh"
 
 
+# the chain this replaced ended in else, so any other tool was read as AMiner
+READERS: dict[str, Callable[[dict, Inventory], ExtractedFields]] = {
+    "wazuh": extract_wazuh_fields,
+    "suricata": extract_suricata_fields,
+    "aminer": extract_aminer_fields,
+}
+
+
 def normalize_record(
     record: dict,
     detector: str,
     windows: list[tuple[float, float, str]],
     inventory: Inventory,
 ) -> dict:
-    if detector == "wazuh":
-        fields = extract_wazuh_fields(record, inventory)
-    elif detector == "suricata":
-        fields = extract_suricata_fields(record, inventory)
-    else:
-        fields = extract_aminer_fields(record, inventory)
+    reader = READERS.get(detector)
+    if reader is None:
+        raise ValueError(
+            f"no reader for detector {detector!r}; known detectors are "
+            f"{', '.join(sorted(READERS))}"
+        )
+    fields = reader(record, inventory)
 
     timestamp = get_timestamp(record, detector)
     return {

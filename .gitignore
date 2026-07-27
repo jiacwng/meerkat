@@ -6,6 +6,7 @@
 # local
 *.pkl
 project_local/
+local/
 *.local.md
 paper/
 runs/
