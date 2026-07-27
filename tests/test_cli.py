@@ -18,7 +18,7 @@ import pandas as pd
 
 from core.classifier import provenance_path, save_model
 from core.drift import PSI_MAJOR
-from core.normalize import resolve_alert_files
+from core.normalize import AMINER_FAMILY, WAZUH_FAMILY, resolve_alert_files
 from meerkat import cli
 from meerkat.cli import (
     EXIT_DECLINED,
@@ -589,9 +589,11 @@ class TestAlertFileDiscovery(unittest.TestCase):
         # every AIT company and the demo rely on <company>_wazuh.json, so
         # adding the override flags must not move the default path
         raw = directory("acme_wazuh.json", "acme_aminer.json")
-        wazuh, aminer = resolve_alert_files(raw, "acme")
-        self.assertEqual(wazuh.name, "acme_wazuh.json")
-        self.assertEqual(aminer.name, "acme_aminer.json")
+        files = resolve_alert_files(raw, "acme")
+        self.assertEqual(
+            [(path.name, family) for path, family in files],
+            [("acme_aminer.json", AMINER_FAMILY), ("acme_wazuh.json", WAZUH_FAMILY)],
+        )
 
     def test_a_named_file_wins_over_the_convention(self):
         # a SIEM export is called whatever the SIEM called it, so a named file
@@ -599,16 +601,16 @@ class TestAlertFileDiscovery(unittest.TestCase):
         raw = directory("acme_wazuh.json")
         chosen = raw / "exported-alerts.json"
         chosen.write_text("{}\n", encoding="utf-8")
-        wazuh, _ = resolve_alert_files(raw, "acme", wazuh_path=chosen)
-        self.assertEqual(wazuh, chosen)
+        files = resolve_alert_files(raw, "acme", wazuh_path=chosen)
+        self.assertEqual([path for path, _ in files], [chosen])
 
     def test_the_miner_alone_is_enough(self):
-        # resolve_alert_files hands back both paths and lets the caller test
-        # them, so a company running only the miner still resolves
+        # resolve_alert_files lists only the files that are there, so a company
+        # running only the miner still resolves
         raw = directory("acme_aminer.json")
-        wazuh, aminer = resolve_alert_files(raw, "acme")
-        self.assertFalse(wazuh.exists())
-        self.assertTrue(aminer.exists())
+        files = resolve_alert_files(raw, "acme")
+        self.assertEqual([(p.name, f) for p, f in files],
+                         [("acme_aminer.json", AMINER_FAMILY)])
 
     def test_a_client_whose_export_is_named_differently_is_told_what_to_do(self):
         # the whole point: a real wazuh export is not called <company>_wazuh.json,
@@ -691,6 +693,21 @@ WAZUH_ALERT = {
     "agent": {"name": "collector", "ip": "10.0.0.9"},
     "predecoder": {"hostname": "web01"},
     "rule": {"id": "5501", "level": 5, "description": "User login"},
+}
+
+# a line suricata writes to eve.json itself, with no wazuh envelope around it
+EVE_ALERT = {
+    "timestamp": "2026-01-01T00:05:00.000000+0000",
+    "event_type": "alert",
+    "src_ip": "10.0.0.9",
+    "dest_ip": "10.0.0.9",
+    "proto": "TCP",
+    "alert": {
+        "signature_id": 2009582,
+        "signature": "ET SCAN Nmap Scripting Engine",
+        "category": "Attempted Information Leak",
+        "severity": 2,
+    },
 }
 
 
@@ -822,6 +839,34 @@ class CheckReportsTheTestedValueTests(unittest.TestCase):
         self.assertIn("outsidetheinventory", printed)
         self.assertIn("10.0.0.9", printed)
         self.assertNotIn("web01", printed)
+
+
+class CheckReadsEveryAlertFileTests(unittest.TestCase):
+    def test_a_native_eve_file_beside_the_wazuh_export_is_named_and_sampled(self):
+        # check is what an analyst runs before triage, so a file triage will read
+        # and check never mentions would be the wrong answer twice
+        directory = temporary_directory()
+        write_lines(directory / "alerts.json", [WAZUH_ALERT])
+        write_lines(directory / "eve.json", [EVE_ALERT])
+        inventory = write_inventory(
+            directory / "inventory" / "acme.json",
+            [{"hostname": "web01", "ip_addresses": ["10.0.0.9"], "roles": ["server"]}],
+        )
+        output = io.StringIO()
+        with (
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(io.StringIO()),
+            contextlib.suppress(SystemExit),
+        ):
+            cli.cmd_check(argparse.Namespace(
+                company="acme", input=directory, inventory=inventory,
+                sample=100, wazuh_file=None, aminer_file=None,
+            ))
+        printed = squashed(output.getvalue())
+        self.assertIn("alerts.json", printed)
+        self.assertIn("eve.json", printed)
+        self.assertIn("Suricata", printed)
+        self.assertIn("absentloganomaly", printed)
 
 
 class InventoryScaffoldTests(unittest.TestCase):

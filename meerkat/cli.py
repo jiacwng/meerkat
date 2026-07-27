@@ -55,6 +55,9 @@ from core.incidents import (
 )
 from core.inventory import load_inventory
 from core.normalize import (
+    AMINER_FAMILY,
+    SURICATA_FAMILY,
+    WAZUH_FAMILY,
     AlertFileError,
     iter_normalized_rows,
     load_attack_windows,
@@ -88,6 +91,12 @@ DEMO_INVENTORY_DIR = Path("data/raw/inventory")
 DEMO_EVENT_CSV = Path("data/raw/alerts_csv")
 REVIEW_DECISIONS = ("escalate", "benign", "false-positive")
 DETECTOR_LABELS = {"wazuh": "Wazuh", "suricata": "Suricata", "aminer": "AMiner"}
+# what `check` calls each kind of file: a wazuh export republishes suricata too
+FAMILY_LABELS = {
+    WAZUH_FAMILY: "wazuh and suricata",
+    SURICATA_FAMILY: "suricata",
+    AMINER_FAMILY: "log anomaly",
+}
 
 # rich parses [tags] in anything printed, and a Table cell does not strip ESC.
 # Rule names, hostnames, user agents, urls and commands are all written by whoever
@@ -895,6 +904,12 @@ def _require(path: Path, what: str) -> None:
         raise SystemExit(EXIT_ERROR)
 
 
+def _aminer_name(args, company: str) -> str:
+    # the miner file is absent here, so name the one that was looked for
+    named = getattr(args, "aminer_file", None)
+    return named.name if named else f"{company}_aminer.json"
+
+
 def _open_company(args) -> str:
     # triage, check and drift all start on the same three questions: is the
     # input there, what is this company called, and where is its inventory
@@ -971,7 +986,7 @@ def cmd_triage(args) -> None:
     _require_bundle(args.model)
     company = _open_company(args)
     try:
-        wazuh_path, aminer_path = resolve_alert_files(
+        alert_files = resolve_alert_files(
             args.input, company, args.wazuh_file, args.aminer_file
         )
     except FileNotFoundError as error:
@@ -979,10 +994,11 @@ def cmd_triage(args) -> None:
         raise SystemExit(EXIT_ERROR)
     bundle = _load_bundle(args.model)
     # the miner is optional, but say so: dropping it costs coverage
-    if not aminer_path.exists():
+    if not any(family == AMINER_FAMILY for _, family in alert_files):
         console.print(
-            f"[yellow]no {aminer_path.name}[/yellow]  scoring wazuh and suricata "
-            "only; log anomaly detections will be missing from the queue"
+            f"[yellow]no {_aminer_name(args, company)}[/yellow]  scoring wazuh "
+            "and suricata only; log anomaly detections will be missing from "
+            "the queue"
         )
     console.print(f"scoring {company} with {args.model}")
     scored_sessions, families, alerts = _score_company(
@@ -1535,7 +1551,7 @@ RULE_CARDINALITY_WARN = 0.5
 def cmd_check(args) -> None:
     company = _open_company(args)
     try:
-        wazuh_path, aminer_path = resolve_alert_files(
+        alert_files = resolve_alert_files(
             args.input, company, args.wazuh_file, args.aminer_file
         )
     except FileNotFoundError as error:
@@ -1543,27 +1559,26 @@ def cmd_check(args) -> None:
         raise SystemExit(EXIT_ERROR)
 
     console.print(f"reading up to {args.sample} alerts from {args.input}")
-    for label, path in (("wazuh and suricata", wazuh_path), ("log anomaly", aminer_path)):
-        if path.exists():
-            size = path.stat().st_size / 1_000_000
-            console.print(f"  [green]found[/green] {label:19} {path.name}  {size:.1f} MB")
-        else:
-            console.print(f"  [dim]absent[/dim] {label:19} {path.name}")
+    for path, family in alert_files:
+        size = path.stat().st_size / 1_000_000
+        label = FAMILY_LABELS[family]
+        console.print(f"  [green]found[/green] {label:19} {path.name}  {size:.1f} MB")
+    if not any(family == AMINER_FAMILY for _, family in alert_files):
+        label = FAMILY_LABELS[AMINER_FAMILY]
+        console.print(
+            f"  [dim]absent[/dim] {label:19} {_aminer_name(args, company)}"
+        )
 
     inventory = _load_or_exit(load_inventory, args.inventory, "the inventory")
     # one generator drains the first file before reaching the second, so a flat
     # sample of a company with 4,056 miner and 32,302 host alerts reports the miner
     # alone. Take a share from each file instead.
-    present = [p for p in (wazuh_path, aminer_path) if p.exists()]
-    per_file = max(1, args.sample // len(present))
-    absent = args.input / "__no_such_alert_file__.json"
+    per_file = max(1, args.sample // len(alert_files))
     rows = []
-    for path in present:
+    for entry in alert_files:
         rows.extend(islice(
             iter_normalized_rows(
-                args.input, None, company, args.inventory,
-                wazuh_file=path if path is wazuh_path else absent,
-                aminer_file=path if path is aminer_path else absent,
+                args.input, None, company, args.inventory, files=[entry],
             ),
             per_file,
         ))
@@ -2177,11 +2192,17 @@ def cmd_inventory(args) -> None:
     # scaffolding reads the same file triage will, so a differently named export
     # scaffolds as readily as the benchmark's convention
     try:
-        source, _ = resolve_alert_files(args.input, company)
+        alert_files = resolve_alert_files(args.input, company)
     except FileNotFoundError as error:
         errors.print(f"[red]{error}[/red]")
         raise SystemExit(EXIT_ERROR)
-    _require(source, "wazuh alerts")
+    # an asset is one agent address, and only a wazuh export carries agent.ip
+    source = next(
+        (path for path, family in alert_files if family == WAZUH_FAMILY), None
+    )
+    if source is None:
+        errors.print(f"[red]wazuh alerts not found in:[/red] {args.input}")
+        raise SystemExit(EXIT_ERROR)
     out = args.out or (args.input / "inventory" / f"{company}.json")
 
     # One asset per agent address, because that is what the pipeline keys a

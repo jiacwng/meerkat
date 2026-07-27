@@ -7,7 +7,6 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 import pandas as pd
 
@@ -15,6 +14,7 @@ from core import event_labels, normalize
 from core.normalize import (
     AMINER_FAMILY,
     SNIFF_LINES,
+    SURICATA_FAMILY,
     WAZUH_FAMILY,
     resolve_alert_files,
     sniff_alert_family,
@@ -963,17 +963,19 @@ class FormatSniffing(unittest.TestCase):
 
 
 class ConventionFirst(unittest.TestCase):
-    def test_the_ait_naming_resolves_without_sniffing_anything(self):
-        # the demo and the benchmark run on <company>_wazuh.json, and the
-        # convention is tried first so their output cannot move
+    def test_the_ait_naming_wins_over_the_rest_of_the_directory(self):
+        # the demo and the benchmark read one company out of a directory holding
+        # all eight, so nobody else's export can join the answer
         directory = raw_directory()
         write_records(directory / "acme_wazuh.json", wazuh_record())
         write_records(directory / "acme_aminer.json", aminer_export_record())
-        with mock.patch.object(normalize, "sniff_alert_family") as sniffer:
-            wazuh, aminer = resolve_alert_files(directory, "acme")
-        sniffer.assert_not_called()
-        self.assertEqual(wazuh.name, "acme_wazuh.json")
-        self.assertEqual(aminer.name, "acme_aminer.json")
+        write_records(directory / "othercorp_wazuh.json", wazuh_record())
+        write_records(directory / "othercorp_aminer.json", aminer_export_record())
+        files = resolve_alert_files(directory, "acme")
+        self.assertEqual(
+            [(path.name, family) for path, family in files],
+            [("acme_aminer.json", AMINER_FAMILY), ("acme_wazuh.json", WAZUH_FAMILY)],
+        )
 
     def test_an_explicit_path_beats_the_convention_and_the_sniffer(self):
         # an analyst who names a file has looked at it, so the flag wins over
@@ -981,8 +983,8 @@ class ConventionFirst(unittest.TestCase):
         directory = raw_directory()
         write_records(directory / "acme_wazuh.json", wazuh_record())
         chosen = write_records(directory / "yesterday.json", wazuh_record())
-        wazuh, _ = resolve_alert_files(directory, "acme", wazuh_path=chosen)
-        self.assertEqual(wazuh, chosen)
+        files = resolve_alert_files(directory, "acme", wazuh_path=chosen)
+        self.assertEqual([path for path, _ in files], [chosen])
 
 
 class SniffedDiscovery(unittest.TestCase):
@@ -991,52 +993,54 @@ class SniffedDiscovery(unittest.TestCase):
         # single most common filename in the product is the bug being fixed
         directory = raw_directory()
         exported = write_records(directory / "alerts.json", wazuh_record())
-        wazuh, aminer = resolve_alert_files(directory, "acme")
-        self.assertEqual(wazuh, exported)
-        # both paths come back whether or not they exist; callers test .exists()
-        self.assertEqual(aminer, directory / "acme_aminer.json")
-        self.assertFalse(aminer.exists())
+        files = resolve_alert_files(directory, "acme")
+        # only files that are there come back, and every one of them is read
+        self.assertEqual(files, [(exported, WAZUH_FAMILY)])
 
     def test_an_arbitrarily_named_aminer_export_is_found(self):
         # the miner's output is renamed as often as wazuh's, and a company
         # running only the miner has to resolve on its own
         directory = raw_directory()
         exported = write_records(directory / "aminer-out-2026-07-26.json", aminer_export_record())
-        wazuh, aminer = resolve_alert_files(directory, "acme")
-        self.assertEqual(aminer, exported)
-        self.assertFalse(wazuh.exists())
+        files = resolve_alert_files(directory, "acme")
+        self.assertEqual(files, [(exported, AMINER_FAMILY)])
 
     def test_both_families_are_assigned_from_one_directory(self):
         # a company hands over one dump per detector with no shared naming, and
-        # each has to land in the right slot however they are ordered on disk
+        # each has to be recognised however they are ordered on disk
         directory = raw_directory()
         siem = write_records(directory / "zzz-siem-dump.json", wazuh_record())
         miner = write_records(directory / "aaa-miner-dump.json", aminer_export_record())
-        wazuh, aminer = resolve_alert_files(directory, "acme")
-        self.assertEqual(wazuh, siem)
-        self.assertEqual(aminer, miner)
+        files = resolve_alert_files(directory, "acme")
+        self.assertEqual(files, [(miner, AMINER_FAMILY), (siem, WAZUH_FAMILY)])
 
     def test_unreadable_files_are_skipped_rather_than_chosen(self):
         # the export usually arrives beside notes and configs, and one of those
-        # winning the wazuh slot would crash in the extractor, not here
+        # being read as alerts would crash in the extractor, not here
         directory = raw_directory()
         (directory / "a-notes.json").write_text("not json\n", encoding="utf-8")
         (directory / "b-empty.json").write_text("", encoding="utf-8")
         write_records(directory / "c-config.json", {"company": "acme"})
         exported = write_records(directory / "d-alerts.json", wazuh_record())
-        wazuh, _ = resolve_alert_files(directory, "acme")
-        self.assertEqual(wazuh, exported)
+        files = resolve_alert_files(directory, "acme")
+        self.assertEqual([path for path, _ in files], [exported])
 
-    def test_daily_archives_of_one_family_pick_the_first_by_name(self):
-        # a directory of dated exports is one file per day; first by name is the
-        # earliest for a dated name and is the same choice on every run
+    def test_every_daily_archive_of_one_family_is_read(self):
+        # a directory of dated exports is one file per day, and taking the first
+        # by name dropped the rest of the week with no message at all
         directory = raw_directory()
         for day in ("03", "01", "02"):
             write_records(directory / f"alerts-2026-07-{day}.json", wazuh_record())
-        first, _ = resolve_alert_files(directory, "acme")
-        second, _ = resolve_alert_files(directory, "acme")
-        self.assertEqual(first.name, "alerts-2026-07-01.json")
-        self.assertEqual(second, first)
+        files = resolve_alert_files(directory, "acme")
+        self.assertEqual(
+            [path.name for path, _ in files],
+            [
+                "alerts-2026-07-01.json",
+                "alerts-2026-07-02.json",
+                "alerts-2026-07-03.json",
+            ],
+        )
+        self.assertEqual(resolve_alert_files(directory, "acme"), files)
 
     def test_a_directory_with_nothing_recognisable_lists_what_was_there(self):
         # wrong --input is the usual cause, so the error has to show the files it
@@ -1066,6 +1070,165 @@ class SniffedDiscovery(unittest.TestCase):
         with self.assertRaises(FileNotFoundError) as caught:
             resolve_alert_files(directory, "acme", wazuh_path=directory / "typo.json")
         self.assertIn("typo.json", str(caught.exception))
+
+
+# Suricata writes eve.json itself, without the wazuh envelope, and a client tree
+# often holds one of those beside the wazuh export rather than instead of it.
+
+
+def eve_alert_record(signature: str = "ET SCAN Nmap Scripting Engine") -> dict:
+    return {
+        "timestamp": "2022-01-21T00:20:00.123456+0000",
+        "flow_id": 1741725479112999,
+        "event_type": "alert",
+        "src_ip": "10.0.0.9",
+        "src_port": 44321,
+        "dest_ip": "10.0.0.1",
+        "dest_port": 80,
+        "proto": "TCP",
+        "alert": {
+            "action": "allowed",
+            "signature_id": 2009582,
+            "signature": signature,
+            "category": "Attempted Information Leak",
+            "severity": 2,
+        },
+    }
+
+
+def eve_other_records() -> list[dict]:
+    # every eve line carries the object its event_type names
+    return [
+        {"timestamp": "2022-01-21T00:20:01.000000+0000", "event_type": kind, kind: {}}
+        for kind in ("netflow", "dns", "stats", "tls", "flow")
+    ]
+
+
+class NativeSuricataExports(unittest.TestCase):
+    def build(self, *files: tuple[str, list[dict]]) -> Path:
+        root = Path(tempfile.mkdtemp())
+        raw = root / "raw"
+        raw.mkdir()
+        for name, records in files:
+            write_records(raw / name, *records)
+        (root / "labels.csv").write_text(
+            "scenario,attack,start,end\n", encoding="utf-8"
+        )
+        write_company_inventory(
+            root / "company.json", ("mail", "10.0.0.1", ("servers",))
+        )
+        return raw
+
+    def normalized(self, raw: Path) -> pd.DataFrame:
+        root = raw.parent
+        return normalize.normalize_scenario(
+            raw, root / "labels.csv", "demo", root / "company.json"
+        )
+
+    def test_a_wazuh_export_and_an_eve_file_in_one_tree_are_both_read(self):
+        # CAM-LDS ships both, and returning one file per detector read the wazuh
+        # half and dropped the eve half with no message at all
+        raw = self.build(
+            ("alerts.json", [wazuh_record()]),
+            ("eve.json", [eve_alert_record()]),
+        )
+        self.assertEqual(
+            [family for _, family in resolve_alert_files(raw, "demo")],
+            [SURICATA_FAMILY, WAZUH_FAMILY],
+        )
+        frame = self.normalized(raw)
+        self.assertEqual(
+            sorted(frame["source_file"].astype(str)), ["alerts.json", "eve.json"]
+        )
+        self.assertEqual(
+            sorted(frame["detector_source"].astype(str)), ["suricata", "wazuh"]
+        )
+
+    def test_an_eve_file_on_its_own_reads_as_suricata(self):
+        # a company running suricata without wazuh has no envelope anywhere, and
+        # the severity scale is the detector's own 1-3 either way
+        frame = self.normalized(self.build(("eve.json", [eve_alert_record()])))
+        self.assertEqual(list(frame["detector_source"].astype(str)), ["suricata"])
+        self.assertEqual(list(frame["name"]), ["ET SCAN Nmap Scripting Engine"])
+        self.assertEqual(list(frame["severity"]), [2.0])
+        self.assertEqual(list(frame["host"].astype(str)), ["mail"])
+
+    def test_the_lines_that_are_not_alerts_are_skipped_rather_than_fatal(self):
+        # eve.json holds every event type suricata emits, so most of the file is
+        # flow and dns records that no reader can turn into an alert
+        raw = self.build(
+            ("eve.json", [*eve_other_records(), eve_alert_record(), *eve_other_records()])
+        )
+        frame = self.normalized(raw)
+        self.assertEqual(list(frame["detector_source"].astype(str)), ["suricata"])
+        # the skipped lines still count, so `inspect --raw` finds the line again
+        self.assertEqual(list(frame["source_position"]), [5])
+
+    def test_an_alert_wazuh_forwarded_from_eve_json_is_counted_once(self):
+        # a wazuh agent tailing /var/log/suricata/eve.json sends on the alert the
+        # file already holds, and its decoder writes the numbers back as strings
+        alert = eve_alert_record()
+        forwarded = {
+            "timestamp": "2022-01-21T00:20:05.000000+0000",
+            "rule": {"description": "Suricata alert", "level": 6},
+            "agent": {"id": "001", "name": "inetfw", "ip": "10.0.0.254"},
+            "location": "/var/log/suricata/eve.json",
+            "data": {
+                **{k: str(v) for k, v in alert.items() if k != "alert"},
+                "alert": {k: str(v) for k, v in alert["alert"].items()},
+            },
+        }
+        raw = self.build(
+            ("alerts.json", [forwarded]),
+            ("eve.json", [alert]),
+        )
+        frame = self.normalized(raw)
+        # the copy kept is suricata's own, so the file it came from says eve.json
+        self.assertEqual(list(frame["source_file"].astype(str)), ["eve.json"])
+
+    def test_two_copies_inside_one_file_are_both_kept(self):
+        # suricata does log the same signature twice on a burst, and russellmitchell
+        # has 20 such lines, so a repeat within one file is not a duplicate
+        raw = self.build(("eve.json", [eve_alert_record(), eve_alert_record()]))
+        self.assertEqual(len(self.normalized(raw)), 2)
+
+    def test_an_eve_file_beside_the_conventional_export_is_read(self):
+        # the convention covers wazuh and the miner, so suricata's own file is
+        # the one it says nothing about and it used to be dropped
+        raw = self.build(
+            ("demo_wazuh.json", [wazuh_record()]),
+            ("eve.json", [eve_alert_record()]),
+        )
+        self.assertEqual(
+            [(path.name, family) for path, family in resolve_alert_files(raw, "demo")],
+            [("eve.json", SURICATA_FAMILY), ("demo_wazuh.json", WAZUH_FAMILY)],
+        )
+
+    def test_a_named_file_is_still_the_only_one_read(self):
+        # --wazuh-file is how an analyst says "this export, not the directory",
+        # so an eve.json sitting beside it must not be added to the answer
+        raw = self.build(
+            ("yesterday.json", [wazuh_record()]),
+            ("eve.json", [eve_alert_record()]),
+        )
+        chosen = raw / "yesterday.json"
+        self.assertEqual(
+            resolve_alert_files(raw, "demo", wazuh_path=chosen),
+            [(chosen, WAZUH_FAMILY)],
+        )
+
+    def test_a_named_miner_file_is_still_the_only_one_read(self):
+        # the same for --aminer-file: naming one file replaces the search, and
+        # the eve file next to it is not a second opinion
+        raw = self.build(
+            ("miner.json", [aminer_export_record()]),
+            ("eve.json", [eve_alert_record()]),
+        )
+        chosen = raw / "miner.json"
+        self.assertEqual(
+            resolve_alert_files(raw, "demo", aminer_path=chosen),
+            [(chosen, AMINER_FAMILY)],
+        )
 
 
 if __name__ == "__main__":
