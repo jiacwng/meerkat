@@ -36,7 +36,12 @@ from core.features import (
 from core.inventory import Inventory, load_inventory
 from core.normalize import load_attack_windows, normalize_scenario
 from core.scenario_eval import TriageBundle, add_window_ids
-from core.sessions import SESSION_GAP_S, build_families, build_sessions
+from core.sessions import (
+    FAMILY_KEY,
+    SESSION_GAP_S,
+    build_families,
+    build_sessions,
+)
 from core.triage_policy import daily_queue
 
 SCENARIOS = (
@@ -268,8 +273,28 @@ def _brier(probability: np.ndarray, target: pd.Series) -> float:
     return float(np.mean((probability - target.astype(float).to_numpy()) ** 2))
 
 
+# the four baselines the results table compares against, recovered from the
+# archived experiment that produced it. Only the ordering signal changes.
+def _ranker_signals(families, learned, severity, rng):
+    return {
+        "family re-ranker": learned,
+        "best child session": families["child_score_max"],
+        "family size": families["alert_count"],
+        "native severity": severity,
+        "random": pd.Series(rng.random(len(families)), index=families.index),
+    }
+
+
+# severity lives on sessions, and adding it to build_families would put a
+# benchmark-only column in the product
+def _family_severity(scored, families):
+    per_family = scored.groupby(list(FAMILY_KEY), observed=True)["severity_max"].max()
+    keys = pd.MultiIndex.from_frame(families[list(FAMILY_KEY)])
+    return pd.Series(per_family.reindex(keys).to_numpy(), index=families.index)
+
+
 def _summarize(per_fold: pd.DataFrame) -> pd.DataFrame:
-    averages = per_fold.groupby("budget", as_index=False).agg(
+    averages = per_fold.groupby(["ranker", "budget"], as_index=False).agg(
         precision=("precision", "mean"),
         labelled_alert_coverage=("labelled_alert_coverage", "mean"),
         distinct_categories=("distinct_categories", "mean"),
@@ -283,11 +308,11 @@ def _summarize(per_fold: pd.DataFrame) -> pd.DataFrame:
         median_child_sessions=("median_child_sessions", "median"),
         p90_child_sessions=("p90_child_sessions", "median"),
     )
-    totals = per_fold.groupby(["seed", "budget"], as_index=False).agg(
+    totals = per_fold.groupby(["ranker", "seed", "budget"], as_index=False).agg(
         strict_windows=("strict_windows", "sum"),
         temporal_overlap_windows=("temporal_overlap_windows", "sum"),
     )
-    window_summary = totals.groupby("budget", as_index=False).agg(
+    window_summary = totals.groupby(["ranker", "budget"], as_index=False).agg(
         strict_windows_mean=("strict_windows", "mean"),
         strict_windows_min=("strict_windows", "min"),
         strict_windows_max=("strict_windows", "max"),
@@ -295,7 +320,7 @@ def _summarize(per_fold: pd.DataFrame) -> pd.DataFrame:
         temporal_overlap_windows_min=("temporal_overlap_windows", "min"),
         temporal_overlap_windows_max=("temporal_overlap_windows", "max"),
     )
-    return window_summary.merge(averages, on="budget")
+    return window_summary.merge(averages, on=["ranker", "budget"])
 
 
 def _summarize_calibration(calibration: pd.DataFrame) -> pd.DataFrame:
@@ -377,18 +402,26 @@ def evaluate_scenarios(
                 ),
             })
 
-            for budget in budgets:
-                queue = daily_queue(families, budget)
-                metric_rows.append({
-                    "seed": seed,
-                    "scenario": test_scenario,
-                    **_queue_metrics(
-                        queue,
-                        families,
-                        total_labelled[test_scenario],
-                        budget,
-                    ),
-                })
+            rng = np.random.default_rng(seed)
+            learned = families["ranking_score"].copy()
+            severity = _family_severity(scored, families)
+            signals = _ranker_signals(families, learned, severity, rng)
+            for ranker, signal in signals.items():
+                families["ranking_score"] = signal
+                for budget in budgets:
+                    queue = daily_queue(families, budget)
+                    metric_rows.append({
+                        "seed": seed,
+                        "scenario": test_scenario,
+                        "ranker": ranker,
+                        **_queue_metrics(
+                            queue,
+                            families,
+                            total_labelled[test_scenario],
+                            budget,
+                        ),
+                    })
+            families["ranking_score"] = learned
 
     per_fold = pd.DataFrame(metric_rows)
     calibration = pd.DataFrame(calibration_rows)

@@ -498,8 +498,11 @@ class ScenarioEvaluationTests(unittest.TestCase):
         )
 
         self.assertEqual(set(report.per_fold["scenario"]), set(self.frames))
-        self.assertEqual(len(report.per_fold), 3)
-        self.assertEqual(list(report.summary["budget"]), [1])
+        rankers = set(report.per_fold["ranker"])
+        self.assertIn("family re-ranker", rankers)
+        self.assertEqual(len(report.per_fold), 3 * len(rankers))
+        self.assertEqual(set(report.summary["budget"]), {1})
+        self.assertEqual(len(report.summary), len(rankers))
         self.assertEqual(len(report.calibration), 3)
         self.assertEqual(len(report.calibration_summary), 1)
         self.assertIn("pooled_calibrated_brier", report.calibration_summary)
@@ -615,10 +618,8 @@ class ScenarioEvaluationTests(unittest.TestCase):
                 seeds=(0,),
             )
 
-        self.assertEqual(len(queued_scores), len(self.frames))
-        self.assertTrue(
-            all(scores.eq(0.123).all() for scores in queued_scores)
-        )
+        learned = [s for s in queued_scores if s.eq(0.123).all()]
+        self.assertEqual(len(learned), len(self.frames))
 
     def test_queue_reports_strict_and_temporal_window_coverage_together(self):
         # the headline 58 of 60 counts strictly labelled windows, so the
