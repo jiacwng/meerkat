@@ -86,13 +86,34 @@ across environments, so the held-out environment feeds neither. Each cell counts
 how many labelled attack windows the daily queue reaches at a review budget of K
 families per day, averaged over seeds 53, 52 and 51 with 200 trees.
 
-| Ranker | K=5 | K=10 | K=25 |
-|---|---:|---:|---:|
-| **Family re-ranker (ours)** | **51** | **58** | **58** |
-| Best child session | 44 | 54 | 58 |
-| Family size | 29 | 30 | 39 |
-| Native detector severity | 19 | 33 | 46 |
-| Random | 21 | 31 | 45 |
+| Ranker | K=5 | K=10 | K=25 | nDCG@10 |
+|---|---:|---:|---:|---:|
+| **Family re-ranker (ours)** | **51** | **58** | **58** | 0.839 |
+| Best child session | 44 | 54 | 58 | **0.862** |
+| Family size | 29 | 30 | 39 | 0.232 |
+| Native detector severity | 19 | 33 | 46 | 0.307 |
+| Random | 22 | 32 | 44 | 0.217 |
+
+`python -m bench.evaluate` regenerates every row. The random row is seeded per
+fold and lands within about one window of the value first published, 21/31/45.
+
+## Coverage and nDCG order the rankers differently
+
+nDCG@k is the metric the 2026 survey *AI-Driven Security Alert Screening and
+Alert Fatigue Mitigation in SOCs* proposes for this task, with k set to the
+analyst's daily capacity. It scores relevance per item with a position discount.
+
+By that column best child session is first at every budget, although it reaches
+seven fewer attack windows at K=5. Random reaches more windows than family size
+at K=25 and still scores lower.
+
+The cause is that nDCG counts each queued family on its own. Ten families that
+cover one window and ten that cover ten windows score the same, because every
+family in both queues is relevant. Coverage counts the windows instead. The
+survey defines the objective as threat coverage within the analyst time budget,
+so the metric it proposes does not measure that objective.
+
+Both columns are given here.
 
 Detector ceilings bound every row above. Read a low number against its ceiling
 before reading it as a ranking failure:

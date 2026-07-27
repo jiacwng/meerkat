@@ -16,7 +16,7 @@
   <a href="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml">
     <img src="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml/badge.svg" alt="CI status">
   </a>
-  <img src="https://img.shields.io/badge/tests-287%20passing-brightgreen" alt="287 tests passing">
+  <img src="https://img.shields.io/badge/tests-355%20passing-brightgreen" alt="355 tests passing">
   <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 to 3.13">
   <img src="https://img.shields.io/badge/license-MIT-informational" alt="MIT license">
 </p>
@@ -357,9 +357,12 @@ eighth, so the network being scored is never one it trained on.
 | Best single session in the family | 44 | 54 | 58 |
 | Family size (alert count) | 29 | 30 | 39 |
 | Detectors' own severity | 19 | 33 | 46 |
-| Random order | 21 | 31 | 45 |
+| Random order | 22 | 32 | 44 |
 
-Attack steps reached, at budgets of 5, 10 and 25 families a day. 60 of the 79
+Attack steps reached, at budgets of 5, 10 and 25 families a day. Ranked instead
+by nDCG, the metric usually proposed for this task, the second row wins at every
+budget while reaching seven fewer attack steps at a budget of 5. See
+[bench/README.md](bench/README.md). 60 of the 79
 scripted steps are findable at all; the rest produce no labelled alert from any
 detector. Without AMiner, 41 are findable and Meerkat still reaches all 41.
 
