@@ -102,34 +102,41 @@ across environments, so the held-out environment feeds neither. Each cell counts
 how many labelled attack windows the daily queue reaches at a review budget of K
 families per day, averaged over seeds 53, 52 and 51 with 200 trees.
 
-| Ranker | K=5 | K=10 | K=25 | nDCG@10 |
-|---|---:|---:|---:|---:|
-| **Family re-ranker (ours)** | **51** | **58** | **58** | 0.839 |
-| Best child session | 44 | 54 | 58 | **0.862** |
-| Family size | 29 | 30 | 39 | 0.232 |
-| Native detector severity | 19 | 33 | 46 | 0.307 |
-| Random | 22 | 32 | 44 | 0.217 |
+A family counts toward a window only when it holds an alert labelled to it.
+Beside each count, the alerts the queue contains and their share of the day,
+because a ranker can buy windows by queueing the biggest items.
 
-`python -m bench.evaluate` regenerates every row. The random row is seeded per
-fold and lands within about one window of the value first published, 21/31/45.
+| Ranker | windows K=5 | K=10 | K=25 | alerts@10 | share@10 |
+|---|---:|---:|---:|---:|---:|
+| **Family re-ranker (ours)** | **51** | **58** | **58** | **29,597** | **25%** |
+| Best child session | 44 | 54 | 58 | 219,506 | 30% |
+| Family size | 29 | 30 | 39 | 284,595 | 93% |
+| Native detector severity | 19 | 33 | 46 | 23,279 | 7% |
+| Random | 22 | 32 | 44 | 46,767 | 18% |
+| Floor: one item per day | 60 | 60 | 60 | 293,637 | 100% |
 
-## Coverage and nDCG order the rankers differently
+`python -m bench.evaluate` regenerates every row and writes `sign_tests.csv`,
+exact sign tests per seed over the eight folds. Against family size, severity
+and random order the re-ranker separates on every seed (p 0.008 to 0.031).
+Against best child session it does not: identical windows at K=25, 3 of 8
+folds differ at K=10. The difference between those two is the cost column.
+Seeds are tested one by one, never averaged first.
 
-nDCG@k is the metric the 2026 survey *AI-Driven Security Alert Screening and
-Alert Fatigue Mitigation in SOCs* proposes for this task, with k set to the
-analyst's daily capacity. It scores relevance per item with a position discount.
+The floor row is why the cost column exists. Merging items can only raise
+coverage at a fixed K, and one item holding the whole day reaches every
+findable window at K=1. A grouping earns its place by beating that row on
+cost.
 
-By that column best child session is first at every budget, although it reaches
-seven fewer attack windows at K=5. Random reaches more windows than family size
-at K=25 and still scores lower.
+## The metric is S-recall
 
-The cause is that nDCG counts each queued family on its own. Ten families that
-cover one window and ten that cover ten windows score the same, because every
-family in both queues is relevant. Coverage counts the windows instead. The
-survey defines the objective as threat coverage within the analyst time budget,
-so the metric it proposes does not measure that objective.
-
-Both columns are given here.
+Coverage here is subtopic recall from Zhai, Cohen and Lafferty (SIGIR 2003):
+the share of distinct subtopics, here attack windows, covered by the first K
+results. nDCG@k, the metric the 2026 survey *AI-Driven Security Alert Screening
+and Alert Fatigue Mitigation in SOCs* proposes, is the other end of one family:
+alpha-nDCG (Clarke et al., SIGIR 2008) pays a repeated subtopic (1-alpha) less
+each time, alpha=0 is plain nDCG, and this table is the alpha=1 end without the
+position discount. By nDCG best child session wins every budget while reaching
+seven fewer windows at K=5. Both columns are in the output.
 
 Detector ceilings bound every row above. Read a low number against its ceiling
 before reading it as a ranking failure:
@@ -167,3 +174,8 @@ Meerkat is MIT licensed. The alert files are from AIT-ADS under CC BY 4.0, and
 the repository ships one of the eight environments; `NOTICE` records what is
 included and how to attribute it. Cite the dataset if you publish anything
 from these numbers. The references sit in `CITATION.cff` at the repository root.
+
+`bench/camlds.py` converts a CAM-LDS scenario, Zenodo record
+[18861762](https://zenodo.org/records/18861762), CC BY 4.0, into the same
+layout. Nothing from it ships. Its labels are attack windows without per-alert
+truth, so it supports drift and transfer measurements, not coverage.

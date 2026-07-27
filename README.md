@@ -352,20 +352,29 @@ simulated company networks in which a scripted attack was run and every alert it
 produced was labelled. The model trains on seven networks and is scored on the
 eighth, so the network being scored is never one it trained on.
 
-| Ranking method | 5 | 10 | 25 |
-|---|---:|---:|---:|
-| **Meerkat** | **51** | **58** | **58** |
-| Best single session in the family | 44 | 54 | 58 |
-| Family size (alert count) | 29 | 30 | 39 |
-| Detectors' own severity | 19 | 33 | 46 |
-| Random order | 22 | 32 | 44 |
+Before any ranking, the grouping does the heavy lifting: an average company-day
+of 56,899 alerts becomes 78 review items, and the item count stays between 59
+and 86 while daily volume ranges from 9,012 to 109,497.
 
-Attack steps reached, at budgets of 5, 10 and 25 families a day. Ranked instead
-by nDCG, the metric usually proposed for this task, the second row wins at every
-budget while reaching seven fewer attack steps at a budget of 5. See
-[bench/README.md](bench/README.md). 60 of the 79
-scripted steps are findable at all; the rest produce no labelled alert from any
-detector. Without AMiner, 41 are findable and Meerkat still reaches all 41.
+Coverage is then reported next to what the queue costs to read, because
+reaching attack steps by queueing the biggest items is not triage. At a budget
+of 10 families a day:
+
+| Ranking method | steps reached | alerts inside the queue | share of the day |
+|---|---:|---:|---:|
+| **Meerkat** | **58** | **29,597** | **25%** |
+| Best single session in the family | 54 | 219,506 | 30% |
+| Family size (alert count) | 30 | 284,595 | 93% |
+| Detectors' own severity | 33 | 23,279 | 7% |
+| Random order | 32 | 46,767 | 18% |
+| Reviewing everything | 60 | 293,637 | 100% |
+
+A step counts as reached only when the queue holds an alert labelled to it.
+On steps alone the first two rows are close; Meerkat reads 4 to 7 times fewer
+alerts for them. The last row reviews the whole day as one item and is the
+ceiling. 60 of the 79 scripted steps are findable at all; without AMiner, 41
+are, and Meerkat reaches all 41. Full tables and the tests behind every
+comparison: [bench/README.md](bench/README.md).
 
 The [technical report](docs/report/meerkat.pdf) covers the method, the designs
 that were dropped, and the limits of the evaluation.
