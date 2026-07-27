@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-Ranking unchanged: 58 of 60 attack windows at a budget of 10.
+Scores unchanged: the normalized frame digest is `4b390168afda96bf` before and
+after.
 
 ### Breaking
 
@@ -27,8 +28,15 @@ Ranking unchanged: 58 of 60 attack windows at a budget of 10.
 - `--json` on `queue` and `runs`. Errors go to stderr.
 - `queue --budget`, recuts a saved run without rescoring.
 - Alert files resolved by name first, `<company>_wazuh.json` and
-  `<company>_aminer.json`, then by format. One file per detector, the first in
-  alphabetical order. `--wazuh-file` and `--aminer-file` override.
+  `<company>_aminer.json`, then by format. Every recognised file is read,
+  including a native Suricata `eve.json` beside a Wazuh export. `--wazuh-file`
+  and `--aminer-file` read only the named file.
+- `bench/digest.py`, says in seconds whether a change moved the normalized
+  frame.
+- `bench/camlds.py`, converts a CAM-LDS scenario (Zenodo 18861762, CC BY 4.0)
+  into the layout meerkat reads. No dataset content ships.
+- The evaluation reports the alerts a queue contains and their share of the
+  day, a one-item-per-day floor row, and exact sign tests per seed.
 - OCSF-anchored role vocabulary. `--list-roles`.
 - `bench/check`, verifies the benchmark layout.
 - `CITATION.cff`.
@@ -45,6 +53,9 @@ Ranking unchanged: 58 of 60 attack windows at a budget of 10.
 
 ### Fixed
 
+- A Suricata alert forwarded by Wazuh from `eve.json` is counted once when both
+  files are present. Repeats inside one file are kept.
+- Wazuh's own `timestamp` field is read beside Elastic's `@timestamp`.
 - Malformed alert lines, inventories and incident CSVs report the file and the
   problem instead of raising.
 - The chunked alert reader behind `triage`, `check`, `drift` and `retrain` reads
