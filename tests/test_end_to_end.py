@@ -23,6 +23,14 @@ REPO = Path(__file__).resolve().parents[1]
 BUNDLE = REPO / "models" / "meerkat_bundle.skops"
 
 
+def bundle_fetched() -> bool:
+    # CI checks out without LFS, so the bundle exists as a pointer file there
+    if not BUNDLE.exists():
+        return False
+    with BUNDLE.open("rb") as fh:
+        return not fh.read(24).startswith(b"version https://git-lfs")
+
+
 def run(args, cwd):
     # cwd is the user's own directory, so the package comes from the checkout.
     # utf-8 pinned on both sides: the queue draws box characters that cp1252
@@ -35,7 +43,7 @@ def run(args, cwd):
     )
 
 
-@unittest.skipUnless(BUNDLE.exists(), "model bundle not fetched (git lfs)")
+@unittest.skipUnless(bundle_fetched(), "model bundle not fetched (git lfs pull)")
 class EndToEndTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
