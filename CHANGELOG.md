@@ -58,6 +58,8 @@ after.
   the export. The log path is read from `LogData.LogResources` beside
   `AnalysisComponent.LogResource`.
 - A miner line with the wrapper but no analysis block stopped the whole ingest.
+- `--help` and the read commands no longer import scikit-learn. Cold start drops
+  from four seconds to under one; a test keeps it that way.
 - Malformed alert lines, inventories and incident CSVs report the file and the
   problem instead of raising.
 - The chunked alert reader behind `triage`, `check`, `drift` and `retrain` reads

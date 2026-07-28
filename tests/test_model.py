@@ -979,7 +979,11 @@ class TestCompareModels(unittest.TestCase):
 
         with unittest.mock.patch.object(
             cli, "incident_reach_for", side_effect=lambda *a, **k: next(calls)
-        ), unittest.mock.patch.object(cli, "rescale_bundle", side_effect=lambda b, s: b):
+        ), unittest.mock.patch(
+            # rescale_bundle is imported inside compare_models now, so the patch
+            # targets the module it is read from at call time
+            "core.scenario_eval.rescale_bundle", side_effect=lambda b, s: b,
+        ):
             return cli.compare_models(
                 object(), [object()] * len(candidate_hits),
                 None, None, list(range(total)), None, 10,

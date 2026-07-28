@@ -32,12 +32,6 @@ from core.attack_mapping import (
     export_navigator_layer,
     technique_name,
 )
-from core.classifier import (
-    UntrustedBundleError,
-    load_model,
-    read_provenance,
-    save_model,
-)
 from core.drift import (
     PSI_MAJOR,
     UNSEEN_RULE_WARN,
@@ -65,12 +59,6 @@ from core.normalize import (
     resolve_alert_files,
 )
 from core.roles import CANONICAL_ROLES, role_sources
-from core.scenario_eval import (
-    add_window_ids,
-    refit_forest,
-    rescale_bundle,
-    score_sessions,
-)
 from core.sessions import SECONDS_PER_DAY, build_sessions
 from core.triage_policy import enrich_alerts, queue_order
 from meerkat import __version__
@@ -828,6 +816,9 @@ def _require_bundle(path: Path) -> None:
 
 def _load_bundle(path: Path):
     _require_bundle(path)
+    # imported here so the read commands never pay for the ML stack
+    from core.classifier import UntrustedBundleError, load_model, read_provenance
+
     # sklearn warns once per estimator on a version mismatch, which is a wall of
     # noise for one fact
     # the refusal message is the control that tells the user what is wrong with
@@ -927,6 +918,8 @@ def _score_company(
     wazuh_file: Path | None = None,
     aminer_file: Path | None = None,
 ):
+    from core.scenario_eval import add_window_ids, score_sessions
+
     inventory = load_inventory(inventory_path)
     # an inventory scaffolded by `meerkat inventory` has empty roles until
     # someone fills them in, and the queue changes quietly rather than failing,
@@ -1382,6 +1375,8 @@ def _validate_retrain_result(old, new) -> None:
 def incident_reach_for(
     candidate, held, alerts, held_incidents, inventory, budget: int
 ):
+    from core.scenario_eval import score_sessions
+
     families = decorate_families(score_sessions(candidate, held)[1], alerts, budget)
     return _incident_reach(families, held_incidents, inventory, budget)
 
@@ -1395,6 +1390,8 @@ def compare_models(
     inventory,
     budget: int,
 ) -> dict:
+    from core.scenario_eval import rescale_bundle
+
     # A client chooses between two things they could deploy: the bundle as
     # downloaded, or a retrained one. The rescale-only arm is measured so they can
     # see how much of any gain needed no labels at all, and it is reported rather
@@ -1429,6 +1426,9 @@ def compare_models(
 
 
 def cmd_retrain(args) -> None:
+    from core.classifier import save_model
+    from core.scenario_eval import refit_forest
+
     _require(args.incidents, "incident records")
     _require(args.inventory, "inventory")
     _require_bundle(args.model)
@@ -1675,6 +1675,8 @@ DRIFT_MIN_TRAINING = 300
 
 
 def cmd_drift(args) -> None:
+    from core.scenario_eval import score_sessions
+
     company = _open_company(args)
     bundle = _load_bundle(args.model)
     profile = getattr(bundle, "profile", None)
