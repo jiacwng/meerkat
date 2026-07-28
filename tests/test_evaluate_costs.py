@@ -11,6 +11,7 @@ from bench.evaluate import (
     _exact_sign_p,
     _floor_metrics,
     _queue_metrics,
+    parse_budgets,
     sign_tests,
 )
 
@@ -105,6 +106,43 @@ class SignTestTableTests(unittest.TestCase):
         self.assertEqual(against["best child session"], "not separable (n_eff=3)")
         # the floor is a different unit, so it is never tested as a ranker
         self.assertNotIn("floor: one item per day", against)
+
+    def test_five_informative_folds_cannot_print_a_p(self):
+        # 2/2^5 = 0.0625: no p under .05 exists, so no p is printed
+        per_fold = pd.DataFrame(
+            self.rows("family re-ranker", [5, 5, 5, 5, 5, 4, 4, 4])
+            + self.rows("random", [4, 4, 4, 4, 4, 4, 4, 4])
+        )
+        table = sign_tests(per_fold)
+        self.assertEqual(table["verdict"].iloc[0], "not separable (n_eff=5)")
+
+    def test_the_test_runs_on_any_metric_column(self):
+        # the claim is cheaper at equal coverage, so cost must be testable too
+        per_fold = pd.DataFrame(
+            self.rows("family re-ranker", [5] * 8)
+            + self.rows("random", [4] * 8)
+        )
+        for row in per_fold.to_dict("records"):
+            row["alerts_in_queue"] = 100 if row["ranker"] == "random" else 900
+        per_fold["alerts_in_queue"] = [
+            900 if ranker == "family re-ranker" else 100
+            for ranker in per_fold["ranker"]
+        ]
+        table = sign_tests(per_fold, metric="alerts_in_queue")
+        self.assertEqual(list(table["metric"].unique()), ["alerts_in_queue"])
+        self.assertEqual(table["verdict"].iloc[0], "p=0.008")
+
+
+class BudgetParserTests(unittest.TestCase):
+    def test_a_comma_list_and_a_range_parse(self):
+        self.assertEqual(parse_budgets("5,10,25"), (5, 10, 25))
+        self.assertEqual(parse_budgets("1-4"), (1, 2, 3, 4))
+        self.assertEqual(parse_budgets("1-3,10"), (1, 2, 3, 10))
+
+    def test_duplicates_collapse_and_zero_is_refused(self):
+        self.assertEqual(parse_budgets("5,5,5"), (5,))
+        with self.assertRaises(ValueError):
+            parse_budgets("0-3")
 
 
 if __name__ == "__main__":

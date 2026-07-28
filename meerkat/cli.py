@@ -72,7 +72,7 @@ from core.scenario_eval import (
     score_sessions,
 )
 from core.sessions import SECONDS_PER_DAY, build_sessions
-from core.triage_policy import enrich_alerts
+from core.triage_policy import enrich_alerts, queue_order
 from meerkat import __version__
 
 DEFAULT_MODEL = Path("models/meerkat_bundle.skops")
@@ -176,11 +176,7 @@ def decorate_families(
 ) -> pd.DataFrame:
     # order every scored family the way the queue orders them, then hand out
     # F001, F002... down that list so the top-K per day keep the low numbers
-    ordered = families.sort_values(
-        ["day", "ranking_score", "start", "representative_session_id"],
-        ascending=[True, False, True, True],
-        kind="stable",
-    ).reset_index(drop=True)
+    ordered = queue_order(families).reset_index(drop=True)
     ordered["handle"] = [f"F{i + 1:03d}" for i in range(len(ordered))]
     ordered["queue_rank"] = ordered.groupby("day", sort=False).cumcount()
     ordered["in_queue"] = ordered["queue_rank"] < budget
