@@ -260,6 +260,17 @@ def extract_suricata_fields(
     
 
 
+# the field moved between releases: a list in LogData, then one string per record
+def aminer_log_resources(record: dict) -> list[str]:
+    resources = (record.get("LogData") or {}).get("LogResources")
+    if not resources:
+        single = (record.get("AnalysisComponent") or {}).get("LogResource")
+        resources = [single] if single else []
+    if isinstance(resources, str):
+        resources = [resources]
+    return [str(resource) for resource in resources]
+
+
 def aminer_host_candidates(record: dict) -> set[str]:
     candidates = set()
     raw_lines = record["LogData"]["RawLogData"]
@@ -292,12 +303,13 @@ def extract_aminer_fields(
     record: dict,
     inventory: Inventory,
 ) -> ExtractedFields:
-    observer_id = str(record["AMiner"]["ID"])
+    # the AMiner envelope comes from the export, so it is optional
+    observer_id = str((record.get("AMiner") or {}).get("ID") or "")
     analysis = record["AnalysisComponent"]
     component = analysis["AnalysisComponentName"]
     log_data = record["LogData"]
     entity_id = observer_id
-    for resource in log_data.get("LogResources") or []:
+    for resource in aminer_log_resources(record):
         match = re.search(r"/var/log/logstash/([^/]+)/", str(resource))
         if match:
             forwarded_ip = inventory.ip_by_hostname.get(match.group(1).casefold())
@@ -718,7 +730,14 @@ def read_family_record(record: dict, family: str) -> tuple[dict, str] | None:
         # the family is decided from the first few lines, so a mixed export, or
         # one line shaped like a miner record, used to reach the extractor and
         # raise KeyError there. Wazuh's branch has always checked per record.
-        if "AMiner" not in record or "LogData" not in record:
+        # The blocks checked are the miner's own; the envelope is the export's.
+        analysis = record.get("AnalysisComponent")
+        log_data = record.get("LogData")
+        if not isinstance(analysis, dict) or not isinstance(log_data, dict):
+            return None
+        if "AnalysisComponentName" not in analysis:
+            return None
+        if not log_data.get("RawLogData") or not log_data.get("Timestamps"):
             return None
         return record, "aminer"
     if family == SURICATA_FAMILY:

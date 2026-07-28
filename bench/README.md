@@ -174,8 +174,3 @@ Meerkat is MIT licensed. The alert files are from AIT-ADS under CC BY 4.0, and
 the repository ships one of the eight environments; `NOTICE` records what is
 included and how to attribute it. Cite the dataset if you publish anything
 from these numbers. The references sit in `CITATION.cff` at the repository root.
-
-`bench/camlds.py` converts a CAM-LDS scenario, Zenodo record
-[18861762](https://zenodo.org/records/18861762), CC BY 4.0, into the same
-layout. Nothing from it ships. Its labels are attack windows without per-alert
-truth, so it supports drift and transfer measurements, not coverage.
