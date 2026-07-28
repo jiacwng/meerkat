@@ -33,8 +33,6 @@ after.
   and `--aminer-file` read only the named file.
 - `bench/digest.py`, says in seconds whether a change moved the normalized
   frame.
-- `bench/camlds.py`, converts a CAM-LDS scenario (Zenodo 18861762, CC BY 4.0)
-  into the layout meerkat reads. No dataset content ships.
 - The evaluation reports the alerts a queue contains and their share of the
   day, a one-item-per-day floor row, and exact sign tests per seed.
 - OCSF-anchored role vocabulary. `--list-roles`.
@@ -56,6 +54,10 @@ after.
 - A Suricata alert forwarded by Wazuh from `eve.json` is counted once when both
   files are present. Repeats inside one file are kept.
 - Wazuh's own `timestamp` field is read beside Elastic's `@timestamp`.
+- AMiner records are read without the `AMiner` wrapper; the wrapper comes from
+  the export. The log path is read from `LogData.LogResources` beside
+  `AnalysisComponent.LogResource`.
+- A miner line with the wrapper but no analysis block stopped the whole ingest.
 - Malformed alert lines, inventories and incident CSVs report the file and the
   problem instead of raising.
 - The chunked alert reader behind `triage`, `check`, `drift` and `retrain` reads

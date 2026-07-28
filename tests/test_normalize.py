@@ -1302,5 +1302,53 @@ class NativeSuricataExports(unittest.TestCase):
         )
 
 
+class NativeAminerExports(unittest.TestCase):
+    def build(self, records: list[dict]) -> Path:
+        root = Path(tempfile.mkdtemp())
+        raw = root / "raw"
+        raw.mkdir()
+        write_records(raw / "miner.json", *records)
+        (root / "labels.csv").write_text(
+            "scenario,attack,start,end\n", encoding="utf-8"
+        )
+        write_company_inventory(
+            root / "company.json", ("cloud-share", "10.0.0.7", ("servers",))
+        )
+        return raw
+
+    def normalized(self, raw: Path) -> pd.DataFrame:
+        root = raw.parent
+        return normalize.normalize_scenario(
+            raw, root / "labels.csv", "demo", root / "company.json"
+        )
+
+    def test_a_record_without_the_envelope_is_read(self):
+        # the AMiner block is the export's wrapper; the miner's own output has
+        # none, and requiring it dropped every native record without a message
+        record = aminer_export_record()
+        del record["AMiner"]
+        frame = self.normalized(self.build([record]))
+        self.assertEqual(list(frame["detector_source"].astype(str)), ["aminer"])
+        self.assertEqual(list(frame["entity_id"].astype(str)), ["10.0.0.7"])
+
+    def test_an_envelope_with_no_analysis_block_is_skipped(self):
+        # this shape passed the old guard and raised KeyError in the extractor
+        bad = {"AMiner": {"ID": "x"}, "LogData": {"RawLogData": ["r"], "Timestamps": [1.0]}}
+        self.assertIsNone(normalize.read_family_record(bad, "aminer"))
+        frame = self.normalized(self.build([bad, aminer_export_record()]))
+        self.assertEqual(len(frame), 1)
+
+    def test_the_log_resource_field_is_read_in_both_shapes(self):
+        listed = {"LogData": {"LogResources": ["/var/log/auth.log"]}}
+        single = {"AnalysisComponent": {"LogResource": "file:///logs/access.log"}}
+        self.assertEqual(
+            normalize.aminer_log_resources(listed), ["/var/log/auth.log"]
+        )
+        self.assertEqual(
+            normalize.aminer_log_resources(single), ["file:///logs/access.log"]
+        )
+        self.assertEqual(normalize.aminer_log_resources({}), [])
+
+
 if __name__ == "__main__":
     unittest.main()
