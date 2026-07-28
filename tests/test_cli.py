@@ -641,9 +641,10 @@ class TestExitCodes(unittest.TestCase):
 
 class TestParserContract(unittest.TestCase):
     def test_triage_finds_the_inventory_the_inventory_command_wrote(self):
-        # --inventory parses as None so triage can fill in where `meerkat
-        # inventory` wrote it, which needs --input and --company first
-        args = build_parser().parse_args(["triage", "--company", "acme"])
+        # --inventory resolves to None so triage can fill in where `meerkat
+        # inventory` wrote it, which needs --input and --environment first
+        args = build_parser().parse_args(["triage", "--environment", "acme"])
+        cli._apply_config(args)
         self.assertIsNone(args.inventory)
 
     def test_alert_file_overrides_reach_triage_and_retrain(self):
@@ -651,10 +652,10 @@ class TestParserContract(unittest.TestCase):
         # attached to each rather than to triage alone
         parser = build_parser()
         triage = parser.parse_args([
-            "triage", "--company", "acme", "--wazuh-file", "w.json",
+            "triage", "--environment", "acme", "--wazuh-file", "w.json",
         ])
         retrain = parser.parse_args([
-            "retrain", "--company", "acme", "--incidents", "i.csv",
+            "retrain", "--environment", "acme", "--incidents", "i.csv",
             "--inventory", "inv.json", "--aminer-file", "a.json",
         ])
         self.assertEqual(triage.wazuh_file, Path("w.json"))
@@ -664,7 +665,7 @@ class TestParserContract(unittest.TestCase):
         # k=1 keeps every ticket's total weight at 1.0 whatever its width, and
         # five fits are what the majority gate counts
         args = build_parser().parse_args([
-            "retrain", "--company", "acme", "--incidents", "i.csv",
+            "retrain", "--environment", "acme", "--incidents", "i.csv",
             "--inventory", "inv.json",
         ])
         self.assertEqual(args.prior_k, 1.0)
@@ -797,7 +798,7 @@ class CompanyValidationTests(unittest.TestCase):
             for value in ("../evil", "a/b", "."):
                 with self.subTest(command=command[0], value=value):
                     with self.assertRaises(SystemExit) as caught:
-                        self.parse([*command, "--company", value])
+                        self.parse([*command, "--environment", value])
                     self.assertEqual(caught.exception.code, 2)
 
     def test_the_inventory_positional_takes_the_same_rule(self):
@@ -805,8 +806,13 @@ class CompanyValidationTests(unittest.TestCase):
             self.parse(["inventory", "../evil"])
 
     def test_an_ordinary_company_still_parses(self):
-        self.assertEqual(self.parse(["triage", "--company", "acme"]).company, "acme")
-        self.assertIsNone(self.parse(["triage"]).company)
+        self.assertEqual(self.parse(["triage", "--environment", "acme"]).company, "acme")
+        self.assertEqual(
+            self.parse(["triage", "--environment", "acme"]).company, "acme"
+        )
+        unset = self.parse(["triage"])
+        cli._apply_config(unset)
+        self.assertIsNone(unset.company)
 
     def test_a_root_input_directory_is_told_to_pass_a_company(self):
         # a drive or filesystem root has no name, and safe_run_id("") raised
@@ -816,7 +822,7 @@ class CompanyValidationTests(unittest.TestCase):
         with contextlib.redirect_stderr(errors), self.assertRaises(SystemExit) as caught:
             cli.resolve_company(argparse.Namespace(company=None, input=root))
         self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
-        self.assertIn("--company", errors.getvalue())
+        self.assertIn("--environment", errors.getvalue())
 
 
 class CheckReportsTheTestedValueTests(unittest.TestCase):
@@ -1301,8 +1307,9 @@ class BundleGateCliTests(unittest.TestCase):
 class TestCheckParser(unittest.TestCase):
     def test_check_needs_nothing_but_a_directory(self):
         # a client's first command after unpacking their alerts, so requiring
-        # --company or --inventory here would defeat the point
+        # --environment or --inventory here would defeat the point
         args = build_parser().parse_args(["check"])
+        cli._apply_config(args)
         self.assertIsNone(args.company)
         self.assertIsNone(args.inventory)
         self.assertEqual(args.input.name, "alerts")

@@ -908,7 +908,7 @@ class TestRetrainGate(unittest.TestCase):
         # the three required flags already make a valid retrain
         args = build_parser().parse_args([
             "retrain",
-            "--company", "acme",
+            "--environment", "acme",
             "--incidents", "incidents.csv",
             "--inventory", "inventory.json",
             "--reviewed-periods", "reviewed.csv",
