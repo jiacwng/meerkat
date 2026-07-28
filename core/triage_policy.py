@@ -12,20 +12,28 @@ import pandas as pd
 from core.attack_mapping import map_alert
 
 
-def daily_queue(families: pd.DataFrame, k: int = 25) -> pd.DataFrame:
+def queue_order(families: pd.DataFrame) -> pd.DataFrame:
     # the queue is ordered by the raw ranking score, never by the calibrated
-    # probability, so display changes cannot reorder an analyst's day
+    # probability, so display changes cannot reorder an analyst's day. Scores
+    # tie often, so the start/id tie-break is part of the contract: every
+    # consumer of this order must go through this function.
     group_columns = ["day"]
     if "scenario" in families.columns:
         group_columns.insert(0, "scenario")
-
-    ordered = families.sort_values(
+    return families.sort_values(
         group_columns + ["ranking_score", "start", "representative_session_id"],
         ascending=[True] * len(group_columns) + [False, True, True],
         kind="stable",
     )
+
+
+def daily_queue(families: pd.DataFrame, k: int = 25) -> pd.DataFrame:
+    group_columns = ["day"]
+    if "scenario" in families.columns:
+        group_columns.insert(0, "scenario")
     return (
-        ordered.groupby(group_columns, sort=False, observed=True)
+        queue_order(families)
+        .groupby(group_columns, sort=False, observed=True)
         .head(k)
         .reset_index(drop=True)
     )

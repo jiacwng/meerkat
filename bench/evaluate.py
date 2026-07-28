@@ -356,6 +356,7 @@ def _exact_sign_p(deltas: list[int]) -> tuple[float, int]:
 def sign_tests(
     per_fold: pd.DataFrame,
     reference: str = "family re-ranker",
+    metric: str = "strict_windows",
 ) -> pd.DataFrame:
     rows = []
     rankers = [
@@ -369,21 +370,22 @@ def sign_tests(
                     per_fold["budget"].eq(budget) & per_fold["seed"].eq(seed)
                 ]
                 paired = slice_.pivot_table(
-                    index="scenario", columns="ranker", values="strict_windows"
+                    index="scenario", columns="ranker", values=metric
                 )
-                deltas = (paired[reference] - paired[ranker]).astype(int)
+                deltas = (paired[reference] - paired[ranker]).round().astype(int)
                 p_value, n_eff = _exact_sign_p(list(deltas))
                 rows.append({
+                    "metric": metric,
                     "budget": budget,
                     "against": ranker,
                     "seed": seed,
                     "deltas": " ".join(str(delta) for delta in deltas),
                     "n_eff": n_eff,
-                    # below five informative folds no p under .05 is reachable,
-                    # so the verdict says so instead of printing a number
-                    "p": p_value if n_eff >= 5 else float("nan"),
+                    # at five informative folds the smallest two-sided p is
+                    # 0.0625, so a p is only worth printing from six up
+                    "p": p_value if n_eff >= 6 else float("nan"),
                     "verdict": (
-                        f"p={p_value:.3f}" if n_eff >= 5
+                        f"p={p_value:.3f}" if n_eff >= 6
                         else f"not separable (n_eff={n_eff})"
                     ),
                 })
@@ -538,7 +540,14 @@ def evaluate_scenarios(
         per_fold=per_fold,
         calibration=calibration,
         calibration_summary=_summarize_calibration(calibration),
-        sign_tests=sign_tests(per_fold),
+        # the claim is cheaper at equal coverage, so both sides are tested
+        sign_tests=pd.concat(
+            [
+                sign_tests(per_fold, metric="strict_windows"),
+                sign_tests(per_fold, metric="alerts_in_queue"),
+            ],
+            ignore_index=True,
+        ),
     )
 
 def build_bundle(
@@ -590,6 +599,21 @@ def build_bundle(
         ),
     )
 
+def parse_budgets(text: str) -> tuple[int, ...]:
+    # "5,10,25" or "1-25", so the coverage curve does not need 25 flags
+    budgets: list[int] = []
+    for part in text.split(","):
+        part = part.strip()
+        if "-" in part:
+            low, high = part.split("-", 1)
+            budgets.extend(range(int(low), int(high) + 1))
+        else:
+            budgets.append(int(part))
+    if not budgets or any(budget < 1 for budget in budgets):
+        raise ValueError(f"budgets must be positive: {text!r}")
+    return tuple(dict.fromkeys(budgets))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Evaluate Meerkat's session-to-family queue"
@@ -606,10 +630,15 @@ def main() -> None:
     # the published table is measured at
     parser.add_argument("--trees", type=int, default=200)
     parser.add_argument("--seeds", default="0")
+    parser.add_argument(
+        "--budgets", default="5,10,25",
+        help="comma list or a range like 1-25",
+    )
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
 
     seeds = tuple(int(value) for value in args.seeds.split(","))
+    budgets = parse_budgets(args.budgets)
     frames = load_scenarios(
         args.raw_dir,
         args.labels,
@@ -625,6 +654,7 @@ def main() -> None:
         frames,
         inventories,
         windows,
+        budgets=budgets,
         n_estimators=args.trees,
         seeds=seeds,
     )
