@@ -27,6 +27,10 @@ NEXTCLOUD_CONFIG = "configs/nextcloud/"
 DNSMASQ_CONFIG = "configs/etc/dnsmasq.d/"
 
 LABEL_COLUMNS = ("scenario", "attack", "start", "end")
+# the biggest real member is a 673 MB alert export; past this it is not data
+MAX_MEMBER_BYTES = 2_000_000_000
+MAX_RATIO = 200
+MAX_JSON_BYTES = 20_000_000
 TAIL_SECONDS = 60.0
 
 # a dnsmasq drop-in only answers for a zone once it carries one of these
@@ -97,14 +101,37 @@ class Archive:
     def lines(self, name: str) -> Iterator[str]:
         full = f"{self.root}/{name}" if self.root else name
         if self._zip is not None:
+            self._refuse_bomb(full)
             with self._zip.open(full) as raw:
                 yield from io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
         else:
             with (self.path / full).open(encoding="utf-8", errors="replace") as fh:
                 yield from fh
 
+    # the largest real member is a 673 MB alert export, so anything past this is
+    # not data. A 292 KB member expanding to 300 MB is a bomb, not a config.
+    def _refuse_bomb(self, full: str) -> None:
+        info = self._zip.getinfo(full)  # type: ignore[union-attr]
+        if info.file_size > MAX_MEMBER_BYTES:
+            raise ScenarioError(
+                f"{full} expands to {info.file_size / 1e9:.1f} GB, refusing to read"
+            )
+        if info.compress_size and info.file_size / info.compress_size > MAX_RATIO:
+            raise ScenarioError(
+                f"{full} expands {info.file_size // info.compress_size}x, "
+                "refusing to read"
+            )
+
     def read_json(self, name: str) -> dict:
-        return json.loads("".join(self.lines(name)))
+        # a config or facts file is kilobytes; a hostile one is not read whole
+        text = []
+        size = 0
+        for line in self.lines(name):
+            size += len(line)
+            if size > MAX_JSON_BYTES:
+                raise ScenarioError(f"{name} is larger than {MAX_JSON_BYTES} bytes")
+            text.append(line)
+        return json.loads("".join(text))
 
     def directories(self) -> list[str]:
         return sorted(
@@ -282,6 +309,35 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
 
 
+# an archive is third-party content, so anything it names is hostile until it
+# has been through here. A hostname decides a file name, and "../victim" wrote
+# outside the output directory and overwrote whatever was there.
+def _safe_name(text: str, kind: str) -> str:
+    slug = _slug(text)
+    if not slug:
+        raise ScenarioError(f"{kind} {text!r} has no usable characters")
+    return slug
+
+
+def _inside(path: Path, directory: Path) -> Path:
+    resolved = path.resolve()
+    if resolved.parent != directory.resolve():
+        raise ScenarioError(f"{path} escapes the output directory")
+    return resolved
+
+
+# the same control characters _csv_safe strips, because a hostile hostname
+# reaches the operator's terminal through the conversion report
+def _printable(text: str) -> str:
+    return "".join(" " if ord(ch) < 32 or 127 <= ord(ch) < 160 else ch for ch in text)
+
+
+def _csv_safe(value: object) -> str:
+    # a cell opening with these is a formula in excel and sheets
+    text = _printable(str(value))
+    return "'" + text if text[:1] in "=+-@\t\r" else text
+
+
 def step_name(position: int, step: dict) -> str:
     tokens = str(step.get("cmd") or "").split()
     if not tokens:
@@ -334,16 +390,27 @@ def write_attack_windows(
     kept: list[dict] = []
     if path.exists():
         with path.open(encoding="utf-8", newline="") as fh:
-            kept = [row for row in csv.DictReader(fh) if row["scenario"] != scenario]
+            kept = [
+                {column: row.get(column, "") for column in LABEL_COLUMNS}
+                for row in csv.DictReader(fh)
+                if row.get("scenario") != scenario
+            ]
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(LABEL_COLUMNS))
+    # data/labels.csv is committed ground truth, so it is replaced only once the
+    # new file is complete. Writing in place lost it when a row failed halfway.
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(
+            fh, fieldnames=list(LABEL_COLUMNS), extrasaction="ignore"
+        )
         writer.writeheader()
         writer.writerows(kept)
         for start, end, attack in windows:
             writer.writerow({
-                "scenario": scenario, "attack": attack, "start": start, "end": end,
+                "scenario": _csv_safe(scenario), "attack": _csv_safe(attack),
+                "start": start, "end": end,
             })
+    temporary.replace(path)
 
 
 def wazuh_alert_files(archive: Archive, host: Host) -> list[str]:
@@ -398,16 +465,18 @@ def copy_alerts(archive: Archive, hosts: list[Host], out_dir: Path) -> dict[str,
     counts: dict[str, int] = {}
     out_dir.mkdir(parents=True, exist_ok=True)
     for host in hosts:
+        # the archive names the file, so the name is slugged and the path checked
+        stem = _safe_name(host.name, "host name")
         sources = wazuh_alert_files(archive, host)
         if sources:
-            counts[f"{host.name}_alerts.json"] = _write_alerts(
-                archive, sources, out_dir / f"{host.name}_alerts.json", False
+            target = _inside(out_dir / f"{stem}_alerts.json", out_dir)
+            counts[f"{stem}_alerts.json"] = _write_alerts(
+                archive, sources, target, False
             )
         eve = f"{host.directory}/{SURICATA_EVE}"
         if archive.exists(eve):
-            counts[f"{host.name}_eve.json"] = _write_alerts(
-                archive, [eve], out_dir / f"{host.name}_eve.json", True
-            )
+            target = _inside(out_dir / f"{stem}_eve.json", out_dir)
+            counts[f"{stem}_eve.json"] = _write_alerts(archive, [eve], target, True)
     return counts
 
 
@@ -458,7 +527,8 @@ def format_report(result: Conversion) -> str:
         else:
             note = ", ".join(sorted(host.roles)) or "no roles"
         lines.append(
-            f"  {host.name:<10} {', '.join(host.addresses):<48} {note}"
+            f"  {_printable(host.name):<10} "
+            f"{_printable(', '.join(host.addresses)):<48} {note}"
         )
     if result.windows:
         first = min(start for start, _, _ in result.windows)

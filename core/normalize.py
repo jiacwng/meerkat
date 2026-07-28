@@ -10,9 +10,11 @@ from __future__ import annotations
 import csv
 import json
 import re
+from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from math import isfinite
 from pathlib import Path
 
 import pandas as pd
@@ -578,7 +580,7 @@ def sniff_alert_family(path: Path, max_lines: int = SNIFF_LINES) -> str:
     # records and the rest of the file is never read. Anything unreadable, not
     # json, or json of neither shape is not an alert file.
     try:
-        with path.open(encoding="utf-8", errors="replace") as fh:
+        with path.open(encoding="utf-8-sig", errors="replace") as fh:
             read = 0
             while read < max_lines:
                 line = fh.readline(SNIFF_LINE_BYTES)
@@ -590,7 +592,9 @@ def sniff_alert_family(path: Path, max_lines: int = SNIFF_LINES) -> str:
                 read += 1
                 try:
                     record = json.loads(line)
-                except json.JSONDecodeError:
+                # a deeply nested line raises RecursionError, not a decode error,
+                # and one such file in the directory took every command down
+                except (json.JSONDecodeError, RecursionError, ValueError):
                     continue
                 if isinstance(record, dict):
                     family = classify_alert_family(record)
@@ -682,9 +686,13 @@ def resolve_alert_files(
         # the convention names a file per family and says nothing about a third,
         # so a suricata eve.json beside <company>_wazuh.json is still read
         covered = {family for _, family in named}
-        return sort_alert_files(
-            named + [pair for pair in sniffed if pair[1] not in covered]
-        )
+        # a named file whose first line sniffs as a third family was listed
+        # twice, which read it twice and shifted the positional label join
+        chosen = {path for path, _ in named}
+        return sort_alert_files(named + [
+            pair for pair in sniffed
+            if pair[1] not in covered and pair[0] not in chosen
+        ])
 
     # an explicit path that does not exist is a typo worth reporting, so the
     # family it named is not filled in from the directory instead
@@ -707,6 +715,11 @@ def resolve_alert_files(
 
 def read_family_record(record: dict, family: str) -> tuple[dict, str] | None:
     if family == AMINER_FAMILY:
+        # the family is decided from the first few lines, so a mixed export, or
+        # one line shaped like a miner record, used to reach the extractor and
+        # raise KeyError there. Wazuh's branch has always checked per record.
+        if "AMiner" not in record or "LogData" not in record:
+            return None
         return record, "aminer"
     if family == SURICATA_FAMILY:
         wrapped = as_wrapped_suricata(record)
@@ -723,13 +736,21 @@ def suricata_fingerprint(record: dict) -> tuple:
     alert = data.get("alert") or {}
 
     def number(value: object) -> object:
+        # an alert field is attacker-influenced: "inf" overflows int(), a nested
+        # object is unhashable, and either would take the whole ingest down. A
+        # value that is not a plain number keeps its own text instead.
+        if isinstance(value, (dict, list, set, tuple)):
+            return repr(value)
         try:
-            return int(float(value))  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            return value
+            converted = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError, OverflowError):
+            return str(value)
+        if not isfinite(converted):
+            return str(value)
+        return int(converted)
 
     return (
-        data.get("timestamp"),
+        str(data.get("timestamp")),
         number(alert.get("signature_id")),
         number(data.get("flow_id")),
     )
@@ -783,7 +804,10 @@ def iter_normalized_rows(
     # is a duplicate, and that is the only case worth the memory of a key set.
     sources = [f for _, f in resolved if f in (WAZUH_FAMILY, SURICATA_FAMILY)]
     watch_duplicates = len(sources) > 1
-    seen: set[tuple] = set()
+    # counted, not a set: suricata logs the same signature twice on a burst, and
+    # russellmitchell holds 26 such alerts. A set let one copy in the first file
+    # erase every copy in the second, so a burst quietly shrank to one alert.
+    seen: Counter[tuple] = Counter()
 
     # a log line is attacker-influenced, so one bad byte anywhere in a 45MB export
     # would otherwise take the whole ingest down with a UnicodeDecodeError. The
@@ -791,7 +815,7 @@ def iter_normalized_rows(
     # the event-label join stays aligned.
     for path, family in resolved:
         offset = offsets.get(path, 0)
-        mine: set[tuple] = set()
+        mine: Counter[tuple] = Counter()
         with path.open(encoding="utf-8-sig", errors="replace") as fh:
             for position, line in enumerate(fh):
                 # a concatenated export often carries a blank line between parts,
@@ -806,16 +830,18 @@ def iter_normalized_rows(
                 parsed, detector = alert
                 if watch_duplicates and detector == "suricata":
                     fingerprint = suricata_fingerprint(parsed)
-                    if fingerprint in seen:
+                    # drop only as many copies as an earlier file already gave
+                    if seen[fingerprint] > mine[fingerprint]:
+                        mine[fingerprint] += 1
                         continue
-                    mine.add(fingerprint)
+                    mine[fingerprint] += 1
                 row = normalize_record(parsed, detector, windows, inventory)
                 row["source_file"] = path.name
                 row["source_position"] = position
                 if event_labels is not None:
                     row["event_label"] = event_labels[offset + position]
                 yield row
-        seen |= mine
+        seen += mine
 
 
 def iter_normalized_chunks(
