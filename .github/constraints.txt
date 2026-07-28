@@ -1,0 +1,8 @@
+# the versions CI installs; bump deliberately, not mid-merge
+numpy==2.2.0
+pandas==2.2.3
+rich==15.0.0
+ruff==0.16.0
+scikit-learn==1.6.0
+scipy==1.14.1
+skops==0.14.0
