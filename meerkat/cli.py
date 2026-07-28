@@ -136,6 +136,17 @@ def detector_label(detector_source: str) -> str:
     return DETECTOR_LABELS.get(str(detector_source), str(detector_source))
 
 
+def _canon_handle(text: str) -> str:
+    # F1, f1 and F001 are the same address
+    match = re.fullmatch(r"([A-Za-z])0*(\d+)", str(text).strip())
+    return f"{match.group(1).upper()}{match.group(2)}" if match else str(text).upper()
+
+
+def _hint(text: str) -> None:
+    # navigation help is decoration, so it goes to stderr and never into a pipe
+    errors.print(f"[dim]{text}[/dim]")
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -163,9 +174,9 @@ def decorate_families(
     budget: int,
 ) -> pd.DataFrame:
     # order every scored family the way the queue orders them, then hand out
-    # F001, F002... down that list so the top-K per day keep the low numbers
+    # F1, F2... down that list so the top-K per day keep the low numbers
     ordered = queue_order(families).reset_index(drop=True)
-    ordered["handle"] = [f"F{i + 1:03d}" for i in range(len(ordered))]
+    ordered["handle"] = [f"F{i + 1}" for i in range(len(ordered))]
     ordered["queue_rank"] = ordered.groupby("day", sort=False).cumcount()
     ordered["in_queue"] = ordered["queue_rank"] < budget
 
@@ -189,7 +200,10 @@ class RunState:
     alerts: pd.DataFrame
 
     def family_by_handle(self, handle: str) -> pd.Series:
-        match = self.families[self.families["handle"].eq(handle.upper())]
+        # F1 and F001 name the same family, so runs saved by any version open
+        wanted = _canon_handle(handle)
+        stored = self.families["handle"].map(_canon_handle)
+        match = self.families[stored.eq(wanted)]
         if match.empty:
             raise KeyError(f"no family {handle} in run {self.run_id}")
         return match.iloc[0]
@@ -204,7 +218,7 @@ class RunState:
 
     def session_by_handle(self, family: pd.Series, handle: str) -> pd.Series:
         pairs = dict(self.session_handles(family))
-        session_id = pairs.get(handle.upper())
+        session_id = pairs.get(_canon_handle(handle))
         if session_id is None:
             raise KeyError(f"no session {handle} under {family['handle']}")
         return self.sessions[self.sessions["session_id"].eq(session_id)].iloc[0]
@@ -668,12 +682,11 @@ def render_family(
 
     _render_why(family)
 
-    handles = run.session_handles(family)
-    if len(handles) == 1:
-        # one session, so its evidence is the family's evidence, no extra drill
+    # the session list always shows, so S1 is never a secret; a single session's
+    # evidence is the family's evidence, so its panels render right here too
+    _render_session_list(run, family)
+    if len(run.session_handles(family)) == 1:
         _render_panels(alert_slice)
-    else:
-        _render_session_list(run, family)
 
     _render_attack_observations(alert_slice)
     _render_related(run, family)
@@ -754,18 +767,51 @@ def render_alert_rows(alert_slice: pd.DataFrame, limit: int) -> None:
         title_justify="left",
         header_style="bold",
     )
+    table.add_column("handle")
     table.add_column("time")
     table.add_column("detector")
     table.add_column("name")
     table.add_column("source")
-    for _, alert in alert_slice.head(limit).iterrows():
+    for position, (_, alert) in enumerate(alert_slice.head(limit).iterrows()):
         table.add_row(
+            f"A{position + 1}",
             fmt_time(alert["timestamp"]),
             detector_label(alert["detector_source"]),
             safe(alert["name"])[:44],
             safe(f"{alert['source_file']}:{alert['source_position']}"),
         )
     console.print(table)
+
+
+# internals of the run table, never facts about the alert itself
+ALERT_DETAIL_SKIP = ("alert_rows", "source_file", "source_position")
+
+
+def render_alert_detail(
+    family: pd.Series,
+    session_handle: str,
+    alert_handle: str,
+    alert: pd.Series,
+) -> None:
+    console.print(
+        f"\n[bold]{family['handle']} {session_handle} {alert_handle}  "
+        f"{safe(str(alert['name']))}[/bold]\n"
+    )
+    table = Table(show_header=False, box=None, pad_edge=False)
+    table.add_column("field", style="cyan")
+    table.add_column("value")
+    for field, value in alert.items():
+        if field in ALERT_DETAIL_SKIP:
+            continue
+        text = str(value)
+        if text in ("", "nan", "None", "[]", "set()"):
+            continue
+        table.add_row(str(field), safe(text)[:220])
+    console.print(table)
+    console.print(
+        f"\n[dim]source {safe(str(alert['source_file']))}:"
+        f"{alert['source_position']}[/dim]"
+    )
 
 
 def render_distinct(alert_slice: pd.DataFrame, field: str) -> None:
@@ -1087,6 +1133,14 @@ QUEUE_JSON_FIELDS = (
 )
 
 
+def _alert_record(row: pd.Series) -> dict:
+    # sets do not serialize and carry no order, so they leave as sorted lists
+    return {
+        field: sorted(value) if isinstance(value, (set, frozenset)) else value
+        for field, value in row.items()
+    }
+
+
 def queue_records(run, families) -> list[dict]:
     reviews = current_reviews(run.directory)
     records = []
@@ -1120,6 +1174,12 @@ def cmd_queue(args) -> None:
         run, args.all, args.host, args.detector, args.rule, args.review_state,
         args.day,
     )
+    top = run.families[run.families["in_queue"]]
+    if len(top):
+        _hint(
+            f"next: `meerkat inspect {top.iloc[0]['handle']}` opens the top "
+            "family"
+        )
 
 
 def cmd_runs(args) -> None:
@@ -1226,7 +1286,8 @@ def _render_raw(alert_slice, raw_dir: Path, limit: int) -> None:
 
 def cmd_inspect(args) -> None:
     run = _load_run(args)
-    _announce_run(run)
+    if not args.json:
+        _announce_run(run)
     columns = set(run.alerts.columns)
     wheres = _parse_pairs(args.where, columns)
     excludes = _parse_pairs(args.exclude, columns)
@@ -1251,6 +1312,75 @@ def cmd_inspect(args) -> None:
         session = None
         alert_slice = run.family_alerts(family)
 
+    if args.json:
+        payload = {
+            "run_id": run.run_id,
+            "family": queue_records(
+                run,
+                run.families[run.families["family_id"].eq(family["family_id"])],
+            )[0],
+            "sessions": [
+                {
+                    "handle": handle,
+                    "start": float(s["start"]),
+                    "end": float(s["end"]),
+                    "duration_s": float(s["duration_s"]),
+                    "alerts": int(s["size"]),
+                    "score": float(s["ranking_score"]),
+                }
+                for handle, session_id in run.session_handles(family)
+                for s in [
+                    run.sessions[run.sessions["session_id"].eq(session_id)].iloc[0]
+                ]
+            ],
+        }
+        if session is not None:
+            payload["session"] = _canon_handle(args.session)
+            payload["alerts"] = [
+                {"handle": f"A{position + 1}", **_alert_record(row)}
+                for position, (_, row)
+                in enumerate(run.session_alerts(session).iterrows())
+            ]
+            if args.alert:
+                wanted = _canon_handle(args.alert)
+                payload["alerts"] = [
+                    record for record in payload["alerts"]
+                    if record["handle"] == wanted
+                ]
+        print(json.dumps(payload, indent=2, default=str))
+        return
+
+    if args.alert:
+        if session is None:
+            errors.print(
+                "[red]an alert handle needs its session[/red]  "
+                "e.g. `meerkat inspect F3 S1 A2`"
+            )
+            raise SystemExit(EXIT_ERROR)
+        # handles address the session's own order, so filters never renumber them
+        ordered = run.session_alerts(session)
+        canon = _canon_handle(args.alert)
+        position = int(canon[1:]) if canon[:1] == "A" and canon[1:].isdigit() else 0
+        if not 1 <= position <= len(ordered):
+            errors.print(
+                f"[red]no alert {safe(args.alert)}[/red]  "
+                f"{_canon_handle(args.session)} holds A1..A{len(ordered)}"
+            )
+            raise SystemExit(EXIT_ERROR)
+        alert = ordered.iloc[position - 1]
+        render_alert_detail(
+            family, _canon_handle(args.session), f"A{position}", alert
+        )
+        if args.raw:
+            _render_raw(ordered.iloc[[position - 1]], _raw_dir_for(run, args), 1)
+        else:
+            _hint(
+                f"next: `meerkat inspect {family['handle']} "
+                f"{_canon_handle(args.session)} A{position} --raw` shows the "
+                "source line as the detector wrote it"
+            )
+        return
+
     alert_slice = _apply_filters(alert_slice, wheres, excludes)
     reviews = current_reviews(run.directory)
 
@@ -1260,7 +1390,7 @@ def cmd_inspect(args) -> None:
 
     wants_rows = bool(args.alerts or args.raw or wheres or excludes)
     if session is not None:
-        render_session(family, args.session.upper(), session, alert_slice)
+        render_session(family, _canon_handle(args.session), session, alert_slice)
     else:
         render_family(run, family, reviews)
 
@@ -1270,6 +1400,20 @@ def cmd_inspect(args) -> None:
             _render_raw(alert_slice, _raw_dir_for(run, args), limit)
         else:
             render_alert_rows(alert_slice, limit)
+
+    if session is not None:
+        session_handle = _canon_handle(args.session)
+        _hint(
+            f"next: `meerkat inspect {family['handle']} {session_handle} A1` "
+            f"opens one alert, `meerkat inspect {family['handle']}` returns to "
+            f"the family, `meerkat review {family['handle']} escalate "
+            f"--session {session_handle}` records it"
+        )
+    else:
+        _hint(
+            f"next: `meerkat inspect {family['handle']} S1` opens the top "
+            "session, `meerkat queue` returns to the queue"
+        )
 
 
 # --------------------------------------------------------------------------
@@ -1554,16 +1698,26 @@ def cmd_check(args) -> None:
         errors.print(f"[red]{error}[/red]")
         raise SystemExit(EXIT_ERROR)
 
-    console.print(f"reading up to {args.sample} alerts from {args.input}")
+    report: dict = {"environment": company, "files": [], "problems": []}
+    if not args.json:
+        console.print(f"reading up to {args.sample} alerts from {args.input}")
     for path, family in alert_files:
         size = path.stat().st_size / 1_000_000
         label = FAMILY_LABELS[family]
-        console.print(f"  [green]found[/green] {label:19} {path.name}  {size:.1f} MB")
+        report["files"].append(
+            {"name": path.name, "holds": label, "mb": round(size, 1)}
+        )
+        if not args.json:
+            console.print(
+                f"  [green]found[/green] {label:19} {path.name}  {size:.1f} MB"
+            )
     if not any(family == AMINER_FAMILY for _, family in alert_files):
         label = FAMILY_LABELS[AMINER_FAMILY]
-        console.print(
-            f"  [dim]absent[/dim] {label:19} {_aminer_name(args, company)}"
-        )
+        report["missing_detector"] = label
+        if not args.json:
+            console.print(
+                f"  [dim]absent[/dim] {label:19} {_aminer_name(args, company)}"
+            )
 
     inventory = _load_or_exit(load_inventory, args.inventory, "the inventory")
     # one generator drains the first file before reaching the second, so a flat
@@ -1590,8 +1744,15 @@ def cmd_check(args) -> None:
     table.add_column("hosts", justify="right")
     table.add_column("in inventory", justify="right")
     table.add_column("distinct rules", justify="right")
+    report["sampled"] = len(frame)
     for detector, part in frame.groupby("detector_source", sort=True):
         matched = int(part["entity_in_inventory"].astype(bool).sum())
+        report.setdefault("detectors", []).append({
+            "detector": str(detector), "alerts": len(part),
+            "hosts": int(part["entity_id"].nunique()),
+            "in_inventory": matched,
+            "distinct_rules": int(part["rule_id"].nunique()),
+        })
         table.add_row(
             detector_label(str(detector)),
             str(len(part)),
@@ -1599,10 +1760,13 @@ def cmd_check(args) -> None:
             f"{matched}/{len(part)}",
             str(part["rule_id"].nunique()),
         )
-    console.print(table)
+    if not args.json:
+        console.print(table)
 
     start, end = frame["timestamp"].min(), frame["timestamp"].max()
-    console.print(f"  covering {fmt_time(start)} to {fmt_time(end)}")
+    report["window"] = [float(start), float(end)]
+    if not args.json:
+        console.print(f"  covering {fmt_time(start)} to {fmt_time(end)}")
 
     problems = 0
     # entity_id is what the inventory is keyed on, so name the entity. Printing
@@ -1612,19 +1776,22 @@ def cmd_check(args) -> None:
     if len(unmatched):
         share = len(unmatched) / len(frame)
         names = sorted(set(unmatched.astype(str)))[:5]
+        report["outside_inventory_share"] = round(share, 3)
         # a network alert names both ends of a connection, so internet addresses
         # appear here and can never be in an asset inventory. Report it without
         # failing: the exit code is for things an operator can act on.
-        console.print(
-            f"[yellow]{share:.0%} of alerts are on hosts outside the inventory"
-            f"[/yellow]  {', '.join(safe(n) for n in names)}\n"
-            "  those alerts are scored without role features. A network alert "
-            "names both ends of a connection, so addresses outside your estate "
-            "appear here too."
-        )
+        if not args.json:
+            console.print(
+                f"[yellow]{share:.0%} of alerts are on hosts outside the inventory"
+                f"[/yellow]  {', '.join(safe(n) for n in names)}\n"
+                "  those alerts are scored without role features. A network alert "
+                "names both ends of a connection, so addresses outside your estate "
+                "appear here too."
+            )
 
     unroled = inventory.assets_without_roles()
     if unroled:
+        report["problems"].append("assets_without_roles")
         errors.print(
             f"[yellow]{len(unroled)} inventory assets have no roles[/yellow]  "
             "their alerts are scored without the role features. "
@@ -1632,6 +1799,7 @@ def cmd_check(args) -> None:
         )
         problems += 1
     if inventory.unknown_roles:
+        report["problems"].append("unknown_roles")
         errors.print(
             f"[yellow]unrecognised roles[/yellow] "
             f"{', '.join(safe(r) for r in inventory.unknown_roles)}  "
@@ -1643,8 +1811,10 @@ def cmd_check(args) -> None:
     # detector numbering each anomaly individually degrades the model with no
     # error at all, so say it here rather than let it pass silently.
     ratio = frame["rule_id"].nunique() / len(frame)
+    report["rule_cardinality"] = round(ratio, 3)
     # under 500 alerts a high distinct-rule share is just a small sample
     if ratio > RULE_CARDINALITY_WARN and len(frame) >= 500:
+        report["problems"].append("rule_cardinality")
         errors.print(
             f"[yellow]{frame['rule_id'].nunique()} distinct rule ids across "
             f"{len(frame)} alerts[/yellow]  sessions group on rule id, so "
@@ -1654,10 +1824,17 @@ def cmd_check(args) -> None:
         )
         problems += 1
 
+    report["ready"] = not problems
+    if args.json:
+        print(json.dumps(report, indent=2, default=str))
     if problems:
-        console.print(f"[yellow]{problems} thing(s) to look at before triaging[/yellow]")
+        if not args.json:
+            console.print(
+                f"[yellow]{problems} thing(s) to look at before triaging[/yellow]"
+            )
         raise SystemExit(EXIT_ERROR)
-    console.print("[green]ready to triage[/green]")
+    if not args.json:
+        console.print("[green]ready to triage[/green]")
 
 
 # --------------------------------------------------------------------------
@@ -1696,24 +1873,33 @@ def cmd_drift(args) -> None:
     X = build_session_feature_matrix(sessions, bundle.schema)
     scored, families = score_sessions(bundle, sessions)
 
-    console.print(
-        f"{len(alerts)} alerts, {len(sessions)} sessions, {len(families)} families "
-        f"against a model trained on {profile.n_sessions} sessions"
-    )
+    report: dict = {
+        "alerts": len(alerts), "sessions": len(sessions),
+        "families": len(families), "trained_sessions": profile.n_sessions,
+    }
+    if not args.json:
+        console.print(
+            f"{len(alerts)} alerts, {len(sessions)} sessions, {len(families)} families "
+            f"against a model trained on {profile.n_sessions} sessions"
+        )
 
     unseen = unseen_rule_share(bundle.schema, sessions["pair_counts"])
-    console.print(
-        f"  rules the model never saw: [bold]{unseen:.1%}[/bold] of alerts"
-        + ("  [red]<- the model has no rarity signal for these[/red]"
-           if unseen > UNSEEN_RULE_WARN else "")
-    )
+    report["unseen_rule_share"] = round(float(unseen), 4)
+    if not args.json:
+        console.print(
+            f"  rules the model never saw: [bold]{unseen:.1%}[/bold] of alerts"
+            + ("  [red]<- the model has no rarity signal for these[/red]"
+               if unseen > UNSEEN_RULE_WARN else "")
+        )
     outside = 1.0 - float(sessions["in_inventory"].mean())
-    console.print(
-        f"  sessions on hosts outside the inventory: [bold]{outside:.1%}[/bold]"
-        f"  (training had {1 - profile.inventory_coverage:.1%})"
-    )
+    report["outside_inventory_share"] = round(outside, 4)
+    if not args.json:
+        console.print(
+            f"  sessions on hosts outside the inventory: [bold]{outside:.1%}[/bold]"
+            f"  (training had {1 - profile.inventory_coverage:.1%})"
+        )
 
-    if profile.n_sessions < DRIFT_MIN_TRAINING:
+    if profile.n_sessions < DRIFT_MIN_TRAINING and not args.json:
         console.print(
             f"[yellow]this model was fitted on {profile.n_sessions} sessions"
             f"[/yellow]  below about {DRIFT_MIN_TRAINING} the comparison is mostly "
@@ -1721,6 +1907,12 @@ def cmd_drift(args) -> None:
         )
 
     drifts = compare_profile(profile, X)
+    report["features"] = [
+        {"feature": d.name, "psi": round(float(d.psi), 4), "verdict": d.verdict,
+         "training_median": float(d.training_median),
+         "current_median": float(d.current_median)}
+        for d in drifts
+    ]
     table = Table(title="feature drift, worst first", title_justify="left",
                   header_style="bold")
     table.add_column("feature")
@@ -1735,7 +1927,8 @@ def cmd_drift(args) -> None:
             safe(d.name), f"{d.psi:.3f}", f"[{style}]{d.verdict}[/{style}]",
             f"{d.training_median:.3f}", f"{d.current_median:.3f}",
         )
-    console.print(table)
+    if not args.json:
+        console.print(table)
 
     # the queue is a top-K cut, so a shift confined to the bottom of the score
     # distribution changes nothing an analyst sees. Report the boundary separately.
@@ -1743,21 +1936,30 @@ def cmd_drift(args) -> None:
     if trained_edges:
         boundary = float(np.quantile(families["ranking_score"].to_numpy(), 0.9))
         trained_boundary = trained_edges[-1]
-        console.print(
-            f"  top-decile family score: [bold]{boundary:.3f}[/bold] now, "
-            f"{trained_boundary:.3f} at training"
-        )
+        report["top_decile_score"] = round(boundary, 4)
+        report["top_decile_score_at_training"] = round(float(trained_boundary), 4)
+        if not args.json:
+            console.print(
+                f"  top-decile family score: [bold]{boundary:.3f}[/bold] now, "
+                f"{trained_boundary:.3f} at training"
+            )
 
     major = [d for d in drifts if d.verdict == "major"]
+    report["major_features"] = len(major)
+    report["drifted"] = bool(major or unseen > UNSEEN_RULE_WARN)
+    if args.json:
+        print(json.dumps(report, indent=2, default=str))
     if major or unseen > UNSEEN_RULE_WARN:
-        console.print(
-            f"[yellow]{len(major)} feature(s) past PSI {PSI_MAJOR}[/yellow]  "
-            "this reports that the input moved. It does not measure whether the "
-            "ranking is still right, which needs confirmed outcomes."
-        )
+        if not args.json:
+            console.print(
+                f"[yellow]{len(major)} feature(s) past PSI {PSI_MAJOR}[/yellow]  "
+                "this reports that the input moved. It does not measure whether the "
+                "ranking is still right, which needs confirmed outcomes."
+            )
         raise SystemExit(EXIT_DRIFT)
-    console.print(f"[green]no major drift[/green]  worst PSI {drifts[0].psi:.3f}"
-                  if drifts else "[green]no comparable features[/green]")
+    if not args.json:
+        console.print(f"[green]no major drift[/green]  worst PSI {drifts[0].psi:.3f}"
+                      if drifts else "[green]no comparable features[/green]")
 
 
 # --------------------------------------------------------------------------
@@ -1977,6 +2179,35 @@ def _apply_config(args) -> None:
         setattr(args, attribute, value)
 
 
+def cmd_completion(args) -> None:
+    # a static script harvested from the parser, so it never drifts from it
+    parser = build_parser()
+    subparsers = next(
+        action for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    names = " ".join(sorted(subparsers.choices))
+    lines = [
+        "_meerkat() {",
+        '  local cur="${COMP_WORDS[COMP_CWORD]}"',
+        '  if [ "$COMP_CWORD" -eq 1 ]; then',
+        f'    COMPREPLY=($(compgen -W "{names}" -- "$cur"))',
+        "    return",
+        "  fi",
+        '  case "${COMP_WORDS[1]}" in',
+    ]
+    for name, sub in sorted(subparsers.choices.items()):
+        flags = " ".join(sorted({
+            option for action in sub._actions
+            for option in action.option_strings if option.startswith("--")
+        }))
+        lines.append(
+            f'    {name}) COMPREPLY=($(compgen -W "{flags}" -- "$cur"));;'
+        )
+    lines += ["  esac", "}", "complete -F _meerkat meerkat"]
+    print("\n".join(lines))
+
+
 def cmd_orientation(args) -> None:
     # the reception desk: where things stand, and what makes sense next
     latest = latest_run_id(args.runs_dir)
@@ -2090,6 +2321,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version", action="version", version=f"meerkat {__version__}"
     )
+    parser.add_argument(
+        "--no-color", action="store_true",
+        help="plain output; NO_COLOR in the environment does the same",
+    )
     sub = parser.add_subparsers(dest="command", required=False)
 
 
@@ -2132,9 +2367,11 @@ def build_parser() -> argparse.ArgumentParser:
                       help="emit the run list as JSON instead of a table")
     runs.set_defaults(func=cmd_runs)
 
-    inspect = sub.add_parser("inspect", help="open a family or session")
-    inspect.add_argument("handle", help="family handle, e.g. F003")
+    inspect = sub.add_parser("inspect", help="open a family, session or alert")
+    inspect.add_argument("handle", help="family handle, e.g. F3")
     inspect.add_argument("session", nargs="?", help="session handle, e.g. S1")
+    inspect.add_argument("alert", nargs="?",
+                         help="alert handle, e.g. A2, in the session's own order")
     inspect.add_argument("--where", action="append", metavar="field=value")
     inspect.add_argument("--exclude", action="append", metavar="field=value")
     inspect.add_argument("--distinct", metavar="field")
@@ -2143,11 +2380,13 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--raw-dir", type=Path, default=None,
                          help="where the alert files live; defaults to the "
                               "directory the run recorded")
+    inspect.add_argument("--json", action="store_true",
+                         help="emit the family, sessions and alerts as JSON")
     _add_run_selector(inspect)
     inspect.set_defaults(func=cmd_inspect)
 
     review = sub.add_parser("review", help="record a decision on a family or session")
-    review.add_argument("handle", help="family handle, e.g. F003")
+    review.add_argument("handle", help="family handle, e.g. F3")
     review.add_argument("decision", choices=REVIEW_DECISIONS)
     review.add_argument(
         "--session",
@@ -2187,6 +2426,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_selector(queue_out)
     queue_out.set_defaults(func=cmd_export_queue)
 
+    completion = sub.add_parser(
+        "completion",
+        help="print a bash completion script; zsh loads it via bashcompinit",
+    )
+    completion.set_defaults(func=cmd_completion)
+
     demo = sub.add_parser("demo", help="run the bundled russellmitchell demo")
     demo.add_argument("--raw-dir", type=Path, default=DEMO_RAW)
     demo.add_argument("--model", type=Path, default=DEFAULT_MODEL)
@@ -2222,6 +2467,8 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--inventory", type=Path, default=_UNSET)
     check.add_argument("--sample", type=_positive, default=CHECK_SAMPLE,
                        help="how many alerts to read")
+    check.add_argument("--json", action="store_true",
+                       help="emit the report as JSON; warnings stay on stderr")
     _add_alert_files(check)
     check.set_defaults(func=cmd_check)
 
@@ -2235,6 +2482,8 @@ def build_parser() -> argparse.ArgumentParser:
     drift.add_argument("--model", type=Path, default=_UNSET)
     drift.add_argument("--top", type=_positive, default=10,
                        help="how many features to list")
+    drift.add_argument("--json", action="store_true",
+                       help="emit the full report as JSON, every feature included")
     _add_alert_files(drift)
     drift.set_defaults(func=cmd_drift)
 
@@ -2362,6 +2611,10 @@ def main(argv: list[str] | None = None) -> None:
             stream.reconfigure(encoding="utf-8")
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.no_color:
+        # the module globals are what every renderer prints through
+        globals()["console"] = Console(no_color=True)
+        globals()["errors"] = Console(stderr=True, no_color=True)
     # bare `meerkat` orients instead of erroring, and needs a runs dir to look in
     if args.command is None:
         args.runs_dir = _UNSET

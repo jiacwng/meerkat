@@ -29,6 +29,15 @@ after.
   Flags beat variables, variables beat the file. `demo` ignores both.
 - Bare `meerkat` prints where things stand and the next commands, instead of a
   usage error.
+- Handles are unpadded: `F1`, `S1`. Runs saved with padded handles still open.
+- Alert handles: `inspect F3 S1 A2` opens one alert's full record, `--raw` adds
+  the source line. Alert tables carry the handles.
+- The family view always lists its sessions; every view prints the next command
+  on stderr, so pipes stay clean.
+- `--json` on `inspect`, `check` and `drift`. The drift report carries every
+  feature.
+- `--no-color`, and `meerkat completion` prints a bash completion script.
+- The README terminal captures use a flat style.
 - `meerkat export queue --format csv|json`.
 - `--json` on `queue` and `runs`. Errors go to stderr.
 - `queue --budget`, recuts a saved run without rescoring.

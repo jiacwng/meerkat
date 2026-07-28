@@ -118,9 +118,9 @@ class HandleTests(unittest.TestCase):
         # always F001 and budget 1 leaves F002 out of in_queue
         decorated = cli.decorate_families(make_families(), make_alerts(), budget=1)
         by_score = decorated.sort_values("ranking_score", ascending=False)
-        self.assertEqual(list(by_score["handle"]), ["F001", "F002"])
-        top = decorated[decorated["handle"].eq("F001")].iloc[0]
-        bottom = decorated[decorated["handle"].eq("F002")].iloc[0]
+        self.assertEqual(list(by_score["handle"]), ["F1", "F2"])
+        top = decorated[decorated["handle"].eq("F1")].iloc[0]
+        bottom = decorated[decorated["handle"].eq("F2")].iloc[0]
         self.assertTrue(top["in_queue"])
         self.assertFalse(bottom["in_queue"])
 
@@ -211,7 +211,7 @@ class RunRoundTripTests(unittest.TestCase):
                 ["S1", "S2"],
             )
             related = run.related_families(family)
-            self.assertEqual(list(related["handle"]), ["F002"])
+            self.assertEqual(list(related["handle"]), ["F2"])
             self.assertNotEqual(
                 related.iloc[0]["detector_source"], family["detector_source"]
             )
@@ -417,13 +417,13 @@ class PanelTests(unittest.TestCase):
                 decorated, make_sessions(), make_alerts(),
             )
             run = cli.load_run(runs, "acme-1")
-            current = run.families["handle"].eq("F001")
+            current = run.families["handle"].eq("F1")
             run.families.loc[current, "alert_count"] = 40
             family = run.family_by_handle("F001")
             peers = []
             for number, count in enumerate((10, 20, 30), start=3):
                 peer = family.copy()
-                peer["handle"] = f"F{number:03d}"
+                peer["handle"] = f"F{number}"
                 peer["family_id"] = f"peer-{number}"
                 peer["entity_id"] = f"10.0.0.{number}"
                 peer["alert_count"] = count
@@ -520,7 +520,7 @@ class QueueSelectionTests(unittest.TestCase):
                 run, False, None, "suricata", None, None
             )
             # F002 is suricata and below the queue line, a filter still finds it
-            self.assertEqual(list(by_detector["handle"]), ["F002"])
+            self.assertEqual(list(by_detector["handle"]), ["F2"])
 
     def test_day_filter_keeps_the_daily_budget(self):
         # --day picks one day and keeps that day's top-K, so it never widens
@@ -555,7 +555,7 @@ class QueueSelectionTests(unittest.TestCase):
             escalated = cli._select_families(
                 run, False, None, None, None, "escalate"
             )
-            self.assertEqual(list(escalated["handle"]), ["F002"])
+            self.assertEqual(list(escalated["handle"]), ["F2"])
 
 
 class LfsTests(unittest.TestCase):
@@ -839,7 +839,7 @@ class CheckReportsTheTestedValueTests(unittest.TestCase):
         with contextlib.redirect_stdout(output):
             cli.cmd_check(argparse.Namespace(
                 company="acme", input=directory, inventory=inventory,
-                sample=100, wazuh_file=None, aminer_file=None,
+                sample=100, wazuh_file=None, aminer_file=None, json=False,
             ))
         printed = squashed(output.getvalue())
         self.assertIn("outsidetheinventory", printed)
@@ -866,7 +866,7 @@ class CheckReadsEveryAlertFileTests(unittest.TestCase):
         ):
             cli.cmd_check(argparse.Namespace(
                 company="acme", input=directory, inventory=inventory,
-                sample=100, wazuh_file=None, aminer_file=None,
+                sample=100, wazuh_file=None, aminer_file=None, json=False,
             ))
         printed = squashed(output.getvalue())
         self.assertIn("alerts.json", printed)
@@ -1027,7 +1027,7 @@ class EndToEndTriageTests(unittest.TestCase):
 
     def test_every_family_is_scored_ranked_and_labelled_from_the_alerts(self):
         families = self.saved.families
-        self.assertEqual(list(families["handle"]), [f"F{i:03d}" for i in range(1, 7)])
+        self.assertEqual(list(families["handle"]), [f"F{i}" for i in range(1, 7)])
         self.assertTrue(families["ranking_score"].between(0, 1).all())
         self.assertTrue(families["evidence_probability"].between(0, 1).all())
         self.assertEqual(set(families["host_label"]), {"web01"})
@@ -1053,7 +1053,7 @@ class EndToEndTriageTests(unittest.TestCase):
         printed = self.output.getvalue()
         self.assertIn("saved run", printed)
         self.assertIn("Review queue", printed)
-        self.assertIn("F001", printed)
+        self.assertIn("F1", printed)
 
 
 @unittest.skipUnless(
@@ -1117,7 +1117,7 @@ class RealExitCodeTests(unittest.TestCase):
             cli.cmd_drift(argparse.Namespace(
                 model=SHIPPED_BUNDLE, input=directory, company="acme",
                 inventory=directory / "inventory" / "acme.json",
-                wazuh_file=None, aminer_file=None, top=5,
+                wazuh_file=None, aminer_file=None, top=5, json=False,
             ))
         self.assertEqual(caught.exception.code, cli.EXIT_DRIFT)
         self.assertNotIn(cli.EXIT_DRIFT, (EXIT_ERROR, EXIT_DECLINED))
@@ -1139,7 +1139,7 @@ class RealExitCodeTests(unittest.TestCase):
             cli.cmd_drift(argparse.Namespace(
                 model=SHIPPED_BUNDLE, input=directory, company="acme",
                 inventory=directory / "inventory" / "acme.json",
-                wazuh_file=None, aminer_file=None, top=5,
+                wazuh_file=None, aminer_file=None, top=5, json=False,
             ))
         report = " ".join(printed.getvalue().split())
         self.assertIn("rules the model never saw", report)
@@ -1355,7 +1355,7 @@ class TestRuleCardinality(unittest.TestCase):
         ):
             cli.cmd_check(argparse.Namespace(
                 company="acme", input=directory, inventory=inventory,
-                sample=len(rule_ids) * 2, wazuh_file=None, aminer_file=None,
+                sample=len(rule_ids) * 2, wazuh_file=None, aminer_file=None, json=False,
             ))
         return squashed(reported.getvalue())
 
