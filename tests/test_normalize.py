@@ -1186,6 +1186,77 @@ class NativeSuricataExports(unittest.TestCase):
         # the copy kept is suricata's own, so the file it came from says eve.json
         self.assertEqual(list(frame["source_file"].astype(str)), ["eve.json"])
 
+    def test_a_deeply_nested_file_does_not_stop_the_run(self):
+        # json.loads raises RecursionError, not a decode error, and the sniffer
+        # reads every json file in the directory before anything is ingested
+        raw = self.build(("alerts.json", [wazuh_record()]))
+        (raw / "deep.json").write_text("[" * 60000 + "]" * 60000, encoding="utf-8")
+        self.assertEqual(sniff_alert_family(raw / "deep.json"), "")
+        self.assertEqual(len(self.normalized(raw)), 1)
+
+    def test_a_line_shaped_like_a_miner_record_is_skipped(self):
+        # a concatenated export decides its family from the first lines, and the
+        # miner reader trusted that instead of checking each record
+        self.assertIsNone(normalize.read_family_record({"LogData": 1}, "aminer"))
+        self.assertIsNone(
+            normalize.read_family_record({"AnalysisComponent": {}}, "aminer")
+        )
+
+    def test_a_named_file_is_never_listed_twice(self):
+        # its first line sniffed as a third family, so the file was read twice
+        # and the positional label join moved with it
+        raw = self.build(("demo_wazuh.json", [wazuh_record()]))
+        (raw / "demo_wazuh.json").write_text(
+            json.dumps({"event_type": "data", "data": {"x": 1}}) + "\n"
+            + json.dumps(wazuh_record()) + "\n",
+            encoding="utf-8",
+        )
+        resolved = resolve_alert_files(raw, "demo")
+        self.assertEqual(len({path for path, _ in resolved}), len(resolved))
+
+    def test_a_burst_keeps_its_copies_when_the_other_file_has_one(self):
+        # suricata logs the same signature twice on a burst; a set-based dedup
+        # let one copy in the first file erase every copy in the second
+        alert = eve_alert_record()
+        forwarded = {
+            "timestamp": "2022-01-21T00:20:05.000000+0000",
+            "rule": {"description": "Suricata alert", "level": 6},
+            "agent": {"id": "001", "name": "inetfw", "ip": "10.0.0.254"},
+            "data": {
+                **{k: str(v) for k, v in alert.items() if k != "alert"},
+                "alert": {k: str(v) for k, v in alert["alert"].items()},
+            },
+        }
+        raw = self.build(
+            ("eve.json", [alert]),
+            ("alerts.json", [forwarded] * 9),
+        )
+        frame = self.normalized(raw)
+        suricata = frame[frame["detector_source"].astype(str).eq("suricata")]
+        self.assertEqual(len(suricata), 9)
+
+    def test_a_hostile_signature_id_does_not_stop_the_ingest(self):
+        # an alert field is attacker-influenced: "inf" overflowed int() and a
+        # nested object was unhashable, and either took the whole run down
+        raw = self.build(
+            ("alerts.json", [wazuh_record()]),
+            ("eve.json", [
+                self.hostile_eve("inf"),
+                self.hostile_eve({"nested": 1}),
+                self.hostile_eve("1e400"),
+                eve_alert_record(),
+            ]),
+        )
+        frame = self.normalized(raw)
+        detectors = frame["detector_source"].astype(str)
+        self.assertEqual(int(detectors.eq("suricata").sum()), 4)
+        self.assertEqual(int(detectors.eq("wazuh").sum()), 1)
+
+    def hostile_eve(self, signature_id):
+        record = eve_alert_record()
+        record["alert"]["signature_id"] = signature_id
+        return record
+
     def test_two_copies_inside_one_file_are_both_kept(self):
         # suricata does log the same signature twice on a burst, and russellmitchell
         # has 20 such lines, so a repeat within one file is not a duplicate
