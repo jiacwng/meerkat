@@ -1,3 +1,6 @@
+# text stays LF in the repo and at checkout; the LFS lines below override for binaries
+* text=auto eol=lf
+
 # Only the bulky alert exports go through LFS. Inventories are a few kilobytes
 # of JSON and are better kept as ordinary git objects.
 data/raw/*_wazuh.json  filter=lfs diff=lfs merge=lfs -text
