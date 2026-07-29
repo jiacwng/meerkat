@@ -449,7 +449,7 @@ def evaluate_scenarios(
     inventories: dict[str, Inventory],
     windows_by_scenario: dict[str, list[tuple[float, float, str]]],
     budgets: tuple[int, ...] = DEFAULT_BUDGETS,
-    n_estimators: int = 300,
+    n_estimators: int = 200,
     seeds: tuple[int, ...] = (0,),
     gap_s: float = SESSION_GAP_S,
     pu_c: float | None = None,
@@ -553,7 +553,7 @@ def evaluate_scenarios(
 def build_bundle(
     session_tables: dict[str, pd.DataFrame],
     holdout: str | None = None,
-    n_estimators: int = 300,
+    n_estimators: int = 200,
     seed: int = 0,
     pu_c: float | None = None,
 ) -> TriageBundle:

@@ -19,6 +19,8 @@ after.
   forests reach at least as many unseen incidents as the shipped bundle and
   disagree with it on at least six of them. Ticket labels score 49 at budget 5
   against 51 with per-alert ground truth.
+- Incident and reviewed-period times read ISO 8601 beside epoch seconds; a
+  time in neither format is refused with its column named.
 - `meerkat check`, reports per-detector counts, inventory match rate, role
   coverage and rule cardinality from a bounded sample.
 - `meerkat drift`, reports input distribution change with no labels. Population
@@ -112,6 +114,11 @@ after.
 
 ### Changed
 
+- `retrain` fits 200 trees by default, was 300. The shipped model was trained
+  with 200, so a no-flag retrain now fits the same forest it is compared
+  against. A saved retrain reports what was refit, rescaled and kept, and the
+  bundle's provenance records depth, leaf size and class weight beside trees
+  and seed.
 - The family view no longer prints `family_id`, a second run id, or the list
   of the panels it just printed.
 - The README terminal captures use a flat style.

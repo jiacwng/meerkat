@@ -1812,6 +1812,10 @@ def cmd_retrain(args) -> None:
         f"{sum(verdict['passed'])} of {len(verdict['passed'])} seeds passed, "
         "median kept"
     )
+    console.print(
+        "[dim]refit: forest (your sessions)  rescaled: re-ranker scale "
+        "(your families)  kept: ranking weights, calibrator (shipped)[/dim]"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -2247,9 +2251,7 @@ pre {{ color:#b9bcba; font-family:Consolas,Menlo,monospace; font-size:14px;
 
 
 def _recorded_html(render, title: str) -> str:
-    # the terminal views are the single source of content; the page is the
-    # same render, captured. Alert text passed through safe() upstream and is
-    # escaped again by the exporter.
+    # the page is the terminal render, recorded; safe() and the exporter escape
     import io
 
     from rich.console import Console
@@ -2319,8 +2321,7 @@ def cmd_export_html(args) -> None:
         title = f"meerkat {run.run_id} {handle}"
         default_name = f"family-{handle.lower()}.html"
     else:
-        # the handoff report: what was escalated carries its evidence, what
-        # was closed takes one line, the rest is stated unreviewed
+        # escalations carry their evidence, closed take a line, rest is stated
         queued = run.families[run.families["in_queue"]]
         escalated, closed, unreviewed = [], [], []
         for _, family in queued.iterrows():
@@ -2954,7 +2955,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="bag-size discount; a ticket contributes k/n per "
                              "session and k=1 keeps every ticket's total at 1.0")
     tuning.add_argument("--min-positives", type=_positive, default=10)
-    tuning.add_argument("--trees", type=int, default=300)
+    tuning.add_argument("--trees", type=int, default=200)
     tuning.add_argument("--seed", type=int, default=0)
     tuning.add_argument("--fits", type=_positive, default=5,
                         help="forests to fit; a majority must beat the shipped one")
@@ -3078,8 +3079,7 @@ def main(argv: list[str] | None = None) -> None:
                 errno.EPIPE, errno.EINVAL
             ):
                 _quiet_pipe_exit()
-            # a path the OS refuses (--output to a directory, a missing
-            # parent) is the user's to fix, not a crash
+            # a path the OS refuses is the user's to fix, not a crash
             errors.print(f"[red]{error}[/red]")
             raise SystemExit(EXIT_ERROR)
     except AlertFileError as error:

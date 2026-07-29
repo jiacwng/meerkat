@@ -16,7 +16,7 @@
   <a href="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml">
     <img src="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml/badge.svg" alt="CI status">
   </a>
-  <img src="https://img.shields.io/badge/tests-410%20passing-brightgreen" alt="410 tests passing">
+  <img src="https://img.shields.io/badge/tests-414%20passing-brightgreen" alt="414 tests passing">
   <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 to 3.13">
   <img src="https://img.shields.io/badge/license-MIT-informational" alt="MIT license">
 </p>
@@ -280,6 +280,30 @@ meerkat retrain --incidents tickets.csv --inventory alerts/inventory/alerts.json
 
 `tickets.csv` is a `start,end,host,verdict` export from your ticketing system: an
 incident ran on this machine between these times, and this was the outcome.
+
+| column    | format                                                             |
+| --------- | ------------------------------------------------------------------ |
+| `start`   | epoch seconds or ISO 8601; a time without a timezone counts as UTC |
+| `end`     | same, and not before `start`                                       |
+| `host`    | a hostname or IP address from the inventory                        |
+| `verdict` | `malicious`, `security_risk`, `test` or `true_positive`            |
+
+```csv
+start,end,host,verdict
+2022-01-18T11:20:00Z,2022-01-18T13:05:00Z,intranet-server,true_positive
+1642545600,1642552800,mail,malicious
+```
+
+The verdict names follow OCSF's Incident Finding, matched after lowercasing.
+`test` counts as an attack because a purple-team run is known-good supervision.
+Rows with any other verdict are treated as non-attacks and dropped; a file
+with no attack row is refused. A host the inventory cannot resolve is named in
+a warning and its rows match nothing.
+
+Retraining refuses to run, and names every reason at once, when the batch
+covers no more days than `--holdout-days` (7), when every incident falls in
+the held-out days, or when fewer than `--min-positives` (10) sessions overlap
+an incident.
 
 Meerkat trains on the earlier days and scores itself on the most recent ones. It
 fits five forests and saves one only when a majority of them pass two tests on

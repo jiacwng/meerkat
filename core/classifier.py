@@ -126,7 +126,7 @@ def rescale_reranker(reranker: FamilyReranker, families: pd.DataFrame) -> Family
 def fit_model(
     X: pd.DataFrame,
     session_positive: pd.Series,
-    n_estimators: int = 300,
+    n_estimators: int = 200,
     seed: int = 0,
 ) -> RandomForestClassifier:
     model = RandomForestClassifier(
@@ -155,7 +155,7 @@ def fit_soft_labels(
     X: pd.DataFrame,
     prior: np.ndarray,
     reviewed: np.ndarray | None = None,
-    n_estimators: int = 300,
+    n_estimators: int = 200,
     seed: int = 0,
 ) -> RandomForestClassifier:
     prior = np.clip(np.asarray(prior, dtype=float), 0.0, 1.0)
@@ -207,7 +207,7 @@ def fit_model_pu(
     X: pd.DataFrame,
     labelled_positive: pd.Series,
     c: float,
-    n_estimators: int = 300,
+    n_estimators: int = 200,
     seed: int = 0,
 ) -> RandomForestClassifier:
     if not 0.0 < c <= 1.0:
@@ -511,6 +511,12 @@ def _write_provenance(model: object, path: Path) -> None:
         "seed": getattr(model, "seed", None),
         "roles": list(getattr(getattr(model, "schema", None), "roles", ()) or ()),
     }
+    # the settings the forest was fitted with, so a bundle answers for itself
+    forest = getattr(model, "forest", model)
+    params = forest.get_params() if hasattr(forest, "get_params") else {}
+    record["max_depth"] = params.get("max_depth")
+    record["min_samples_leaf"] = params.get("min_samples_leaf")
+    record["class_weight"] = params.get("class_weight")
     provenance_path(path).write_text(
         json.dumps(record, indent=2) + "\n", encoding="utf-8"
     )

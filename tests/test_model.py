@@ -230,6 +230,28 @@ class TestBundleGate(unittest.TestCase):
         path.write_bytes(path.read_bytes() + b"\n")
         self.assertFalse(classifier.read_provenance(path)["matches_file"])
 
+    def test_the_default_forest_is_the_one_the_benchmark_trained(self):
+        # 300 in core against 200 in bench meant a no-flag retrain fitted a
+        # different forest than the shipped one it must beat
+        self.assertEqual(
+            classifier.fit_model(
+                pd.DataFrame({"signal": [0.0, 1.0]}), pd.Series([False, True]),
+            ).n_estimators,
+            200,
+        )
+
+    def test_provenance_records_the_forest_settings(self):
+        model = classifier.fit_model(
+            pd.DataFrame({"signal": [0.0, 1.0]}), pd.Series([False, True]),
+            n_estimators=2, seed=0,
+        )
+        path = self.directory / "bundle.skops"
+        classifier.save_model(model, path)
+        record = classifier.read_provenance(path)
+        self.assertIsNone(record["max_depth"])
+        self.assertEqual(record["min_samples_leaf"], 1)
+        self.assertEqual(record["class_weight"], "balanced")
+
 
 # Drift reports covariate shift and refuses to claim anything about accuracy.
 # Two bugs in the first version of the PSI code were found by running it on real
@@ -1099,36 +1121,47 @@ class TestLoadIncidents(unittest.TestCase):
             load_incidents(path)
         self.assertIn("2 rows", str(caught.exception))
 
-    def test_an_iso_timestamp_is_refused_by_the_float_conversion(self):
-        # PINS CURRENT BEHAVIOUR, WHICH IS NOT GOOD BEHAVIOUR. start and end are
-        # epoch seconds and a client pasting the format their ticketing system
-        # shows gets pandas' own message, which names the value and neither the
-        # column, the row nor the file. Every other refusal in this loader says
-        # which column and how many rows. The CLI wraps it as "the incident
-        # records could not be read", so it is not a traceback, but the reader
-        # is left to work out that "start" was the column and epoch seconds the
-        # unit. This test exists so a fix is a visible change rather than a
-        # silent one.
+    def test_an_iso_timestamp_is_read_as_utc(self):
+        # the format a ticketing system exports; a naive time counts as UTC
         path = write(
             "start,end,host,verdict\n"
-            "2026-01-21T00:00:00,2026-01-21T01:00:00,web-01,true_positive\n"
+            "2026-01-21T00:00:00,2026-01-21T01:00:00+00:00,web-01,true_positive\n"
+        )
+        frame = load_incidents(path)
+        expected = pd.Timestamp("2026-01-21T00:00:00Z").timestamp()
+        self.assertEqual(frame.loc[0, "start"], expected)
+        self.assertEqual(frame.loc[0, "end"], expected + 3600)
+
+    def test_epoch_and_iso_rows_mix_in_one_file(self):
+        path = write(
+            "start,end,host,verdict\n"
+            "100,200,web-01,true_positive\n"
+            "2026-01-21T00:00:00Z,2026-01-21T01:00:00Z,web-01,malicious\n"
+        )
+        frame = load_incidents(path)
+        self.assertEqual(frame.loc[0, "start"], 100.0)
+        self.assertEqual(
+            frame.loc[1, "start"],
+            pd.Timestamp("2026-01-21T00:00:00Z").timestamp(),
+        )
+
+    def test_a_time_in_neither_format_is_named_with_its_column(self):
+        # an ambiguous 12/01/2026 is refused rather than guessed
+        path = write(
+            "start,end,host,verdict\n12/01/2026,200,web-01,true_positive\n"
         )
         with self.assertRaises(ValueError) as caught:
             load_incidents(path)
         message = str(caught.exception)
-        self.assertIn("could not convert string to float", message)
-        self.assertIn("2026-01-21T00:00:00", message)
-        # what a named error would carry, and does not
-        self.assertNotIn("start", message)
-        self.assertNotIn("epoch", message)
+        self.assertIn("start", message)
+        self.assertIn("1 row(s)", message)
+        self.assertIn("epoch seconds nor ISO 8601", message)
 
-    def test_a_reviewed_period_file_refuses_the_same_way(self):
-        # load_reviewed_periods casts the same two columns, so --reviewed-periods
-        # written in the same format fails in the same undiagnosed way
+    def test_a_reviewed_period_file_reads_iso_the_same_way(self):
         path = write("start,end\n2026-01-21T00:00:00,2026-01-21T01:00:00\n")
-        with self.assertRaises(ValueError) as caught:
-            load_reviewed_periods(path)
-        self.assertIn("could not convert string to float", str(caught.exception))
+        frame = load_reviewed_periods(path)
+        expected = pd.Timestamp("2026-01-21T00:00:00Z").timestamp()
+        self.assertEqual(frame.loc[0, "start"], expected)
 
 
 class TestHostResolution(unittest.TestCase):

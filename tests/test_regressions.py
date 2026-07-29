@@ -246,9 +246,15 @@ class TestIncidentValidation(unittest.TestCase):
 
     def test_a_non_finite_time_is_refused(self):
         # NaN failed both sides of the holdout comparison, so the row vanished
-        # from training and from scoring and the printed counts did not add up
+        # from training and from scoring and the printed counts did not add up.
+        # A literal nan is refused by the format check; an inf survives it as a
+        # number and the finite check is what stops it.
         from core.incidents import load_incidents
-        body = "start,end,host,verdict\nnan,inf,h,true_positive\n"
+        body = "start,end,host,verdict\nnan,100,h,true_positive\n"
+        with self.assertRaises(ValueError) as caught:
+            load_incidents(self.csv(body))
+        self.assertIn("neither epoch seconds nor ISO 8601", str(caught.exception))
+        body = "start,end,host,verdict\n0,inf,h,true_positive\n"
         with self.assertRaises(ValueError) as caught:
             load_incidents(self.csv(body))
         self.assertIn("finite", str(caught.exception))
