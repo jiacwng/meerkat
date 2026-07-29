@@ -264,15 +264,13 @@ class PanelTests(unittest.TestCase):
         return buffer.getvalue()
 
     def test_http_panel_shows_process_panel_hidden(self):
-        # a panel with nothing in it is skipped, and the Available evidence
-        # line then tells an analyst what the alert did carry
+        # a panel with nothing in it is skipped outright
         text = self._capture(
             lambda: cli._render_panels(make_alerts().iloc[[0, 1]])
         )
         self.assertIn("Network / HTTP", text)
         self.assertIn("Provenance", text)
         self.assertNotIn("Process / System", text)
-        self.assertIn("Available evidence", text)
 
     def test_http_outcome_leads_with_the_verdict(self):
         # whether anything got through is the first question on a web attack,
@@ -1117,7 +1115,7 @@ class RealExitCodeTests(unittest.TestCase):
             cli.cmd_drift(argparse.Namespace(
                 model=SHIPPED_BUNDLE, input=directory, company="acme",
                 inventory=directory / "inventory" / "acme.json",
-                wazuh_file=None, aminer_file=None, top=5, json=False,
+                wazuh_file=None, aminer_file=None, top=5, json=False, all=False,
             ))
         self.assertEqual(caught.exception.code, cli.EXIT_DRIFT)
         self.assertNotIn(cli.EXIT_DRIFT, (EXIT_ERROR, EXIT_DECLINED))
@@ -1139,7 +1137,7 @@ class RealExitCodeTests(unittest.TestCase):
             cli.cmd_drift(argparse.Namespace(
                 model=SHIPPED_BUNDLE, input=directory, company="acme",
                 inventory=directory / "inventory" / "acme.json",
-                wazuh_file=None, aminer_file=None, top=5, json=False,
+                wazuh_file=None, aminer_file=None, top=5, json=False, all=False,
             ))
         report = " ".join(printed.getvalue().split())
         self.assertIn("rules the model never saw", report)
@@ -1568,7 +1566,7 @@ class TestQueueRendering(unittest.TestCase):
             "day": 19013, "host_label": "web-01", "detector_source": "wazuh",
             "title": "Web server 400 error", "rule_id": "31101",
             "alert_count": 3, "ranking_score": 0.9,
-            "evidence_probability": 0.8,
+            "evidence_probability": 0.8, "start": 100.0,
         }
         row.update(overrides)
         return pd.DataFrame([row])

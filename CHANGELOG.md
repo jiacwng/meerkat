@@ -38,6 +38,18 @@ after.
   feature.
 - `--no-color`, and `meerkat completion` prints a bash completion script.
 - The README terminal captures use a flat style.
+- The queue shows each family's start time, and table titles say what the
+  handle order means: F1 top priority, S1 strongest, A1 first in time.
+- Alert tables carry the field that varies inside the session. Session views
+  report native severity, burst shape and techniques.
+- ATT&CK ids embedded in Suricata rule metadata are read as native techniques.
+  Ids the lookup knows link to attack.mitre.org; nothing else becomes a link.
+- Long `queue` and `inspect` output pages on a terminal that has a pager;
+  `--no-pager` refuses.
+- `drift --all` lists every feature. `retrain` reports every failed
+  precondition in one run instead of one per run.
+- The family view no longer prints `family_id`, a second run id, or the list
+  of the panels it just printed.
 - `meerkat export queue --format csv|json`.
 - `--json` on `queue` and `runs`. Errors go to stderr.
 - `queue --budget`, recuts a saved run without rescoring.
