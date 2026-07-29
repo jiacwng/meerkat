@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -64,6 +67,22 @@ class ConfigPrecedence(unittest.TestCase):
     def test_the_demo_ignores_the_file(self):
         Path("meerkat.toml").write_text('runs_dir = "elsewhere"\n', encoding="utf-8")
         self.assertEqual(parse(["demo"]).runs_dir, cli.DEFAULT_RUNS)
+
+
+class Completion(unittest.TestCase):
+    def test_the_script_lists_commands_and_their_flags(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            cli.cmd_completion(argparse.Namespace())
+        script = output.getvalue()
+        self.assertIn("triage", script)
+        self.assertIn("--environment", script)
+        self.assertIn("complete -F _meerkat meerkat", script)
+
+
+class NoColor(unittest.TestCase):
+    def test_the_flag_parses_before_the_subcommand(self):
+        self.assertTrue(parse(["--no-color", "runs"]).no_color)
 
 
 class Orientation(unittest.TestCase):
