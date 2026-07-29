@@ -10,6 +10,8 @@ Public API:
     score_sessions(bundle, sessions)        -> scored sessions and families
     refit_forest(bundle, sessions, prior)   -> a bundle with a client forest
     rescale_bundle(bundle, sessions)        -> the same forest, rescaled re-ranker
+    fit_local_reranker(sessions, prior)     -> ranking weights from the client's
+                                               own incidents, or None
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from dataclasses import dataclass, replace
 import pandas as pd
 
 from core.classifier import (
+    fit_family_reranker,
     fit_soft_labels,
     predict_scores,
     rescale_reranker,
@@ -58,6 +61,8 @@ class TriageBundle:
     # optional so a bundle written before drift existed still loads. Read it with
     # getattr, because skops restores a missing field as absent rather than None.
     profile: TrainingProfile | None = None
+    # who fitted the family ranking weights: "shipped" or "local"
+    ranking_weights: str = "shipped"
 
 
 # A client has one environment, so the reranker and calibrator cannot be refitted:
@@ -120,6 +125,46 @@ def refit_forest(
             reranker.predict(families),
         ),
     )
+
+def fit_local_reranker(
+    sessions: pd.DataFrame,
+    prior: pd.Series,
+    n_estimators: int = 200,
+    seed: int = 0,
+    folds: int = 3,
+) -> tuple[object | None, int]:
+    # day-blocked folds keep every score out of fold on a single environment
+    train = sessions.copy()
+    train["positive"] = (prior > 0).to_numpy()
+    days = sorted(train["day"].unique())
+    parts = []
+    for offset in range(folds):
+        block = days[offset::folds]
+        rest = train[~train["day"].isin(block)]
+        part = train[train["day"].isin(block)]
+        if not len(part) or not rest["positive"].any():
+            continue
+        schema = fit_session_feature_schema(rest)
+        forest = fit_soft_labels(
+            build_session_feature_matrix(rest, schema),
+            prior.loc[rest.index].to_numpy(),
+            None,
+            n_estimators,
+            seed,
+        )
+        scored = part.copy()
+        scored["ranking_score"] = predict_scores(
+            forest, build_session_feature_matrix(part, schema)
+        )
+        parts.append(scored)
+    if not parts:
+        return None, 0
+    families = build_families(pd.concat(parts, ignore_index=True))
+    positives = int(families["family_positive"].sum())
+    if positives == 0 or positives == len(families):
+        return None, positives
+    return fit_family_reranker(families), positives
+
 
 def rescale_bundle(bundle: TriageBundle, sessions: pd.DataFrame) -> TriageBundle:
     # the shipped re-ranker's scaler was fitted on AIT families. Moving it onto the

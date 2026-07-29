@@ -1289,6 +1289,7 @@ class RealExitCodeTests(unittest.TestCase):
                 incidents=incidents, wazuh_file=None, aminer_file=None,
                 reviewed_periods=None, holdout_days=1, prior_k=1.0, budget=10,
                 min_positives=1, trees=5, seed=0, fits=2, out=written,
+                refit_ranking_weights=False,
             ))
         self.assertEqual(caught.exception.code, EXIT_DECLINED)
         self.assertNotEqual(EXIT_DECLINED, EXIT_ERROR)
@@ -1336,6 +1337,70 @@ class RealExitCodeTests(unittest.TestCase):
         report = " ".join(printed.getvalue().split())
         self.assertIn("rules the model never saw", report)
         self.assertIn("the model has no rarity signal for these", report)
+
+
+class RankingWeightContestTests(unittest.TestCase):
+    # the adopt path cannot be reached on single-campaign data, so it is
+    # exercised with stand-ins: only the contest's own decision is real
+    def _bundle(self, reranker="shipped"):
+        from core.scenario_eval import TriageBundle
+        return TriageBundle(
+            forest=None, schema=None, reranker=reranker, calibrator=None,
+            training_scenarios=(), n_estimators=2, seed=0,
+        )
+
+    def _contest(self, shipped_reach, local_reach, positives=20, fit=object()):
+        candidates = [self._bundle() for _ in shipped_reach]
+        verdict = {"candidates": shipped_reach, "median_index": 0}
+        args = argparse.Namespace(trees=2, seed=0, fits=len(candidates), budget=5)
+        with (
+            mock.patch(
+                "core.scenario_eval.fit_local_reranker",
+                return_value=(fit, positives),
+            ),
+            mock.patch.object(
+                cli, "incident_reach_for", side_effect=list(local_reach)
+            ),
+            cli.console.capture() as captured,
+        ):
+            bundle, note = cli._contest_ranking_weights(
+                candidates[0], candidates, verdict, None, None, None, None,
+                None, None, args,
+            )
+        return bundle, note, captured.get()
+
+    def test_a_winning_local_fit_is_adopted_and_says_so(self):
+        shipped = [np.array([True, False, False])] * 3
+        local = [np.array([True, True, False])] * 3
+        bundle, note, out = self._contest(shipped, local)
+        self.assertEqual(bundle.ranking_weights, "local")
+        self.assertIn("adopted: local ranking weights (won 3 of 3 seeds)", note)
+
+    def test_a_losing_local_fit_keeps_shipped_with_the_score(self):
+        shipped = [np.array([True, True, False])] * 3
+        local = [np.array([True, False, False])] * 3
+        bundle, note, out = self._contest(shipped, local)
+        self.assertEqual(bundle.reranker, "shipped")
+        self.assertIn("shipped won 3 of 3 seeds", note)
+
+    def test_a_tie_keeps_shipped(self):
+        reach = [np.array([True, False])] * 3
+        bundle, note, out = self._contest(reach, reach)
+        self.assertIn("shipped won", note)
+
+    def test_the_notification_translates_families_to_incidents(self):
+        shipped = [np.array([True])] * 3
+        local = [np.array([False])] * 3
+        _, _, out = self._contest(shipped, local, positives=8)
+        self.assertIn("8 positive families", out)
+        self.assertIn("~15", out)
+        self.assertIn("15 recorded incidents", out)
+
+    def test_an_impossible_fit_is_named_and_nothing_contested(self):
+        _, note, out = self._contest(
+            [np.array([True])] * 3, [np.array([True])] * 3, fit=None,
+        )
+        self.assertIn("could not be attempted", note)
 
 
 class SharedOpeningTests(unittest.TestCase):
@@ -1396,6 +1461,7 @@ class DemoBundleCheckTests(unittest.TestCase):
                 incidents=incidents, wazuh_file=None, aminer_file=None,
                 reviewed_periods=None, holdout_days=1, prior_k=1.0, budget=10,
                 min_positives=1, trees=10, seed=0, fits=1, out=absent,
+                refit_ranking_weights=False,
             ),
         }
         for name, args in commands.items():

@@ -517,6 +517,7 @@ def _write_provenance(model: object, path: Path) -> None:
     record["max_depth"] = params.get("max_depth")
     record["min_samples_leaf"] = params.get("min_samples_leaf")
     record["class_weight"] = params.get("class_weight")
+    record["ranking_weights"] = getattr(model, "ranking_weights", "shipped")
     provenance_path(path).write_text(
         json.dumps(record, indent=2) + "\n", encoding="utf-8"
     )

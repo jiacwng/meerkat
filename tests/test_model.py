@@ -251,6 +251,7 @@ class TestBundleGate(unittest.TestCase):
         self.assertIsNone(record["max_depth"])
         self.assertEqual(record["min_samples_leaf"], 1)
         self.assertEqual(record["class_weight"], "balanced")
+        self.assertEqual(record["ranking_weights"], "shipped")
 
 
 # Drift reports covariate shift and refuses to claim anything about accuracy.
@@ -749,6 +750,27 @@ class ClientRetrainingTests(unittest.TestCase):
         before = self.bundle.reranker.model.named_steps["scale"].mean_
         after = retrained.reranker.model.named_steps["scale"].mean_
         self.assertFalse(np.array_equal(before, after))
+
+    def test_a_local_reranker_fits_on_a_multi_day_client(self):
+        from core.scenario_eval import fit_local_reranker
+        client = pd.concat(self.sessions.values(), ignore_index=True)
+        prior = pd.Series(0.0, index=client.index)
+        prior[client["positive"]] = 0.5
+        local, positives = fit_local_reranker(client, prior, n_estimators=5)
+        self.assertIsNotNone(local)
+        self.assertGreater(positives, 0)
+        # the fit ranks: predict returns one score per family
+        scored = client.copy()
+        scored["ranking_score"] = 0.5
+        from core.sessions import build_families
+        families = build_families(scored)
+        self.assertEqual(len(local.predict(families)), len(families))
+
+    def test_a_single_day_client_cannot_fold_and_says_none(self):
+        from core.scenario_eval import fit_local_reranker
+        prior = self._prior(3)
+        local, positives = fit_local_reranker(self.client, prior, n_estimators=5)
+        self.assertIsNone(local)
 
     def test_pu_training_reaches_the_bundle(self):
         # pu_c has to reach the fit rather than be accepted and dropped. This
