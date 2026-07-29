@@ -89,9 +89,9 @@ class ReadmeAssetTests(unittest.TestCase):
 
     def test_queue_screenshot_matches_live_command(self):
         # a screenshot goes stale the moment the rendering changes, so the SVG
-        # text is diffed against the live command at the same 136 columns
+        # text is diffed against the live command at the same 138 columns
         self.assert_matches_command(
-            "queue.svg", ["queue", "--day", "2022-01-21"], 136
+            "queue.svg", ["queue", "--day", "2022-01-21"], 138
         )
 
     def test_inspect_screenshot_matches_live_command(self):

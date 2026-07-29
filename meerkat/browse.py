@@ -10,7 +10,8 @@ def _show_queue(run, show_all: bool) -> None:
     families = run.families if show_all else run.families[run.families["in_queue"]]
     reviews = cli.current_reviews(run.directory)
     title = "all families" if show_all else "Review queue"
-    cli.render_queue(families, reviews, title)
+    cli.render_queue(families, reviews, title,
+                     cli.bands_for(run.directory.parent))
 
 
 def _prompt_line(family, session_handle) -> str:

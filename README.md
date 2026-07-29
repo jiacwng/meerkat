@@ -16,7 +16,7 @@
   <a href="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml">
     <img src="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml/badge.svg" alt="CI status">
   </a>
-  <img src="https://img.shields.io/badge/tests-421%20passing-brightgreen" alt="421 tests passing">
+  <img src="https://img.shields.io/badge/tests-429%20passing-brightgreen" alt="429 tests passing">
   <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 to 3.13">
   <img src="https://img.shields.io/badge/license-MIT-informational" alt="MIT license">
 </p>
@@ -101,9 +101,9 @@ outside every incident are the negatives.
 
 **Rank families.** A logistic regression scores each family from its sessions'
 scores, the shape of the family and the role of the machine it landed on. The
-highest scores become the day's queue. A second logistic regression (Platt
-scaling) turns the score into the percentage shown in the `conf` column; it is
-for reading only and never changes the order.
+highest scores become the day's queue. The `esc%` column beside the score is
+not a model output: it is the share of your own past reviews at this score
+that were escalated, shown once a score band holds five.
 
 ## Quick start
 
@@ -129,9 +129,9 @@ further download. Those alerts are part of the AIT Alert Data Set, under CC BY
   >
 </p>
 
-`score` sets the order. `conf%` is the same score read as a probability: among
-families scoring this high in training, about 87% were real. A low value means
-*probably not worth opening*, not *unsure*. It never changes the order.
+`score` sets the order. `esc%` fills in as you review: among your past
+reviewed families scoring like this, the share you escalated. It never
+changes the order, and a fresh environment shows the score alone.
 
 ## Commands
 
