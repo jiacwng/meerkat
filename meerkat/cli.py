@@ -1626,6 +1626,10 @@ def _incident_reach(families, incidents, inventory, budget):
 # difference real however many incidents were supplied.
 MIN_DISCORDANT = 6
 
+# the local ranking-weight fit reached parity around 15 positive families in
+# the pooled-history measurement; advisory only, never a refusal
+LOCAL_WEIGHTS_COMFORT = 15
+
 
 def _validate_retrain_result(old, new) -> None:
     old = np.asarray(old, dtype=bool)
@@ -1806,6 +1810,12 @@ def cmd_retrain(args) -> None:
         raise SystemExit(EXIT_DECLINED)
 
     retrained = candidates[verdict["median_index"]]
+    ranking_note = "kept: ranking weights (shipped), calibrator"
+    if args.refit_ranking_weights:
+        retrained, ranking_note = _contest_ranking_weights(
+            retrained, candidates, verdict, train, prior, held, alerts,
+            held_incidents, inventory, args,
+        )
     save_model(retrained, args.out)
     console.print(
         f"[green]saved[/green] {args.out}  "
@@ -1814,7 +1824,57 @@ def cmd_retrain(args) -> None:
     )
     console.print(
         "[dim]refit: forest (your sessions)  rescaled: re-ranker scale "
-        "(your families)  kept: ranking weights, calibrator (shipped)[/dim]"
+        f"(your families)  {ranking_note}[/dim]"
+    )
+
+
+def _contest_ranking_weights(
+    retrained, candidates, verdict, train, prior, held, alerts,
+    held_incidents, inventory, args,
+):
+    from dataclasses import replace
+
+    from core.scenario_eval import fit_local_reranker
+
+    fits = [
+        fit_local_reranker(train, prior, args.trees, args.seed + offset)
+        for offset in range(args.fits)
+    ]
+    positives = fits[0][1]
+    style = "yellow" if positives < LOCAL_WEIGHTS_COMFORT else "dim"
+    console.print(
+        f"[{style}]your incident records yield {positives} positive families; "
+        f"a ranking-weight fit is usually not competitive below "
+        f"~{LOCAL_WEIGHTS_COMFORT} (about {LOCAL_WEIGHTS_COMFORT} recorded "
+        f"incidents is a comfortable history)[/{style}]"
+    )
+    if any(fit is None for fit, _ in fits):
+        return retrained, (
+            "kept: ranking weights (shipped; the local fit could not be "
+            "attempted), calibrator"
+        )
+    wins = 0
+    for candidate, (local, _), shipped_reach in zip(
+        candidates, fits, verdict["candidates"]
+    ):
+        local_reach = incident_reach_for(
+            replace(candidate, reranker=local), held, alerts,
+            held_incidents, inventory, args.budget,
+        )
+        wins += int(local_reach.sum() > shipped_reach.sum())
+    if wins * 2 > len(fits):
+        adopted = replace(
+            retrained,
+            reranker=fits[verdict["median_index"]][0],
+            ranking_weights="local",
+        )
+        return adopted, (
+            f"adopted: local ranking weights (won {wins} of {len(fits)} "
+            "seeds), kept: calibrator"
+        )
+    return retrained, (
+        f"kept: ranking weights (shipped won {len(fits) - wins} of "
+        f"{len(fits)} seeds), calibrator"
     )
 
 
@@ -2955,6 +3015,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="bag-size discount; a ticket contributes k/n per "
                              "session and k=1 keeps every ticket's total at 1.0")
     tuning.add_argument("--min-positives", type=_positive, default=10)
+    tuning.add_argument("--refit-ranking-weights", action="store_true",
+                        help="also fit the family ranking weights on your own "
+                             "incidents; adopted only if they beat the shipped "
+                             "ones on the held-out days")
     tuning.add_argument("--trees", type=int, default=200)
     tuning.add_argument("--seed", type=int, default=0)
     tuning.add_argument("--fits", type=_positive, default=5,

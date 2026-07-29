@@ -16,7 +16,7 @@
   <a href="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml">
     <img src="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml/badge.svg" alt="CI status">
   </a>
-  <img src="https://img.shields.io/badge/tests-414%20passing-brightgreen" alt="414 tests passing">
+  <img src="https://img.shields.io/badge/tests-421%20passing-brightgreen" alt="421 tests passing">
   <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 to 3.13">
   <img src="https://img.shields.io/badge/license-MIT-informational" alt="MIT license">
 </p>
@@ -305,6 +305,11 @@ covers no more days than `--holdout-days` (7), when every incident falls in
 the held-out days, or when fewer than `--min-positives` (10) sessions overlap
 an incident.
 
+A first batch should be your full alert archive with its incident history;
+records covering about 15 distinct incidents are a comfortable start. Keep the
+whole archive for later retrains, and trim old data only when `meerkat drift`
+reports a major shift.
+
 Meerkat trains on the earlier days and scores itself on the most recent ones. It
 fits five forests and saves one only when a majority of them pass two tests on
 the held-out days. A forest passes the first test when it reaches at least as
@@ -312,6 +317,11 @@ many incidents as the shipped bundle, so an equal score is enough. It passes the
 second when the two models disagree on at least six held-out incidents, because
 below six a sign test cannot separate a real difference from chance. The forest
 with the median reach is the one saved, never the best one.
+
+`--refit-ranking-weights` also fits the family ranking weights on your own
+incidents, from scores kept out of fold day by day. They are adopted only when
+they beat the shipped weights on the held-out days, majority of seeds; a saved
+retrain reports which weights it carries either way.
 
 ### 6. Watch for change
 

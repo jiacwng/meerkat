@@ -21,6 +21,11 @@ after.
   against 51 with per-alert ground truth.
 - Incident and reviewed-period times read ISO 8601 beside epoch seconds; a
   time in neither format is refused with its column named.
+- `retrain --refit-ranking-weights`, fits the family ranking weights on your
+  own incidents from day-blocked out-of-fold scores, and adopts them only when
+  they beat the shipped weights on the held-out days. Below ~15 positive
+  families the run says the fit is usually not competitive and proceeds. The
+  bundle's provenance records which weights it carries.
 - `meerkat check`, reports per-detector counts, inventory match rate, role
   coverage and rule cardinality from a bounded sample.
 - `meerkat drift`, reports input distribution change with no labels. Population
