@@ -83,6 +83,10 @@ class Orientation(unittest.TestCase):
         self.assertIn("no runs yet", result.stdout)
         self.assertIn("meerkat demo", result.stdout)
 
+    @unittest.skipUnless(
+        (ROOT / "runs" / "latest.txt").exists(),
+        "needs the local demo run; a clone has no runs directory",
+    )
     def test_the_orientation_names_the_latest_run(self):
         result = self.run_bare(ROOT)
         self.assertEqual(result.returncode, 0, result.stderr)
