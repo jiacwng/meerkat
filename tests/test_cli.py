@@ -1482,6 +1482,19 @@ class TrackRecordTests(unittest.TestCase):
             bands = cli.escalation_bands(runs)
             self.assertEqual(sum(n for n, _ in bands.values()), 1)
 
+    def test_an_unreadable_sibling_directory_is_not_a_run(self):
+        # CI's /tmp holds root-owned snap directories; a run dir beside one
+        # must not take the scan down with a PermissionError
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            self._reviewed_run(runs, "acme-1", [("F1", "escalate", None)])
+            (runs / "locked").mkdir()
+            with mock.patch.object(
+                cli, "review_history",
+                side_effect=PermissionError(13, "Permission denied"),
+            ):
+                self.assertEqual(cli.escalation_bands(runs), {})
+
     def test_the_queue_export_no_longer_carries_the_probability(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)

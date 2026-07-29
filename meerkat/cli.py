@@ -613,10 +613,14 @@ def escalation_bands(runs_dir: Path) -> dict[float, tuple[int, int]]:
     if not runs_dir.is_dir():
         return bands
     for directory in sorted(runs_dir.iterdir()):
-        pickle = directory / "families.pkl"
-        if not directory.is_dir() or not pickle.exists():
+        try:
+            pickle = directory / "families.pkl"
+            if not directory.is_dir() or not pickle.exists():
+                continue
+            history = review_history(directory)
+        except OSError:
+            # a directory that cannot be read is not a run
             continue
-        history = review_history(directory)
         if not history:
             continue
         state: dict[str, dict[str, str]] = {}
