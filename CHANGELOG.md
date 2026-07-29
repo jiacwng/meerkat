@@ -53,6 +53,9 @@ after.
   review covers every session without its own; the audit order decides.
   `--decided-only` keeps the handoff summary.
 - Every review records its analyst: the login name, or `--analyst`.
+- `meerkat export html`, the review pass as one self-contained page:
+  escalations with their evidence, closed families one line each, the rest
+  listed unreviewed. With a handle, one family's page.
 - `meerkat export queue --format csv|json`.
 - `--json` on `queue`, `runs`, `inspect`, `check` and `drift`. The drift
   report carries every feature. Errors go to stderr.
