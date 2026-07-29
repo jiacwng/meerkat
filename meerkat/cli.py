@@ -681,7 +681,7 @@ def render_queue(
     table.add_column("finding", no_wrap=True, max_width=40, overflow="ellipsis")
     table.add_column("alerts", justify="right", no_wrap=True)
     table.add_column("score", justify="right", no_wrap=True, min_width=5)
-    table.add_column("esc%", justify="right", no_wrap=True, min_width=5)
+    table.add_column("esc%", justify="right", no_wrap=True, min_width=7)
     table.add_column("review", no_wrap=True, min_width=6)
     if not len(families):
         console.print(f"[dim]{title}: no families match[/dim]")
@@ -1356,10 +1356,12 @@ def cmd_queue(args) -> None:
         )
         print(json.dumps(queue_records(run, families), indent=2, default=str))
         return
-    _page(lambda: _print_queue(
+    # a status table never pages: less -X repaints a scrolled table in
+    # fragments, and the terminal's own scrollback already holds long output
+    _print_queue(
         run, args.all, args.host, args.detector, args.rule, args.review_state,
         args.day,
-    ), args.no_pager)
+    )
     top = run.families[run.families["in_queue"]]
     if len(top):
         _hint(
@@ -2879,7 +2881,8 @@ def build_parser() -> argparse.ArgumentParser:
                             "already saved, so this needs no rescoring")
     queue.add_argument("--json", action="store_true",
                        help="emit the queue as JSON instead of a table")
-    queue.add_argument("--no-pager", action="store_true")
+    queue.add_argument("--no-pager", action="store_true",
+                       help="accepted for consistency; queue never pages")
     _add_run_selector(queue)
     queue.set_defaults(func=cmd_queue)
 

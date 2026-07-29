@@ -56,8 +56,9 @@ after.
   report native severity, burst shape and techniques.
 - ATT&CK ids embedded in Suricata rule metadata are read as native techniques.
   Ids the lookup knows link to attack.mitre.org; nothing else becomes a link.
-- Long `queue` and `inspect` output pages on a terminal that has a pager;
-  `--no-pager` refuses.
+- Long `inspect` output pages on a terminal that has a pager; `--no-pager`
+  refuses. `queue` prints and exits: a scrolled table repaints in fragments
+  inside a pager, and the terminal's scrollback already holds long output.
 - `drift --all` lists every feature. `retrain` reports every failed
   precondition in one run.
 - `meerkat export decisions`, the review pass as a grid: one row per alert
