@@ -1,17 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 - 2026-07-29
 
-Scores unchanged: the normalized frame digest is `4b390168afda96bf` before and
-after.
+This minor release carries breaking changes; read the Breaking list before
+upgrading. Scores unchanged: the normalized frame digest is `4b390168afda96bf`
+before and after.
 
 ### Breaking
 
 - `conf%` and `evidence_probability` leave the queue, the views and the
-  exports. The column is `esc%` now: among your own reviewed families in the
-  same score band, the share escalated, with the count. Blank until a band
-  holds five reviewed families. The shipped Platt calibrator is no longer
-  consulted; bundles keep the field and still load.
+  exports. The column is `esc%` now: how often you escalated your past
+  reviewed families at the same score, with the count. Blank until five
+  reviews sit at that score. Old bundles and runs still load.
 - `meerkat train` removed. Use `python -m bench.train`.
 - `--company` is `--environment` now, on every command that takes it.
 - `--input` defaults to `./alerts`, was `data/raw`.
@@ -22,15 +22,13 @@ after.
 - `meerkat retrain`, from a CSV of `start,end,host,verdict`. Trains on earlier
   days, scores the last `--holdout-days`, and saves only when a majority of its
   forests reach at least as many unseen incidents as the shipped bundle and
-  disagree with it on at least six of them. Ticket labels score 49 at budget 5
-  against 51 with per-alert ground truth.
+  disagree with it on at least six of them.
 - Incident and reviewed-period times read ISO 8601 beside epoch seconds; a
   time in neither format is refused with its column named.
 - `retrain --refit-ranking-weights`, fits the family ranking weights on your
-  own incidents from day-blocked out-of-fold scores, and adopts them only when
-  they beat the shipped weights on the held-out days. Below ~15 positive
-  families the run says the fit is usually not competitive and proceeds. The
-  bundle's provenance records which weights it carries.
+  own incidents and keeps them only when they beat the shipped weights on the
+  held-out days. Below about 15 positive families the run warns and continues.
+  Provenance records which weights the bundle carries.
 - `meerkat check`, reports per-detector counts, inventory match rate, role
   coverage and rule cardinality from a bounded sample.
 - `meerkat drift`, reports input distribution change with no labels. Population
@@ -48,7 +46,7 @@ after.
   command on stderr.
 - `meerkat browse`, a prompt loop over the same views the commands print:
   type `F3`, `S1`, `A2` to drill, `review <decision> [note]` to record,
-  `b` walks back, `q` quits. No extra dependencies, no alternate screen.
+  `b` walks back, `q` quits.
 - `--no-color`, and `meerkat completion` prints a bash completion script.
 - The queue shows each family's start time, and table titles say what the
   handle order means: F1 top priority, S1 strongest, A1 first in time.
@@ -57,8 +55,7 @@ after.
 - ATT&CK ids embedded in Suricata rule metadata are read as native techniques.
   Ids the lookup knows link to attack.mitre.org; nothing else becomes a link.
 - Long `inspect` output pages on a terminal that has a pager; `--no-pager`
-  refuses. `queue` prints and exits: a scrolled table repaints in fragments
-  inside a pager, and the terminal's scrollback already holds long output.
+  refuses. `queue` always prints and exits.
 - `drift --all` lists every feature. `retrain` reports every failed
   precondition in one run.
 - `meerkat export decisions`, the review pass as a grid: one row per alert
@@ -125,11 +122,9 @@ after.
 
 ### Changed
 
-- `retrain` fits 200 trees by default, was 300. The shipped model was trained
-  with 200, so a no-flag retrain now fits the same forest it is compared
-  against. A saved retrain reports what was refit, rescaled and kept, and the
-  bundle's provenance records depth, leaf size and class weight beside trees
-  and seed.
+- `retrain` fits 200 trees by default, was 300, matching the shipped model.
+  A saved retrain reports what was refit, rescaled and kept. Provenance
+  records depth, leaf size and class weight beside trees and seed.
 - The family view no longer prints `family_id`, a second run id, or the list
   of the panels it just printed.
 - The README terminal captures use a flat style.
@@ -145,9 +140,8 @@ after.
 - Normalisation reads in 10,000-row chunks.
 - The log-anomaly detector is optional. Without one, 41 of 60 windows are
   reachable rather than 60.
-- Bag-size discount default 2/n to 1/n. Ten paired seeds found no difference
-  across 1/n to 5/n.
-- Tests 137 to 405.
+- Bag-size discount default 2/n to 1/n.
+- Tests 137 to 429.
 
 ## 1.0.0
 
