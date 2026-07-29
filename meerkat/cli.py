@@ -845,7 +845,9 @@ def render_alert_rows(alert_slice: pd.DataFrame, limit: int) -> None:
             safe(alert["name"])[:44],
         ]
         if differs:
-            cells.append(safe(str(alert[differs]))[:28])
+            value = alert[differs]
+            rendered = f"{value:g}" if isinstance(value, float) else str(value)
+            cells.append(safe(rendered)[:28])
         cells.append(safe(f"{alert['source_file']}:{alert['source_position']}"))
         table.add_row(*cells)
 
