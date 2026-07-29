@@ -398,6 +398,19 @@ class HtmlExportTests(unittest.TestCase):
             for href in re.findall(r'href="([^"]*)"', page):
                 self.assertTrue(href.startswith("https://attack.mitre.org/"))
 
+    def test_an_output_path_the_os_refuses_is_an_error_not_a_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            self._saved_run(runs)
+            with cli.errors.capture() as captured:
+                with self.assertRaises(SystemExit) as caught:
+                    cli.main([
+                        "export", "html", "--runs-dir", str(runs),
+                        "--run", "acme-1", "--output", tmp,
+                    ])
+            self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
+            self.assertIn("Errno", captured.get())
+
     def test_one_family_page_and_a_wrong_handle(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)

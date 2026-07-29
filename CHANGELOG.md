@@ -84,6 +84,8 @@ after.
 
 ### Fixed
 
+- An `--output` path the OS refuses, a directory or a missing parent, is a
+  one-line error, not a traceback.
 - A Suricata alert forwarded by Wazuh from `eve.json` is counted once when both
   files are present. Repeats inside one file are kept.
 - Wazuh's own `timestamp` field is read beside Elastic's `@timestamp`.

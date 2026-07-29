@@ -3078,7 +3078,10 @@ def main(argv: list[str] | None = None) -> None:
                 errno.EPIPE, errno.EINVAL
             ):
                 _quiet_pipe_exit()
-            raise
+            # a path the OS refuses (--output to a directory, a missing
+            # parent) is the user's to fix, not a crash
+            errors.print(f"[red]{error}[/red]")
+            raise SystemExit(EXIT_ERROR)
     except AlertFileError as error:
         # the message already names the file and the line, which is the whole
         # point: one bad record in a 45 MB export should not print a traceback.
