@@ -1921,6 +1921,94 @@ def require_directory(path: Path) -> None:
         raise SystemExit(EXIT_ERROR)
 
 
+# a flag the user did not pass, so the environment or meerkat.toml may fill it
+_UNSET = object()
+# what config may fill; flags always win, and `demo` stays pinned to its defaults
+_CONFIGURABLE = (
+    ("company", "MEERKAT_ENVIRONMENT", "environment"),
+    ("input", "MEERKAT_INPUT", "input"),
+    ("inventory", "MEERKAT_INVENTORY", "inventory"),
+    ("model", "MEERKAT_MODEL", "model"),
+    ("runs_dir", "MEERKAT_RUNS_DIR", "runs_dir"),
+)
+
+
+def _load_config() -> tuple[dict, str]:
+    # nearest file wins: the working directory, then the user's config
+    import tomllib
+    candidates = (
+        Path("meerkat.toml"),
+        Path.home() / ".config" / "meerkat" / "config.toml",
+    )
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            with path.open("rb") as handle:
+                return tomllib.load(handle), str(path)
+        except tomllib.TOMLDecodeError as error:
+            errors.print(f"[red]{path} is not valid TOML[/red]  {error}")
+            raise SystemExit(EXIT_ERROR)
+    return {}, ""
+
+
+def _apply_config(args) -> None:
+    # flags beat MEERKAT_* variables, variables beat meerkat.toml
+    import os
+    config, source = _load_config()
+    hard = {
+        "input": DEFAULT_INPUT, "model": DEFAULT_MODEL, "runs_dir": DEFAULT_RUNS,
+    }
+    for attribute, variable, key in _CONFIGURABLE:
+        if getattr(args, attribute, None) is not _UNSET:
+            continue
+        raw = os.environ.get(variable)
+        if raw is None and key in config:
+            raw = str(config[key])
+        if raw is None:
+            setattr(args, attribute, hard.get(attribute))
+            continue
+        try:
+            value = _company_label(raw) if attribute == "company" else Path(raw)
+        except argparse.ArgumentTypeError as error:
+            where = variable if os.environ.get(variable) else source
+            errors.print(f"[red]bad {key} in {where}[/red]  {error}")
+            raise SystemExit(EXIT_ERROR)
+        setattr(args, attribute, value)
+
+
+def cmd_orientation(args) -> None:
+    # the reception desk: where things stand, and what makes sense next
+    latest = latest_run_id(args.runs_dir)
+    if latest is None:
+        console.print("no runs yet")
+        console.print(
+            "[dim]start: `meerkat demo` scores the bundled example, "
+            "`meerkat check --input DIR` reads your own alerts, "
+            "`meerkat --help` lists everything[/dim]"
+        )
+        return
+    try:
+        meta = json.loads(
+            (args.runs_dir / latest / "run.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        meta = {}
+    reviews = current_reviews(args.runs_dir / latest)
+    console.print(f"latest run [bold]{safe(latest)}[/bold]")
+    console.print(
+        f"  environment {safe(str(meta.get('company', '?')))}  |  "
+        f"budget {meta.get('budget', '?')}  |  "
+        f"{meta.get('families', '?')} families from "
+        f"{meta.get('alerts', '?')} alerts  |  "
+        f"{len(reviews)} reviewed"
+    )
+    console.print(
+        "[dim]next: `meerkat queue` to work it, `meerkat inspect F001` to open "
+        "the top family, `meerkat triage --input DIR` to score a new day[/dim]"
+    )
+
+
 def resolve_company(args) -> str:
     # the company name used to double as a filename prefix. Discovery is by format
     # now, so it is only a run label, and the input directory names it well enough
@@ -1934,8 +2022,8 @@ def resolve_company(args) -> str:
     except ValueError:
         errors.print(
             f"[red]cannot name a run after {args.input}[/red]  a filesystem "
-            "root has no directory name to use as the company. Pass --company "
-            "with a label, or point --input at a named directory."
+            "root has no directory name to use. Pass --environment with a "
+            "label, or point --input at a named directory."
         )
         raise SystemExit(EXIT_ERROR)
 
@@ -1960,7 +2048,7 @@ def _add_alert_files(parser) -> None:
 
 def _add_run_selector(parser) -> None:
     parser.add_argument("--run", help="run id (default: latest successful)")
-    parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
+    parser.add_argument("--runs-dir", type=Path, default=_UNSET)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1978,17 +2066,21 @@ def build_parser() -> argparse.ArgumentParser:
             "your own data:\n"
             "  meerkat check --input DIR          read a sample and report what\n"
             "                                     triage will see\n"
-            "  meerkat inventory ACME             scaffold the asset inventory,\n"
+            "  meerkat inventory myorg             scaffold the asset inventory,\n"
             "                                     then fill in the roles by hand\n"
-            "  meerkat triage --company ACME      score a day into a run\n"
+            "  meerkat triage --environment myorg  score a day into a run\n"
             "  meerkat queue                      work the queue\n"
             "  meerkat inspect F003               open one family\n"
             "  meerkat review F003 escalate --session S1\n"
-            "  meerkat retrain --company ACME --incidents tickets.csv\n"
+            "  meerkat retrain --environment myorg --incidents tickets.csv\n"
             "                                     refit on your own incidents\n"
             "\n"
-            "alert files default to <input>/<company>_wazuh.json; pass\n"
-            "--wazuh-file or --aminer-file when yours are named differently.\n"
+            "alert files are found by content in --input; name one outright with\n"
+            "--wazuh-file or --aminer-file when discovery is not wanted.\n"
+            "\n"
+            "defaults come from flags, then MEERKAT_* variables, then\n"
+            "meerkat.toml (working directory, then ~/.config/meerkat/):\n"
+            "  environment, input, inventory, model, runs_dir\n"
             "\n"
             "exit codes: 0 ok, 1 error, 2 bad arguments, 3 retrain declined,\n"
             "            4 major drift found\n"
@@ -1998,15 +2090,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version", action="version", version=f"meerkat {__version__}"
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=False)
 
 
-    triage = sub.add_parser("triage", help="score one company into a run queue")
-    triage.add_argument("--company", type=_company_label, default=None,
+    triage = sub.add_parser("triage", help="score one environment into a run queue")
+    triage.add_argument("--environment", dest="company", type=_company_label,
+                        default=_UNSET, metavar="NAME",
                         help="run label; defaults to the input directory's name")
-    triage.add_argument("--input", type=Path, default=DEFAULT_INPUT,
-                        help="directory with <company>_wazuh.json etc.")
-    triage.add_argument("--inventory", type=Path, default=None,
+    triage.add_argument("--input", type=Path, default=_UNSET,
+                        help="directory holding the alert files")
+    triage.add_argument("--inventory", type=Path, default=_UNSET,
                         help="asset inventory JSON; defaults to where "
                              "`meerkat inventory` writes it")
     _add_alert_files(triage)
@@ -2014,8 +2107,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="optional label CSV, for evaluation only")
     triage.add_argument("--event-csv-dir", type=Path, default=None)
     triage.add_argument("--budget", type=_positive, default=10)
-    triage.add_argument("--model", type=Path, default=DEFAULT_MODEL)
-    triage.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
+    triage.add_argument("--model", type=Path, default=_UNSET)
+    triage.add_argument("--runs-dir", type=Path, default=_UNSET)
     triage.set_defaults(func=cmd_triage)
 
     queue = sub.add_parser("queue", help="reopen a saved run's queue")
@@ -2034,7 +2127,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue.set_defaults(func=cmd_queue)
 
     runs = sub.add_parser("runs", help="list saved runs")
-    runs.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
+    runs.add_argument("--runs-dir", type=Path, default=_UNSET)
     runs.add_argument("--json", action="store_true",
                       help="emit the run list as JSON instead of a table")
     runs.set_defaults(func=cmd_runs)
@@ -2105,8 +2198,9 @@ def build_parser() -> argparse.ArgumentParser:
         "inventory", help="scaffold an asset inventory from a wazuh alert file"
     )
     inventory.add_argument("company", nargs="?", type=_company_label, default=None,
+                           metavar="environment",
                            help="defaults to the input directory's name")
-    inventory.add_argument("--input", type=Path, default=DEFAULT_INPUT)
+    inventory.add_argument("--input", type=Path, default=_UNSET)
     inventory.add_argument("--out", type=Path, help="default <input>/inventory/<company>.json")
     inventory.add_argument(
         "--limit", type=_positive, default=500_000,
@@ -2121,10 +2215,11 @@ def build_parser() -> argparse.ArgumentParser:
     check = sub.add_parser(
         "check", help="read a sample of your alerts and report what triage will see"
     )
-    check.add_argument("--company", type=_company_label, default=None,
+    check.add_argument("--environment", dest="company", type=_company_label,
+                       default=_UNSET, metavar="NAME",
                        help="run label; defaults to the input directory's name")
-    check.add_argument("--input", type=Path, default=DEFAULT_INPUT)
-    check.add_argument("--inventory", type=Path, default=None)
+    check.add_argument("--input", type=Path, default=_UNSET)
+    check.add_argument("--inventory", type=Path, default=_UNSET)
     check.add_argument("--sample", type=_positive, default=CHECK_SAMPLE,
                        help="how many alerts to read")
     _add_alert_files(check)
@@ -2133,10 +2228,11 @@ def build_parser() -> argparse.ArgumentParser:
     drift = sub.add_parser(
         "drift", help="how far your alerts sit from what the model was trained on"
     )
-    drift.add_argument("--company", type=_company_label, default=None)
-    drift.add_argument("--input", type=Path, default=DEFAULT_INPUT)
-    drift.add_argument("--inventory", type=Path, default=None)
-    drift.add_argument("--model", type=Path, default=DEFAULT_MODEL)
+    drift.add_argument("--environment", dest="company", type=_company_label,
+                       default=_UNSET, metavar="NAME")
+    drift.add_argument("--input", type=Path, default=_UNSET)
+    drift.add_argument("--inventory", type=Path, default=_UNSET)
+    drift.add_argument("--model", type=Path, default=_UNSET)
     drift.add_argument("--top", type=_positive, default=10,
                        help="how many features to list")
     _add_alert_files(drift)
@@ -2145,7 +2241,8 @@ def build_parser() -> argparse.ArgumentParser:
     retrain = sub.add_parser(
         "retrain", help="refit the forest on your own alerts and incident records"
     )
-    retrain.add_argument("--company", type=_company_label, default=None,
+    retrain.add_argument("--environment", dest="company", type=_company_label,
+                         default=_UNSET, metavar="NAME",
                          help="run label; defaults to the input directory's name")
     retrain.add_argument("--incidents", type=Path, required=True)
     retrain.add_argument(
@@ -2153,9 +2250,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="CSV of start,end periods whose alerts were fully reviewed",
     )
     retrain.add_argument("--inventory", type=Path, required=True)
-    retrain.add_argument("--input", type=Path, default=DEFAULT_INPUT)
+    retrain.add_argument("--input", type=Path, default=_UNSET)
     _add_alert_files(retrain)
-    retrain.add_argument("--model", type=Path, default=DEFAULT_MODEL,
+    retrain.add_argument("--model", type=Path, default=_UNSET,
                          help="bundle to start from; its re-ranker is kept")
     retrain.add_argument("--out", type=Path, default=Path("models/retrained.skops"))
     retrain.add_argument("--holdout-days", type=_positive, default=7)
@@ -2265,7 +2362,14 @@ def main(argv: list[str] | None = None) -> None:
             stream.reconfigure(encoding="utf-8")
     parser = build_parser()
     args = parser.parse_args(argv)
+    # bare `meerkat` orients instead of erroring, and needs a runs dir to look in
+    if args.command is None:
+        args.runs_dir = _UNSET
+    _apply_config(args)
     try:
+        if args.command is None:
+            cmd_orientation(args)
+            return
         args.func(args)
     except AlertFileError as error:
         # the message already names the file and the line, which is the whole

@@ -8,6 +8,7 @@ after.
 ### Breaking
 
 - `meerkat train` removed. Use `python -m bench.train`.
+- `--company` is `--environment` now, on every command that takes it.
 - `--input` defaults to `./alerts`, was `data/raw`.
 - Model bundles must be skops. 1.0.0 bundles no longer load.
 
@@ -24,6 +25,10 @@ after.
   stability index per feature, plus unseen-rule share and inventory coverage.
 - `meerkat inventory`, scaffolds an asset inventory from the wazuh alert file,
   from the records that carry an `agent.ip`.
+- `meerkat.toml` and `MEERKAT_*` variables fill flags that were not passed.
+  Flags beat variables, variables beat the file. `demo` ignores both.
+- Bare `meerkat` prints where things stand and the next commands, instead of a
+  usage error.
 - `meerkat export queue --format csv|json`.
 - `--json` on `queue` and `runs`. Errors go to stderr.
 - `queue --budget`, recuts a saved run without rescoring.
