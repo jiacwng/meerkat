@@ -2227,6 +2227,156 @@ def cmd_export_decisions(args) -> None:
     )
 
 
+HTML_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+body {{ background:#0d0f0d; margin:0; padding:2rem; }}
+pre {{ color:#b9bcba; font-family:Consolas,Menlo,monospace; font-size:14px;
+       line-height:1.4; margin:0 auto; max-width:72rem; overflow-x:auto; }}
+</style>
+</head>
+<body>
+{body}
+</body>
+</html>
+"""
+
+
+def _recorded_html(render, title: str) -> str:
+    # the terminal views are the single source of content; the page is the
+    # same render, captured. Alert text passed through safe() upstream and is
+    # escaped again by the exporter.
+    import io
+
+    from rich.console import Console
+    recorder = Console(
+        file=io.StringIO(), record=True, force_terminal=True, width=120,
+        legacy_windows=False,
+    )
+    keep_console = globals()["console"]
+    keep_hints = globals()["hints_enabled"]
+    globals()["console"] = recorder
+    globals()["hints_enabled"] = False
+    try:
+        render()
+    finally:
+        globals()["console"] = keep_console
+        globals()["hints_enabled"] = keep_hints
+    # the default export theme assumes a white page; this page is dark
+    from rich.terminal_theme import DIMMED_MONOKAI
+    body = recorder.export_html(
+        inline_styles=True, code_format="<pre>{code}</pre>",
+        theme=DIMMED_MONOKAI,
+    )
+    import html as html_module
+    return HTML_PAGE.format(title=html_module.escape(title), body=body)
+
+
+def _family_entries(family, decisions) -> list[tuple[str, dict]]:
+    # family-wide first, then per-session overrides, each as (scope, entry)
+    scopes = decisions.get(family["family_id"], {})
+    ordered = []
+    if "*" in scopes:
+        ordered.append(("family", scopes["*"]))
+    sessions = [handle for handle in scopes if handle != "*"]
+    for handle in sorted(sessions, key=lambda h: int(h[1:])):
+        ordered.append((handle, scopes[handle]))
+    return ordered
+
+
+def _print_decisions(family, decisions) -> None:
+    for scope, entry in _family_entries(family, decisions):
+        line = (
+            f"  decision      : [bold]{entry['decision']}[/bold] ({scope})"
+            f"  by {safe(entry.get('analyst', '') or '?')}"
+            f"  {entry['timestamp'][:16].replace('T', ' ')}"
+        )
+        if entry.get("note"):
+            line += f"  [dim]{safe(entry['note'])}[/dim]"
+        console.print(line)
+
+
+def cmd_export_html(args) -> None:
+    run = _load_run(args)
+    reviews = current_reviews(run.directory)
+    decisions = effective_decisions(run)
+    if args.handle:
+        try:
+            family = run.family_by_handle(args.handle)
+        except KeyError as error:
+            errors.print(f"[red]{error.args[0]}[/red]")
+            raise SystemExit(EXIT_ERROR)
+        handle = family["handle"]
+
+        def render() -> None:
+            render_family(run, family, reviews)
+            _print_decisions(family, decisions)
+
+        title = f"meerkat {run.run_id} {handle}"
+        default_name = f"family-{handle.lower()}.html"
+    else:
+        # the handoff report: what was escalated carries its evidence, what
+        # was closed takes one line, the rest is stated unreviewed
+        queued = run.families[run.families["in_queue"]]
+        escalated, closed, unreviewed = [], [], []
+        for _, family in queued.iterrows():
+            entries = _family_entries(family, decisions)
+            verdicts = {entry["decision"] for _, entry in entries}
+            if "escalate" in verdicts:
+                escalated.append(family)
+            elif entries:
+                closed.append(family)
+            else:
+                unreviewed.append(family)
+        if not decisions:
+            errors.print(
+                "[yellow]no reviews recorded on this run yet[/yellow]  "
+                "the page lists the whole queue as unreviewed"
+            )
+
+        def render() -> None:
+            console.print(f"[bold]meerkat review report  {run.run_id}[/bold]")
+            console.print(
+                f"queue {len(queued)}  |  escalated {len(escalated)}  |  "
+                f"closed {len(closed)}  |  unreviewed {len(unreviewed)}\n"
+            )
+            for family in escalated:
+                render_family(run, family, reviews)
+                _print_decisions(family, decisions)
+            if closed:
+                table = Table(title="Closed", title_justify="left",
+                              header_style="bold")
+                for name in ("handle", "scope", "host", "finding",
+                             "decision", "analyst", "note"):
+                    table.add_column(name)
+                for family in closed:
+                    for scope, entry in _family_entries(family, decisions):
+                        table.add_row(
+                            family["handle"], scope,
+                            safe(family["host_label"]),
+                            safe(family["title"] or family["rule_id"])[:40],
+                            entry["decision"],
+                            safe(entry.get("analyst", "")),
+                            safe(entry.get("note", "")),
+                        )
+                console.print(table)
+            if len(unreviewed):
+                render_queue(
+                    pd.DataFrame(unreviewed), reviews,
+                    f"Unreviewed ({len(unreviewed)} of {len(queued)})",
+                )
+
+        title = f"meerkat {run.run_id}"
+        default_name = "report.html"
+    output = args.output or (run.directory / default_name)
+    output.write_text(_recorded_html(render, title), encoding="utf-8")
+    console.print(f"[green]exported[/green] {output}")
+
+
 def cmd_export_queue(args) -> None:
     run = _load_run(args)
     families = run.families if args.all else run.families[run.families["in_queue"]]
@@ -2423,10 +2573,14 @@ def cmd_completion(args) -> None:
         '  case "${COMP_WORDS[1]}" in',
     ]
     for name, sub in sorted(subparsers.choices.items()):
-        flags = " ".join(sorted({
+        words = {
             option for action in sub._actions
             for option in action.option_strings if option.startswith("--")
-        }))
+        }
+        for action in sub._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                words.update(action.choices)
+        flags = " ".join(sorted(words))
         lines.append(
             f'    {name}) COMPREPLY=($(compgen -W "{flags}" -- "$cur"));;'
         )
@@ -2683,6 +2837,19 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_selector(decisions)
     decisions.set_defaults(func=cmd_export_decisions)
 
+    html = export_sub.add_parser(
+        "html",
+        help="a static, self-contained page of the run or one family",
+        description="Writes the queue and every queued family's view (or one "
+                    "family with a handle) as a single HTML file: shareable, "
+                    "attachable to a ticket, no server involved.",
+    )
+    html.add_argument("handle", nargs="?", default=None,
+                      help="one family, e.g. F3; omit for the whole run")
+    html.add_argument("--output", type=Path, default=None)
+    _add_run_selector(html)
+    html.set_defaults(func=cmd_export_html)
+
     browse = sub.add_parser(
         "browse",
         help="a prompt loop over the queue: type handles to drill in",
@@ -2911,7 +3078,10 @@ def main(argv: list[str] | None = None) -> None:
                 errno.EPIPE, errno.EINVAL
             ):
                 _quiet_pipe_exit()
-            raise
+            # a path the OS refuses (--output to a directory, a missing
+            # parent) is the user's to fix, not a crash
+            errors.print(f"[red]{error}[/red]")
+            raise SystemExit(EXIT_ERROR)
     except AlertFileError as error:
         # the message already names the file and the line, which is the whole
         # point: one bad record in a 45 MB export should not print a traceback.

@@ -295,6 +295,140 @@ class DecisionExportTests(unittest.TestCase):
             self.assertEqual(set(decisions.values()), {"false-positive"})
 
 
+class HtmlExportTests(unittest.TestCase):
+    @staticmethod
+    def _text(page):
+        # rich wraps every number in a styled span; content assertions
+        # read the page the way a browser shows it
+        return re.sub(r"<[^>]+>", "", page)
+
+    def _saved_run(self, runs):
+        decorated = cli.decorate_families(
+            make_families(), make_alerts(), budget=2
+        )
+        cli.save_run(
+            runs, "acme-1", {"company": "acme", "budget": 2},
+            decorated, make_sessions(), make_alerts(),
+        )
+
+    def test_escalations_carry_evidence_closed_take_one_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            self._saved_run(runs)
+            run = cli.load_run(runs, "acme-1")
+            f1 = run.family_by_handle("F1")
+            f2 = run.family_by_handle("F2")
+            cli.append_review(
+                run.directory, "acme-1", f1["family_id"], "F1",
+                "escalate", "this burst is real",
+                session_key="k", session_handle="S1", analyst="jwang",
+            )
+            cli.append_review(
+                run.directory, "acme-1", f2["family_id"], "F2",
+                "benign", "known scanner", analyst="jwang",
+            )
+            output = runs / "report.html"
+            keep_console = cli.console
+            cli.cmd_export_html(argparse.Namespace(
+                runs_dir=runs, run="acme-1", handle=None, output=output,
+            ))
+            self.assertIs(cli.console, keep_console)
+            page = output.read_text(encoding="utf-8")
+            text = self._text(page)
+            self.assertIn("<title>meerkat acme-1</title>", page)
+            self.assertIn("escalated 1", text)
+            self.assertIn("closed 1", text)
+            self.assertIn("unreviewed 0", text)
+            # only the escalated family ships its full view
+            self.assertEqual(text.count("Overview"), 1)
+            self.assertIn("escalate (S1)", text)
+            self.assertIn("Closed", text)
+            self.assertIn("known scanner", text)
+            self.assertIn("jwang", text)
+            self.assertNotIn("[bold]", page)
+
+    def test_an_unreviewed_run_says_so_instead_of_dumping_everything(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            self._saved_run(runs)
+            output = runs / "report.html"
+            cli.cmd_export_html(argparse.Namespace(
+                runs_dir=runs, run="acme-1", handle=None, output=output,
+            ))
+            text = self._text(output.read_text(encoding="utf-8"))
+            run = cli.load_run(runs, "acme-1")
+            queued = run.families[run.families["in_queue"]]
+            self.assertIn(f"unreviewed {len(queued)}", text)
+            self.assertIn(f"Unreviewed ({len(queued)} of {len(queued)})", text)
+            self.assertEqual(text.count("Overview"), 0)
+
+    def test_hostile_alert_text_cannot_script_the_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            alerts = make_alerts()
+            alerts["name"] = (
+                "<script>alert(1)</script> [red]boom[/red] \x07 "
+                "[link=javascript:alert(1)]x[/link]"
+            )
+            decorated = cli.decorate_families(
+                make_families(), alerts, budget=2
+            )
+            cli.save_run(
+                runs, "acme-1", {"company": "acme", "budget": 2},
+                decorated, make_sessions(), alerts,
+            )
+            run = cli.load_run(runs, "acme-1")
+            f1 = run.family_by_handle("F1")
+            cli.append_review(
+                run.directory, "acme-1", f1["family_id"], "F1",
+                "escalate", "<img src=x onerror=alert(2)>", analyst="jwang",
+            )
+            output = runs / "report.html"
+            cli.cmd_export_html(argparse.Namespace(
+                runs_dir=runs, run="acme-1", handle=None, output=output,
+            ))
+            page = output.read_text(encoding="utf-8")
+            self.assertNotIn("<script", page)
+            self.assertIn("&lt;script&gt;", page)
+            self.assertNotIn("<img", page)
+            self.assertNotIn("\x07", page)
+            # rich link markup would export as a real anchor; the only
+            # anchors allowed are the vetted attack.mitre.org technique links
+            self.assertNotIn("javascript:", page)
+            for href in re.findall(r'href="([^"]*)"', page):
+                self.assertTrue(href.startswith("https://attack.mitre.org/"))
+
+    def test_an_output_path_the_os_refuses_is_an_error_not_a_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            self._saved_run(runs)
+            with cli.errors.capture() as captured:
+                with self.assertRaises(SystemExit) as caught:
+                    cli.main([
+                        "export", "html", "--runs-dir", str(runs),
+                        "--run", "acme-1", "--output", tmp,
+                    ])
+            self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
+            self.assertIn("Errno", captured.get())
+
+    def test_one_family_page_and_a_wrong_handle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            self._saved_run(runs)
+            output = runs / "family.html"
+            cli.cmd_export_html(argparse.Namespace(
+                runs_dir=runs, run="acme-1", handle="F1", output=output,
+            ))
+            page = output.read_text(encoding="utf-8")
+            self.assertIn("<title>meerkat acme-1 F1</title>", page)
+            self.assertNotIn("Review queue", page)
+            with self.assertRaises(SystemExit) as caught:
+                cli.cmd_export_html(argparse.Namespace(
+                    runs_dir=runs, run="acme-1", handle="F999", output=None,
+                ))
+            self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
+
+
 class FilterTests(unittest.TestCase):
     def test_match_handles_float_and_string_fields(self):
         # an analyst types --where http_status=400 as text against a float
