@@ -361,6 +361,7 @@ def append_review(
     session_handle: str | None = None,
     analyst: str | None = None,
 ) -> dict:
+    _BANDS_CACHE.pop(directory.parent, None)
     if analyst is None:
         import getpass
         try:
@@ -388,11 +389,18 @@ def review_history(directory: Path) -> list[dict]:
     path = directory / "reviews.jsonl"
     if not path.exists():
         return []
-    return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    entries = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            # a hand-edited line must not take the whole history down
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return entries
 
 
 def current_reviews(directory: Path) -> dict[str, dict]:
@@ -592,10 +600,72 @@ def _render_why(family: pd.Series) -> None:
     console.print()
 
 
+# fewer reviewed families than this in a band and no rate is shown: three
+# escalations out of four is a coincidence, not a track record
+ESC_BAND_FLOOR = 5
+
+
+def escalation_bands(runs_dir: Path) -> dict[float, tuple[int, int]]:
+    # the analyst's own reviews across every run, keyed by score band. The
+    # deployed model never trained on the days it scored, so these pairs are
+    # out of sample by construction.
+    bands: dict[float, tuple[int, int]] = {}
+    if not runs_dir.is_dir():
+        return bands
+    for directory in sorted(runs_dir.iterdir()):
+        pickle = directory / "families.pkl"
+        if not directory.is_dir() or not pickle.exists():
+            continue
+        history = review_history(directory)
+        if not history:
+            continue
+        state: dict[str, dict[str, str]] = {}
+        for entry in history:
+            family_id = entry["family_id"]
+            scopes = state.setdefault(family_id, {})
+            if entry.get("session_handle"):
+                scopes[entry["session_handle"]] = entry["decision"]
+            else:
+                state[family_id] = {"*": entry["decision"]}
+        try:
+            families = pd.read_pickle(pickle)
+        except Exception:
+            # an unreadable old run must not take down the queue
+            continue
+        scores = dict(zip(families["family_id"], families["ranking_score"]))
+        for family_id, scopes in state.items():
+            if family_id not in scores:
+                continue
+            band = round(float(scores[family_id]), 1)
+            reviewed, escalated = bands.get(band, (0, 0))
+            bands[band] = (
+                reviewed + 1,
+                escalated + int("escalate" in scopes.values()),
+            )
+    return bands
+
+
+def esc_label(score: float, bands: dict[float, tuple[int, int]] | None) -> str:
+    reviewed, escalated = (bands or {}).get(round(float(score), 1), (0, 0))
+    if reviewed < ESC_BAND_FLOOR:
+        return ""
+    return f"{100 * escalated / reviewed:.0f} ({reviewed})"
+
+
+_BANDS_CACHE: dict[Path, dict[float, tuple[int, int]]] = {}
+
+
+def bands_for(runs_dir: Path) -> dict[float, tuple[int, int]]:
+    if runs_dir not in _BANDS_CACHE:
+        _BANDS_CACHE[runs_dir] = escalation_bands(runs_dir)
+    return _BANDS_CACHE[runs_dir]
+
+
 def render_queue(
     families: pd.DataFrame,
     reviews: dict[str, dict],
     title: str,
+    bands: dict[float, tuple[int, int]] | None = None,
 ) -> None:
     table = Table(title=f"{title}  |  F1 = top priority",
                   title_justify="left", header_style="bold")
@@ -607,7 +677,7 @@ def render_queue(
     table.add_column("finding", no_wrap=True, max_width=40, overflow="ellipsis")
     table.add_column("alerts", justify="right", no_wrap=True)
     table.add_column("score", justify="right", no_wrap=True, min_width=5)
-    table.add_column("conf%", justify="right", no_wrap=True, min_width=5)
+    table.add_column("esc%", justify="right", no_wrap=True, min_width=5)
     table.add_column("review", no_wrap=True, min_width=6)
     if not len(families):
         console.print(f"[dim]{title}: no families match[/dim]")
@@ -623,7 +693,7 @@ def render_queue(
             safe(family["title"] or family["rule_id"])[:40],
             str(int(family["alert_count"])),
             f"{family['ranking_score']:.2f}",
-            f"{family['evidence_probability'] * 100:.0f}",
+            esc_label(family["ranking_score"], bands),
             review.get("decision", ""),
         )
     console.print(table)
@@ -643,6 +713,7 @@ def render_family(
     reviews: dict[str, dict],
 ) -> None:
     alert_slice = run.family_alerts(family)
+    bands = bands_for(run.directory.parent)
     console.print(f"\n[bold]{family_heading(family)}[/bold]\n")
     console.print("[bold cyan]Overview[/bold cyan]")
     console.print(f"  entity        : {safe(family['entity_id'])}")
@@ -654,9 +725,10 @@ def render_family(
         f"  window        : {fmt_time(family['start'])}"
         f"  ->  {fmt_time(family['end'])}  ({fmt_span(family['family_span_s'])})"
     )
+    esc = esc_label(family["ranking_score"], bands)
     console.print(
         f"  ranking score : {family['ranking_score']:.3f}"
-        f"   confidence {family['evidence_probability'] * 100:.0f}%"
+        + (f"   esc% {esc}" if esc else "")
     )
     rule_peers = run.families[
         run.families["detector_source"].eq(family["detector_source"])
@@ -1230,13 +1302,16 @@ def _print_queue(
         scope = f"top {run.meta['budget']} per day"
     if day:
         scope += f", {day}"
-    render_queue(families, reviews, f"Review queue ({scope})")
+    render_queue(
+        families, reviews, f"Review queue ({scope})",
+        bands_for(run.directory.parent),
+    )
 
 
 QUEUE_JSON_FIELDS = (
     "handle", "day", "host_label", "entity_id", "detector_source", "rule_id",
     "title", "alert_count", "n_child_sessions", "queue_rank", "in_queue",
-    "ranking_score", "evidence_probability", "start", "end",
+    "ranking_score", "start", "end",
 )
 
 
@@ -2429,6 +2504,7 @@ def cmd_export_html(args) -> None:
                 render_queue(
                     pd.DataFrame(unreviewed), reviews,
                     f"Unreviewed ({len(unreviewed)} of {len(queued)})",
+                    bands_for(run.directory.parent),
                 )
 
         title = f"meerkat {run.run_id}"

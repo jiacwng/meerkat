@@ -7,6 +7,11 @@ after.
 
 ### Breaking
 
+- `conf%` and `evidence_probability` leave the queue, the views and the
+  exports. The column is `esc%` now: among your own reviewed families in the
+  same score band, the share escalated, with the count. Blank until a band
+  holds five reviewed families. The shipped Platt calibrator is no longer
+  consulted; bundles keep the field and still load.
 - `meerkat train` removed. Use `python -m bench.train`.
 - `--company` is `--environment` now, on every command that takes it.
 - `--input` defaults to `./alerts`, was `data/raw`.

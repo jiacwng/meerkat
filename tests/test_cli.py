@@ -1403,6 +1403,94 @@ class RankingWeightContestTests(unittest.TestCase):
         self.assertIn("could not be attempted", note)
 
 
+class TrackRecordTests(unittest.TestCase):
+    def _reviewed_run(self, runs, run_id, decisions):
+        decorated = cli.decorate_families(
+            make_families(), make_alerts(), budget=2
+        )
+        cli.save_run(
+            runs, run_id, {"company": "acme", "budget": 2},
+            decorated, make_sessions(), make_alerts(),
+        )
+        run = cli.load_run(runs, run_id)
+        for handle, decision, session in decisions:
+            family = run.family_by_handle(handle)
+            cli.append_review(
+                run.directory, run_id, family["family_id"], handle,
+                decision, "", session_key="k" if session else None,
+                session_handle=session,
+            )
+        return run
+
+    def test_the_label_needs_five_reviews_and_then_counts(self):
+        bands = {0.9: (5, 3)}
+        self.assertEqual(cli.esc_label(0.9, bands), "60 (5)")
+        self.assertEqual(cli.esc_label(0.94, bands), "60 (5)")
+        self.assertEqual(cli.esc_label(0.9, {0.9: (4, 4)}), "")
+        self.assertEqual(cli.esc_label(0.5, bands), "")
+        self.assertEqual(cli.esc_label(0.9, None), "")
+
+    def test_reviews_aggregate_across_runs_into_bands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            for i in range(5):
+                decision = "escalate" if i < 3 else "benign"
+                self._reviewed_run(runs, f"acme-{i}", [("F1", decision, None)])
+            bands = cli.escalation_bands(runs)
+            run = cli.load_run(runs, "acme-0")
+            score = round(float(run.family_by_handle("F1")["ranking_score"]), 1)
+            self.assertEqual(bands[score], (5, 3))
+            self.assertEqual(cli.esc_label(score, bands), "60 (5)")
+
+    def test_a_session_escalation_counts_the_family_as_escalated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            self._reviewed_run(
+                runs, "acme-1", [("F1", "escalate", "S1")]
+            )
+            bands = cli.escalation_bands(runs)
+            self.assertEqual(sum(esc for _, esc in bands.values()), 1)
+
+    def test_an_unreviewed_environment_has_no_bands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            self._reviewed_run(runs, "acme-1", [])
+            self.assertEqual(cli.escalation_bands(runs), {})
+            self.assertEqual(cli.escalation_bands(runs / "absent"), {})
+
+    def test_a_hand_edited_review_line_is_skipped_not_fatal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            run = self._reviewed_run(runs, "acme-1", [("F1", "escalate", None)])
+            with (run.directory / "reviews.jsonl").open("a") as handle:
+                handle.write("this is not json\n")
+                handle.write('"a bare string"\n')
+            history = cli.review_history(run.directory)
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]["decision"], "escalate")
+
+    def test_a_corrupt_foreign_run_does_not_take_down_the_bands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            self._reviewed_run(runs, "acme-1", [("F1", "escalate", None)])
+            broken = runs / "old-broken-run"
+            broken.mkdir()
+            (broken / "families.pkl").write_text("garbage, not a pickle")
+            (broken / "reviews.jsonl").write_text(
+                '{"family_id": "x", "handle": "F1", "decision": "escalate"}\n'
+            )
+            bands = cli.escalation_bands(runs)
+            self.assertEqual(sum(n for n, _ in bands.values()), 1)
+
+    def test_the_queue_export_no_longer_carries_the_probability(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            run = self._reviewed_run(runs, "acme-1", [])
+            records = cli.queue_records(run, run.families)
+            self.assertNotIn("evidence_probability", records[0])
+            self.assertIn("ranking_score", records[0])
+
+
 class SharedOpeningTests(unittest.TestCase):
     def test_the_inventory_defaults_beside_the_alerts(self):
         # triage, check and drift each spelled these five lines out, and the
