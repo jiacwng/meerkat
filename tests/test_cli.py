@@ -235,6 +235,66 @@ class ReviewTests(unittest.TestCase):
             self.assertEqual(current["fid"]["decision"], "benign")
 
 
+class DecisionExportTests(unittest.TestCase):
+    def test_decisions_propagate_family_wide_unless_a_session_overrides(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            decorated = cli.decorate_families(
+                make_families(), make_alerts(), budget=2
+            )
+            cli.save_run(
+                runs, "acme-1", {"company": "acme", "budget": 2},
+                decorated, make_sessions(), make_alerts(),
+            )
+            run = cli.load_run(runs, "acme-1")
+            family = run.family_by_handle("F1")
+            cli.append_review(
+                run.directory, "acme-1", family["family_id"],
+                "F1", "benign", "known scanner",
+            )
+            cli.append_review(
+                run.directory, "acme-1", family["family_id"],
+                "F1", "escalate", "this burst is real",
+                session_key="k", session_handle="S1",
+            )
+            rows = cli.decision_rows(run, run.families)
+            by_session = {}
+            for row in rows:
+                if row["family"] == "F1":
+                    by_session.setdefault(row["session"], row)
+            self.assertEqual(by_session["S1"]["decision"], "escalate")
+            self.assertEqual(by_session["S1"]["decided_by"], "session")
+            self.assertEqual(by_session["S2"]["decision"], "benign")
+            self.assertEqual(by_session["S2"]["decided_by"], "family")
+
+    def test_a_later_family_decision_covers_everything_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            decorated = cli.decorate_families(
+                make_families(), make_alerts(), budget=2
+            )
+            cli.save_run(
+                runs, "acme-1", {"company": "acme", "budget": 2},
+                decorated, make_sessions(), make_alerts(),
+            )
+            run = cli.load_run(runs, "acme-1")
+            family = run.family_by_handle("F1")
+            cli.append_review(
+                run.directory, "acme-1", family["family_id"],
+                "F1", "escalate", "", session_key="k", session_handle="S1",
+            )
+            cli.append_review(
+                run.directory, "acme-1", family["family_id"],
+                "F1", "false-positive", "all noise after checking",
+            )
+            rows = cli.decision_rows(run, run.families)
+            decisions = {
+                row["session"]: row["decision"]
+                for row in rows if row["family"] == "F1"
+            }
+            self.assertEqual(set(decisions.values()), {"false-positive"})
+
+
 class FilterTests(unittest.TestCase):
     def test_match_handles_float_and_string_fields(self):
         # an analyst types --where http_status=400 as text against a float

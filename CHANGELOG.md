@@ -34,6 +34,9 @@ after.
   the source line. Alert tables carry the handles.
 - The family view always lists its sessions; every view prints the next
   command on stderr.
+- `meerkat browse`, a prompt loop over the same views the commands print:
+  type `F3`, `S1`, `A2` to drill, `review <decision> [note]` to record,
+  `b` walks back, `q` quits. No extra dependencies, no alternate screen.
 - `--no-color`, and `meerkat completion` prints a bash completion script.
 - The queue shows each family's start time, and table titles say what the
   handle order means: F1 top priority, S1 strongest, A1 first in time.
@@ -45,6 +48,11 @@ after.
   `--no-pager` refuses.
 - `drift --all` lists every feature. `retrain` reports every failed
   precondition in one run.
+- `meerkat export decisions`, the review pass as a grid: one row per alert
+  with the decision it inherits. A session review covers its alerts; a family
+  review covers every session without its own; the audit order decides.
+  `--decided-only` keeps the handoff summary.
+- Every review records its analyst: the login name, or `--analyst`.
 - `meerkat export queue --format csv|json`.
 - `--json` on `queue`, `runs`, `inspect`, `check` and `drift`. The drift
   report carries every feature. Errors go to stderr.
@@ -116,7 +124,7 @@ after.
   reachable rather than 60.
 - Bag-size discount default 2/n to 1/n. Ten paired seeds found no difference
   across 1/n to 5/n.
-- Tests 137 to 400.
+- Tests 137 to 405.
 
 ## 1.0.0
 
