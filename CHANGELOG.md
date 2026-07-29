@@ -103,8 +103,8 @@ and after.
 
 ### Fixed
 
-- An `--output` path the OS refuses, a directory or a missing parent, is a
-  one-line error, not a traceback.
+- An `--output` path the OS refuses, a directory or a missing parent, prints
+  a one-line error, was a traceback.
 - A Suricata alert forwarded by Wazuh from `eve.json` is counted once when both
   files are present. Repeats inside one file are kept.
 - Wazuh's own `timestamp` field is read beside Elastic's `@timestamp`.
@@ -143,8 +143,8 @@ and after.
   default, `--queue-only` for queued families.
 - Exit codes: 0 success, 1 error, 2 usage, 3 retrain refused, 4 major feature
   drift or too many rules the model never saw.
-- Benchmark harness moved to `bench/`. Not importable from the product, not in
-  the installed package. Reproduction needs a 2.7 GB download, see
+- Benchmark harness moved to `bench/`. The product does not import it and the
+  installed package does not carry it. Reproduction needs a 2.7 GB download, see
   [bench/README.md](bench/README.md).
 - Normalisation reads in 10,000-row chunks.
 - The log-anomaly detector is optional. Without one, 41 of 60 windows are

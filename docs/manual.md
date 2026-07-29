@@ -1,5 +1,9 @@
 # meerkat manual
 
+Meerkat is an open-source triage tool built as a research project. It does
+not claim to replace a commercial platform; this manual says what each
+command does and what each input must look like.
+
 - [Install](#install)
 - [Quickstart](#quickstart)
 - [Inputs](#inputs)
@@ -33,6 +37,15 @@ nothing else: the demo alerts, the trained bundle and the benchmark stay in
 the repository, so a wheel install suits a deployment that brings its own
 alerts and model bundle.
 
+### Model files
+
+Model bundles are [skops](https://skops.readthedocs.io/) files: loading one
+rebuilds only allowlisted types, so it does not execute the file the way
+unpickling does. None of that makes an untrusted bundle safe, so load your
+own. The JSON sidecar records the training settings and a checksum, which
+catches corruption and proves nothing about who wrote the file. Run directories under `runs/` are
+plain pickles; open only your own.
+
 ## Quickstart
 
 `meerkat demo` scores the bundled example with the shipped model and prints
@@ -50,8 +63,7 @@ meerkat browse           # work it: drill into families, record decisions
 meerkat export decisions # the review pass as a grid, for handoff
 ```
 
-One run covers complete days; score a batch after the day closes, not during
-it.
+One run covers complete days; score a batch after the day closes.
 
 ## Inputs
 
@@ -119,21 +131,62 @@ ignores both.
 
 ## Commands
 
-Every command takes `--help`. Exit codes: 0 success, 1 error, 2 usage,
-3 retrain refused, 4 major drift.
+Every command takes `-h`/`--help`. `--version` prints the version. `--no-color`
+gives plain output, and the `NO_COLOR` environment variable does the same.
 
-### demo
+Commands that open a saved run share two options: `--run RUN` picks a run id
+and defaults to the latest successful one, `--runs-dir DIR` names the
+directory runs are saved in. Commands that read alerts share the openers
+described in [Inputs](#inputs): `--environment`, `--input`, `--inventory`,
+`--wazuh-file`, `--aminer-file`.
 
-Scores the bundled example alerts and prints the first day's queue. Needs the
-repository clone with Git LFS fetched. `--budget` sets families per day,
-default 10. The demo ignores configuration, so it always scores the same
-input the same way.
+Exit codes:
 
-### inventory
+| code | meaning |
+| --- | --- |
+| 0 | success |
+| 1 | error |
+| 2 | bad arguments |
+| 3 | retrain refused by the gate |
+| 4 | major feature drift, or too many rules the model never saw |
 
-Writes a starter asset inventory from the Wazuh alert file, one asset per
-machine that reports an `agent.ip`. `--out` defaults to
-`<input>/inventory/<environment>.json`; `--list-roles` prints the vocabulary.
+---
+
+### meerkat demo
+
+Score the bundled example alerts and print the first day's queue. Needs the
+repository clone with Git LFS fetched.
+
+    meerkat demo [--raw-dir DIR] [--model FILE] [--budget K] [--runs-dir DIR]
+
+| option | description |
+| --- | --- |
+| `--raw-dir DIR` | where the bundled alerts live, default `data/raw` |
+| `--model FILE` | model bundle, default `models/meerkat_bundle.skops` |
+| `--budget K` | families reviewed per day, default 10 |
+| `--runs-dir DIR` | where the run is saved, default `runs/` |
+
+The demo ignores `meerkat.toml` and `MEERKAT_*` variables, so it always
+scores the same input the same way.
+
+---
+
+### meerkat inventory
+
+Write a starter asset inventory from the Wazuh alert file, one asset per
+machine that reports an `agent.ip`. Roles are left empty; fill them in.
+
+    meerkat inventory [ENVIRONMENT] [--input DIR] [--out FILE]
+                      [--limit N] [--list-roles]
+
+| option | description |
+| --- | --- |
+| `ENVIRONMENT` | run label; defaults to the input directory's name |
+| `--input DIR` | directory holding the alert files, default `./alerts` |
+| `--out FILE` | default `<input>/inventory/<environment>.json` |
+| `--limit N` | stop after this many alert lines |
+| `--list-roles` | print the role vocabulary and where each name comes from |
+
 Recorded output:
 
 ```text
@@ -146,13 +199,27 @@ mail_server, dns_server, file_share, monitoring_agent, employee, internal_employ
 external_user, external_mail
 ```
 
-### check
+---
 
-Reports what triage will see before running it, from a bounded sample
-(`--sample`). It exits non-zero if inventory assets have no roles, if a role
-name is outside the vocabulary, if the rule ids look like one per alert, or
-if the alerts do not parse. Alerts on machines outside the inventory are a
-warning, not an error. `--json` for scripts.
+### meerkat check
+
+Report what triage will see before running it: per-detector counts, inventory
+match rate, role coverage and rule cardinality, from a bounded sample. Exits
+non-zero when assets have no roles, a role name is outside the vocabulary,
+rule ids look numbered per alert, or the alerts do not parse. Alerts on
+machines outside the inventory are a warning; the run still passes.
+
+    meerkat check [--environment NAME] [--input DIR] [--inventory FILE]
+                  [--sample N] [--json] [--wazuh-file FILE] [--aminer-file FILE]
+
+| option | description |
+| --- | --- |
+| `--sample N` | how many alerts to read, default 5000 |
+| `--json` | the report as JSON; warnings stay on stderr |
+| `--environment`, `--input`, `--inventory` | the shared openers |
+| `--wazuh-file FILE`, `--aminer-file FILE` | read only the named file |
+
+Recorded output:
 
 ```text
 reading up to 5000 alerts from data/raw
@@ -170,21 +237,54 @@ check (5000 alerts sampled)
 ready to triage
 ```
 
-### triage
+---
 
-Scores one batch into a run under `runs/`; every later command reopens the
-saved run. `--input`, `--inventory`, `--budget`, `--model`, `--environment`
-as in [Inputs](#inputs). Run directories carry a timestamp and are never
-overwritten.
+### meerkat triage
 
-### queue
+Score one batch of alerts into a run under the runs directory. Every later
+command reopens the saved run instead of scoring again. Run directories carry
+a timestamp and are never overwritten.
 
-Prints the ranked queue and exits. `score` sets the order. `esc%` fills in as
-you review: how often you escalated your past reviewed families at the same
-score, with the count; a fresh environment shows the score alone. Filters:
-`--day`, `--host`, `--detector`, `--rule` (substring), `--review-state`,
-`--all`. `--budget` re-cuts a saved run at a different K without rescoring.
-`--json` for scripts. Recorded output:
+    meerkat triage [--environment NAME] [--input DIR] [--inventory FILE]
+                   [--budget K] [--model FILE] [--runs-dir DIR]
+                   [--wazuh-file FILE] [--aminer-file FILE] [--labels FILE]
+
+| option | description |
+| --- | --- |
+| `--budget K` | families reviewed per day, default 10 |
+| `--model FILE` | model bundle, default `models/meerkat_bundle.skops` |
+| `--runs-dir DIR` | where runs are saved, default `runs/` |
+| `--labels FILE` | optional label CSV, for evaluation only |
+| `--event-csv-dir DIR` | benchmark label directory, evaluation only |
+| `--environment`, `--input`, `--inventory` | the shared openers |
+| `--wazuh-file FILE`, `--aminer-file FILE` | read only the named file |
+
+---
+
+### meerkat queue
+
+Print the ranked queue of a saved run and exit. `score` sets the order.
+`esc%` fills in as you review: how often you escalated your past reviewed
+families at the same score, with the count; a fresh environment shows the
+score alone.
+
+    meerkat queue [--all] [--host HOST] [--detector NAME] [--rule TEXT]
+                  [--review-state STATE] [--day YYYY-MM-DD] [--budget K]
+                  [--json] [--run RUN] [--runs-dir DIR]
+
+| option | description |
+| --- | --- |
+| `--all` | every scored family, not only the daily top K |
+| `--host HOST` | filter by host or entity |
+| `--detector NAME` | filter by detector source |
+| `--rule TEXT` | filter by rule id substring |
+| `--review-state STATE` | families whose decision matches: `escalate`, `benign` or `false-positive` |
+| `--day YYYY-MM-DD` | one day's queue |
+| `--budget K` | re-cut the saved run at a different K; no rescoring |
+| `--json` | the queue as JSON |
+| `--no-pager` | accepted for consistency; queue never pages |
+
+Recorded output:
 
 ```text
 run russellmitchell-20260724-230029  |  company russellmitchell  |  budget 10  |  326 families
@@ -205,14 +305,33 @@ Review queue (top 10 per day, 2022-01-21)  |  F1 = top priority
 └────────┴────────────┴───────┴───────────────┴──────────┴──────────────────────────────────────────┴────────┴───────┴─────────┴────────┘
 ```
 
-### inspect
+---
 
-Opens one family (`F3`), a session inside it (`F3 S1`), or one alert
-(`F3 S1 A2`). Power flags: `--where field=value` and `--exclude field=value`
-filter the alert slice, `--distinct field` counts values, `--alerts N` sizes
-the table, `--raw` prints the source lines as the detector wrote them. Long
-output pages on a terminal that has a pager; `--no-pager` prints. A wrong
-field name prints the fields that exist. Recorded output:
+### meerkat inspect
+
+Open one family, one session inside it, or one alert.
+
+    meerkat inspect HANDLE [SESSION] [ALERT] [--where FIELD=VALUE]
+                    [--exclude FIELD=VALUE] [--distinct FIELD] [--alerts N]
+                    [--raw] [--raw-dir DIR] [--json] [--no-pager]
+                    [--run RUN] [--runs-dir DIR]
+
+| option | description |
+| --- | --- |
+| `HANDLE` | a family, e.g. `F3` |
+| `SESSION` | a session inside it, e.g. `S1` |
+| `ALERT` | one alert, e.g. `A2`; shows its full record |
+| `--where FIELD=VALUE` | keep alerts matching a field; repeatable |
+| `--exclude FIELD=VALUE` | drop alerts matching a field; repeatable |
+| `--distinct FIELD` | count the distinct values of one field |
+| `--alerts N` | show up to N alert rows |
+| `--raw` | print the source lines as the detector wrote them |
+| `--raw-dir DIR` | where the alert files live; defaults to what the run recorded |
+| `--json` | the family, sessions and alerts as JSON |
+| `--no-pager` | print without the pager |
+
+Long output pages on a terminal that has a pager. A wrong field name prints
+the fields that exist. Recorded output:
 
 ```text
 run russellmitchell-20260724-230029  |  company russellmitchell  |  budget 10  |  326 families
@@ -280,66 +399,105 @@ Related families on this host
   F220  Wazuh / Multiple web server 400 error codes from same source ip.  score 1.00  other detector
 ```
 
-### review
+---
 
-Records a decision on a family or one of its sessions:
+### meerkat review
 
-```bash
-meerkat review F3 benign --note "known scanner"
-meerkat review F3 escalate --session S1 --note "unexpected service change"
-```
+Record a decision on a family or one of its sessions. Decisions land in the
+run's `reviews.jsonl`, append-only; the last entry covering a scope wins. A
+session review covers its alerts; a family review covers every session
+without its own.
 
-Decisions land in the run's `reviews.jsonl`, append-only; the last entry
-covering a scope wins. A session review covers its alerts; a family review
-covers every session without its own. Escalating a family with several
-sessions requires `--session`, since that is the unit the model learns from.
-`--analyst` names who decided, defaulting to the login name.
+    meerkat review HANDLE DECISION [--session S] [--note TEXT]
+                   [--analyst NAME] [--run RUN] [--runs-dir DIR]
 
-### browse
+| option | description |
+| --- | --- |
+| `HANDLE` | the family, e.g. `F3` |
+| `DECISION` | `escalate`, `benign` or `false-positive` |
+| `--session S` | which burst, e.g. `S1`, or `all`; required to escalate a family with several sessions |
+| `--note TEXT` | free text stored with the decision |
+| `--analyst NAME` | who decided; defaults to the login name |
 
-Prints the queue, then reads commands at a `browse>` prompt. The review pass
-lives here:
+---
 
-```
-browse> F3                      open a family
-browse> S1                      open a session inside it
-browse> A2                      open one alert
-browse> review benign noisy dev box
-browse> b                       back up one level
-browse> all                     every scored family
-browse> queue                   back to the budgeted view
-browse> q                       quit
-```
+### meerkat browse
 
-`review` acts on whatever is open. Decisions land in the same `reviews.jsonl`
-as `meerkat review`.
+Print the queue, then read commands at a `browse>` prompt. The review pass
+lives here.
 
-### retrain
+    meerkat browse [--run RUN] [--runs-dir DIR]
 
-Refits the session forest on your own alert archive, supervised by your
-incident records. Trains on the earlier days, scores itself on the most
-recent ones, and saves a bundle only when a majority of its fits beat the
-shipped one there. A refused retrain exits with code 3 and says why; nothing
-is saved. A saved retrain prints what was refit, what was rescaled and what
-was kept, and the bundle's provenance sidecar records every setting.
+| prompt input | effect |
+| --- | --- |
+| `F3` | open a family |
+| `S1` | open a session inside the open family |
+| `A2` | open one alert inside the open session |
+| `review DECISION [note]` | record a decision on what is open |
+| `b` | back up one level |
+| `all` | every scored family |
+| `queue` | back to the budgeted view |
+| `q` | quit |
 
-`--refit-ranking-weights` also fits the family ranking weights on your
-incidents, keeping them only when they beat the shipped ones on the held-out
-days. Below about 15 positive families the run warns and continues.
+Decisions land in the same `reviews.jsonl` as `meerkat review`, with the same
+rules.
 
-Other flags: `--holdout-days` (default 7), `--reviewed-periods` for a CSV of
-fully reviewed periods, and tuning (`--trees`, `--seed`, `--fits`,
-`--min-positives`, `--prior-k`, `--budget`) defaulting to the shipped
-model's settings.
+---
 
-### drift
+### meerkat retrain
 
-Reports whether the incoming alerts have changed shape since the model was
-trained, with no labels needed: a population stability index per feature,
-the share of rules the model never saw, and inventory coverage. PSI below
-0.10 counts as stable, above 0.25 as a major shift; a major shift exits with
-code 4. It does not report whether the ranking got worse, which needs
-labelled outcomes. Recorded output:
+Refit the session forest on your own alert archive, supervised by your
+incident records. Trains on the earlier days, scores the last `--holdout-days`,
+and saves only when a majority of the fits beat the shipped bundle there. A
+refusal exits with code 3 and says why; nothing is saved. A saved retrain
+prints what was refit, rescaled and kept, and the bundle's provenance sidecar
+records every setting.
+
+    meerkat retrain --incidents FILE --inventory FILE [--input DIR]
+                    [--environment NAME] [--out FILE] [--holdout-days N]
+                    [--budget K] [--model FILE] [--reviewed-periods FILE]
+                    [--refit-ranking-weights] [--prior-k K] [--min-positives N]
+                    [--trees N] [--seed N] [--fits N]
+                    [--wazuh-file FILE] [--aminer-file FILE]
+
+| option | description |
+| --- | --- |
+| `--incidents FILE` | CSV of `start,end,host,verdict`, required; format in [Inputs](#inputs) |
+| `--inventory FILE` | required; incidents name hosts through it |
+| `--out FILE` | where the new bundle lands |
+| `--holdout-days N` | days held out for the comparison, default 7 |
+| `--budget K` | budget the comparison scores at, default 10 |
+| `--model FILE` | bundle to start from; its ranking weights are kept unless contested |
+| `--reviewed-periods FILE` | CSV of `start,end` periods whose alerts were fully reviewed; only sessions inside them can count as negatives |
+| `--refit-ranking-weights` | also fit the family ranking weights on your incidents; adopted only if they beat the shipped ones on the held-out days. Below about 15 positive families the run warns and continues |
+| `--prior-k K` | bag-size discount; a ticket contributes k/n per session, default 1 |
+| `--min-positives N` | bagged sessions needed before any fit, default 10 |
+| `--trees N` | trees per forest, default 200, matching the shipped model |
+| `--seed N` | base random seed, default 0 |
+| `--fits N` | forests fitted; a majority must beat the shipped one, default 5 |
+
+---
+
+### meerkat drift
+
+Report whether the incoming alerts have changed shape since the model was
+trained, with no labels needed: a population stability index per feature, the
+share of rules the model never saw, and inventory coverage. PSI below 0.10 is
+stable, above 0.25 is a major shift; a major shift exits with code 4. It does
+not report whether the ranking got worse, which needs labelled outcomes.
+
+    meerkat drift [--environment NAME] [--input DIR] [--inventory FILE]
+                  [--model FILE] [--top N] [--all] [--json]
+                  [--wazuh-file FILE] [--aminer-file FILE]
+
+| option | description |
+| --- | --- |
+| `--top N` | how many features to list |
+| `--all` | every feature, stable ones included |
+| `--json` | the full report as JSON, every feature included |
+| `--model FILE` | the bundle whose training profile is the baseline |
+
+Recorded output:
 
 ```text
 note the bundled model was trained with a different scikit-learn than the installed 1.9.0. It loads
@@ -360,27 +518,55 @@ feature drift, worst first
 ranking is still right, which needs confirmed outcomes.
 ```
 
-### export
+---
 
-Four exports, all from a saved run. `export decisions` is the review pass as
-a grid, one row per alert with the decision it inherits and who made it;
-`--decided-only` keeps the handoff summary, `--format csv|json`. `export
-html` is the review pass as one self-contained page: escalations with their
-evidence, closed families one line each, the rest listed unreviewed; with a
-handle, one family's page. `export queue --format csv|json` feeds a ticketing
-system or a spreadsheet. `export navigator` writes an ATT&CK Navigator layer,
-`--queue-only` to keep queued families.
+### meerkat export
 
-### runs
+Four exports, all from a saved run. Each takes `--run` and `--runs-dir`.
 
-Lists the saved runs. The newest successful run is what every other command
-opens by default; `--run` picks another. A run is a directory under `runs/`;
-deleting the directory deletes the run and its reviews.
+    meerkat export queue     [--format csv|json] [--output FILE] [--all]
+    meerkat export decisions [--format csv|json] [--output FILE] [--all]
+                             [--decided-only]
+    meerkat export html      [HANDLE] [--output FILE]
+    meerkat export navigator [--output FILE] [--queue-only]
 
-### completion
+| option | description |
+| --- | --- |
+| `queue --format` | the queue as `csv` or `json`, for a ticketing system |
+| `decisions` | the review pass as a grid: one row per alert with the decision it inherits, who made it, and the note |
+| `decisions --decided-only` | only rows carrying a decision; the handoff summary |
+| `html [HANDLE]` | the review pass as one self-contained page: escalations with evidence, closed families one line each, the rest listed unreviewed. With a handle, one family's page |
+| `navigator` | an ATT&CK Navigator layer of the run, every alert in it |
+| `navigator --queue-only` | only alerts of families that entered the queue |
+| `--all` | every scored family, not only the daily top K |
+| `--output FILE` | where the file lands, default inside the run directory |
 
-Prints a bash completion script harvested from the argument parser, so it
-never drifts from the real flags. `meerkat completion >> ~/.bashrc`.
+---
+
+### meerkat runs
+
+List the saved runs: id, environment, budget, days, families, saved at. The
+newest successful run is what every other command opens by default.
+
+    meerkat runs [--runs-dir DIR] [--json]
+
+| option | description |
+| --- | --- |
+| `--json` | the list as JSON |
+| `--no-pager` | accepted for consistency; runs never pages |
+
+A run is a directory under `runs/`; deleting the directory deletes the run
+and its reviews.
+
+---
+
+### meerkat completion
+
+Print a bash completion script harvested from the argument parser, so it
+never drifts from the real flags. Covers command names, flags, and the
+`export` subcommands.
+
+    meerkat completion >> ~/.bashrc
 
 ## The model
 
@@ -396,8 +582,8 @@ The forest, the inventory, the drift baseline and the `esc%` statistics come
 from your environment. The family ranking weights ship pre-trained, fitted
 across several environments, because a single campaign of incidents is too
 little to fit them honestly; `retrain --refit-ranking-weights` contests them
-on your own incidents. The `esc%` column is not a model output at all: it is
-your own review history, counted per score band.
+on your own incidents. The `esc%` column comes from your own review
+history, counted per score band.
 
 Retraining learns from incident windows rather than per-alert verdicts,
 because that is what a SOC can write down: sessions inside a reported
@@ -415,11 +601,11 @@ code change moved the normalized frame.
 
 ## Limitations
 
-**Batch, not streaming.** One run covers complete days; meerkat does not tail
-a live alert stream.
+**Batch.** One run covers complete days; meerkat does not tail a live
+alert stream.
 
-**The labels are weak by design.** Incident windows, not per-alert verdicts.
-The retrain gate compensates.
+**The labels are weak by design.** Retraining learns from incident windows
+rather than per-alert verdicts. The retrain gate compensates.
 
 **Three detectors.** Wazuh, Suricata and AMiner. Others would need their own
 normalisation.

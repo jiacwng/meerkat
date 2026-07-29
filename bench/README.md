@@ -120,7 +120,7 @@ exact sign tests per seed over the eight folds. Against family size, severity
 and random order the re-ranker separates on every seed (p 0.008 to 0.031).
 Against best child session it does not: identical windows at K=25, 3 of 8
 folds differ at K=10. The difference between those two is the cost column.
-Seeds are tested one by one, never averaged first.
+Seeds are tested one by one before any averaging.
 
 The floor row is why the cost column exists. Merging items can only raise
 coverage at a fixed K, and one item holding the whole day reaches every

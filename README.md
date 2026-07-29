@@ -16,7 +16,7 @@
   <a href="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml">
     <img src="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml/badge.svg" alt="CI status">
   </a>
-  <img src="https://img.shields.io/badge/tests-431%20passing-brightgreen" alt="431 tests passing">
+  <img src="https://img.shields.io/badge/tests-426%20passing-brightgreen" alt="426 tests passing">
   <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 to 3.13">
   <img src="https://img.shields.io/badge/license-MIT-informational" alt="MIT license">
 </p>
@@ -24,7 +24,7 @@
 <p align="center">
   <a href="#quick-start">Quick start</a>
   &nbsp;&middot;&nbsp;
-  <a href="#walkthrough">Walkthrough</a>
+  <a href="docs/manual.md">Manual</a>
   &nbsp;&middot;&nbsp;
   <a href="#results">Results</a>
   &nbsp;&middot;&nbsp;
@@ -35,37 +35,28 @@
 
 Wazuh, Suricata and a log anomaly detector each raise alerts on their own
 severity scale, tens of thousands a day on a mid-sized network. None of them
-ranks the others, so whoever looks first has to choose what to open.
+ranks the others, so whoever looks first has to choose what to open. Meerkat
+scores the day's alerts and builds a review queue sized to the time a team
+actually has.
 
-> **Out of everything raised today, which alerts are the important ones?**
-
-Ranking answers that by scoring alerts and sorting them. Meerkat adds one
-assumption, and it is an assumption rather than a finding: the list is worked
-until the reviewing time runs out, not to the end. How much time that is varies
-by team, so it stays a number you set.
-
-That changes the measure to **coverage at a budget**: for a given number of cases
-opened, how much of the attack does the queue point at? Not every alert of it,
-since one item is enough to start pulling the thread. What counts is whether
-something in the queue leads to each part of the attack, since a part the queue
-misses entirely goes unnoticed.
-
-Ranking alerts fills that budget badly, since one step of an intrusion can raise
+The measure it optimises is coverage at a budget: for a fixed number of cases
+opened per day, how much of an attack does the queue point at. Ranking single
+alerts fills a budget badly, because one step of an intrusion can raise
 thousands of near-identical alerts while a privilege escalation raises three.
-Commercial platforms avoid this by grouping alerts into incidents upstream, and
-most published work starts from those incidents. An open-source stack has no such
-layer, which leaves the question the [report](docs/report/meerkat.pdf) is about.
 
-> **What should one item in the queue be, so that limited review reaches as
-> much of the attack as possible?**
+Commercial platforms already put an aggregation layer in front of the
+analyst: Microsoft Sentinel groups alerts into incidents, and correlators
+such as AIP's GraphWeaver join related alerts into incident graphs. Most
+published ranking work starts from those incidents. An open-source detector
+stack has no such layer, which leaves the question this project is about:
 
-Meerkat reads **Wazuh** (runs on each machine, watches logs and processes),
-**Suricata** (watches network traffic) and **AMiner** (flags unusual log lines).
-The first two are enough to run; the third improves coverage.
+> **What should one item in the review queue be, so that limited review
+> reaches as much of the attack as possible?**
 
-### How alerts are grouped
-
-Alerts are grouped twice before anything is ranked.
+Meerkat's answer is grouping before ranking: a **session** is one rule firing
+on one machine until that stream is quiet for ten minutes, and a **family**
+joins the same day's sessions that share a machine, a detector and a rule.
+The queue holds each day's top families, and the **budget** is yours to set.
 
 <p align="center">
   <img
@@ -75,35 +66,14 @@ Alerts are grouped twice before anything is ranked.
   >
 </p>
 
-A **session** is one rule firing on one machine until that stream is quiet for ten
-minutes. A **family** joins the same day's sessions that share a machine, a
-detector and a rule, so one rule firing 7,068 times becomes one item to judge. A
-**budget** is how many families you review per day.
+A random forest scores each session, and a logistic regression ranks each
+family from its sessions' scores, its shape and the role of the machine it
+landed on. The forest retrains on your own incident records; the
+[manual](docs/manual.md) covers what ships fixed and what is yours.
 
-### The pipeline
-
-Four stages run between the raw files and the queue.
-
-**Normalise.** The three detectors write different formats, name the same machine
-in different ways and score severity on scales that do not compare. This stage
-produces one table: a shared severity scale, and every alert attached to an asset
-from your inventory.
-
-**Group.** Alerts become sessions, sessions become daily families, as above.
-
-**Score sessions.** A random forest gives each session a probability. The shipped
-model was trained on the benchmark, where every alert carries a ground-truth
-label. Retraining on your own history works from weaker labels, because a SOC can
-say an incident ran on this host between these times but not which alerts inside
-that window were the attack. Nothing inside a window is asserted positive there:
-sessions in a reported incident share the weight of one label, and sessions
-outside every incident are the negatives.
-
-**Rank families.** A logistic regression scores each family from its sessions'
-scores, the shape of the family and the role of the machine it landed on. The
-highest scores become the day's queue. The `esc%` column beside the score is
-not a model output: it is the share of your own past reviews at this score
-that were escalated, shown once a score band holds five.
+Meerkat is an open-source project built for research and learning. It does
+not claim to replace a commercial triage platform. Its claims are in
+[Results](#results) and their limits in [Limitations](#limitations).
 
 ## Quick start
 
@@ -117,267 +87,73 @@ python -m pip install -e .
 meerkat demo
 ```
 
-The clone contains a trained model and one company's alerts, so this runs with no
-further download. Those alerts are part of the AIT Alert Data Set, under CC BY
-4.0; [NOTICE](NOTICE) records what is included and how to attribute it.
+The clone contains a trained model and one company's alerts, so this runs with
+no further download. Those alerts are part of the AIT Alert Data Set, under CC
+BY 4.0; [NOTICE](NOTICE) records what is included. The first day's queue,
+recorded:
 
-<p align="center">
-  <img
-    src="docs/assets/queue.svg"
-    alt="Review queue for one day of the demo, listing ten ranked families with host, detector, finding, alert count and score"
-    width="100%"
-  >
-</p>
-
-`score` sets the order. `esc%` fills in as you review: among your past
-reviewed families scoring like this, the share you escalated. It never
-changes the order, and a fresh environment shows the score alone.
-
-## Commands
-
-```
-  meerkat demo                      score the bundled example alerts
-
-  meerkat inventory                 starter inventory from your wazuh alerts
-  meerkat check                     report what triage will see, before running it
-  meerkat triage --input DIR        score one batch into a run
-  meerkat queue                     the ranked queue for a saved run
-  meerkat inspect F3 [S1] [A2]      open one family, session, or alert
-  meerkat review F3 benign          record a decision
-  meerkat retrain --incidents FILE  refit the model on your own incident records
-  meerkat drift                     how far your alerts have moved from training
-  meerkat export queue              the queue as csv or json
-  meerkat export navigator          ATT&CK layer of one run, all its alerts
-  meerkat runs                      list saved runs
-
-  exit codes   0 success   1 error   2 bad arguments
-               3 retrain refused
-               4 major feature drift, or too many rules the model never saw
+```text
+run russellmitchell-20260724-230029  |  company russellmitchell  |  budget 10  |  326 families
+Review queue (top 10 per day, 2022-01-21)  |  F1 = top priority
+┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━┓
+┃ handle ┃ date       ┃ start ┃ host          ┃ detector ┃ finding                                  ┃ alerts ┃ score ┃    esc% ┃ review ┃
+┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━━╇━━━━━━━━┩
+│ F1     │ 2022-01-21 │ 06:33 │ inet-firewall │ AMiner   │ AMiner: Unusual occurrence frequencies o │      6 │  1.00 │         │        │
+│ F2     │ 2022-01-21 │ 11:27 │ inet-firewall │ AMiner   │ AMiner: New service_start parameter comb │      1 │  0.98 │         │        │
+│ F3     │ 2022-01-21 │ 11:27 │ inet-firewall │ AMiner   │ AMiner: New service_stop parameter combi │      1 │  0.98 │         │        │
+│ F4     │ 2022-01-21 │ 00:00 │ inet-firewall │ AMiner   │ AMiner: New ip address in DNS logs.      │     16 │  0.72 │         │        │
+│ F5     │ 2022-01-21 │ 16:10 │ inet-firewall │ Suricata │ SURICATA HTTP gzip decompression failed  │      1 │  0.29 │         │        │
+│ F6     │ 2022-01-21 │ 00:02 │ inet-firewall │ AMiner   │ AMiner: New event type.                  │      2 │  0.24 │         │        │
+│ F7     │ 2022-01-21 │ 06:37 │ webserver     │ Suricata │ SURICATA TLS invalid record/traffic      │    105 │  0.19 │         │        │
+│ F8     │ 2022-01-21 │ 05:24 │ inet-firewall │ Suricata │ SURICATA TLS invalid record/traffic      │    674 │  0.17 │         │        │
+│ F9     │ 2022-01-21 │ 05:24 │ inet-firewall │ Suricata │ SURICATA TLS invalid handshake message   │    674 │  0.17 │         │        │
+│ F10    │ 2022-01-21 │ 06:37 │ webserver     │ Suricata │ SURICATA TLS invalid handshake message   │    105 │  0.17 │         │        │
+└────────┴────────────┴───────┴───────────────┴──────────┴──────────────────────────────────────────┴────────┴───────┴─────────┴────────┘
 ```
 
-Every command takes `--help`. `queue` filters with `--day`, `--host`, `--detector`
-and `--all`, recuts with `--budget`, and emits `--json`.
+`score` sets the order. `esc%` fills in as you review: how often you escalated
+your past reviewed families at the same score. It never changes the order, and
+a fresh environment shows the score alone.
 
-## Walkthrough
+## From queue to decision
 
-Put your alert exports in a directory named `alerts`. Meerkat looks for
-`alerts_wazuh.json` and `alerts_aminer.json` first, then falls back to reading
-each `.json` file's opening lines to recognise it. Every file it recognises is
-read, including a Suricata `eve.json` next to a Wazuh export. `--wazuh-file`,
-`--aminer-file` and `--input` override.
-
-The captures below come from a different directory of alerts than `meerkat demo`
-scores, so their counts do not match the figure above.
-
-### 1. Describe your machines
+The daily loop, start to handoff:
 
 ```bash
-meerkat inventory
+meerkat inventory        # starter asset inventory from your alerts, once
+meerkat check            # what triage will see; fix what it flags
+meerkat triage           # score the batch into a run
+meerkat browse           # work the queue: drill in, record decisions
+meerkat export decisions # the review pass as a grid, for handoff
 ```
 
-<p align="center">
-  <img
-    src="docs/assets/inventory.svg"
-    alt="inventory output: ten assets written from 41488 alert lines, a warning that roles are empty, and the list of role names to choose from"
-    width="100%"
-  >
-</p>
+`inventory` writes the asset list the model reads machine roles from, once
+per environment. `check` reports what triage will see and what to fix first.
+`triage` scores the batch into a saved run, and every later command reopens
+that run. `browse` is the review pass itself: open a family, read its
+sessions and alerts, record the decision at the prompt. `export decisions`
+turns the pass into a grid for handoff, one row per alert with the decision
+it inherits. Along the way, `inspect` opens any family, session or single
+alert with its evidence and the ATT&CK techniques observed on that machine,
+and `export navigator` writes an
+[ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/) layer.
 
-One asset per machine, with `roles` left blank for you to fill in:
-
-```json
-{
-  "company": "alerts",
-  "assets": [
-    {
-      "hostname": "10.143.0.103",
-      "ip_addresses": ["10.143.0.103"],
-      "roles": []
-    },
-    {
-      "hostname": "mail",
-      "ip_addresses": ["172.19.130.4"],
-      "roles": []
-    }
-  ]
-}
-```
-
-A machine keeps its own hostname where the alerts report one, and is labelled by
-its address otherwise.
-
-The command reads the Wazuh file alone, and only the records in it that carry an
-`agent.ip`. A deployment that exports Suricata or AMiner alerts and no Wazuh
-agents gets an empty inventory, and has to write one by hand.
-
-Filling in the roles is the one manual step, and it matters: the model reads
-asset role as a feature, so assets left blank are scored without it.
-`meerkat inventory --list-roles` prints the vocabulary.
-
-```json
-    {
-      "hostname": "mail",
-      "ip_addresses": ["172.19.130.4"],
-      "roles": ["mail_server", "internet_facing"]
-    }
-```
-
-### 2. Check what the tool sees
+The model itself retrains on your history:
 
 ```bash
-meerkat check
+meerkat retrain --incidents tickets.csv
 ```
 
-<p align="center">
-  <img
-    src="docs/assets/check.svg"
-    alt="check output: a per-detector table of alert counts, hosts, inventory match rate and distinct rules, the period covered, and a warning that 15% of alerts are on hosts outside the inventory"
-    width="100%"
-  >
-</p>
+refits the forest on your own alert archive, supervised by what your
+investigations concluded. It asks for three things: an incident CSV meeting
+the requirements in the manual, with about 15 distinct incidents as a
+comfortable start; the alert archive those incidents happened in, since
+`retrain` reads every alert file in the input directory; and the inventory,
+because incident hosts are resolved through it. A retrain is saved
+only when it beats the shipped model on your own held-out incidents, so it
+can decline, and a declined retrain changes nothing.
 
-It exits non-zero and says what is wrong if inventory assets have no roles, if a
-role name is outside the vocabulary, if the rule ids look like one per alert, or
-if the alerts do not parse. Alerts on machines outside the inventory are printed
-as a warning and are not counted as a problem, which is why the capture above
-reports 15% of them and still ends in `ready to triage`. A network alert names
-the addresses at both ends of a connection, and no inventory can hold them all.
-
-### 3. Score a batch
-
-```bash
-meerkat triage --budget 10
-```
-
-Scores the batch once and saves a run under `runs/`. Every command after it
-reopens that run instead of scoring again.
-
-### 4. Work the queue
-
-```bash
-meerkat queue --day 2022-01-21
-meerkat inspect F3
-meerkat review F3 escalate --session S1 --note "Unexpected service change"
-```
-
-`inspect` opens one family: its ranking signals, the evidence pulled from the
-original alerts, related activity on the same machine, and the MITRE ATT&CK
-tactics observed there.
-
-<p align="center">
-  <img
-    src="docs/assets/inspect.svg"
-    alt="Inspect view of one family showing its summary, ranking signals and evidence panels"
-    width="100%"
-  >
-</p>
-
-### 5. Train it on your own history
-
-```bash
-meerkat retrain --incidents tickets.csv --inventory alerts/inventory/alerts.json
-```
-
-`tickets.csv` is a `start,end,host,verdict` export from your ticketing system: an
-incident ran on this machine between these times, and this was the outcome.
-
-| column    | format                                                             |
-| --------- | ------------------------------------------------------------------ |
-| `start`   | epoch seconds or ISO 8601; a time without a timezone counts as UTC |
-| `end`     | same, and not before `start`                                       |
-| `host`    | a hostname or IP address from the inventory                        |
-| `verdict` | `malicious`, `security_risk`, `test` or `true_positive`            |
-
-```csv
-start,end,host,verdict
-2022-01-18T11:20:00Z,2022-01-18T13:05:00Z,intranet-server,true_positive
-1642545600,1642552800,mail,malicious
-```
-
-The verdict names follow OCSF's Incident Finding, matched after lowercasing.
-`test` counts as an attack because a purple-team run is known-good supervision.
-Rows with any other verdict are treated as non-attacks and dropped; a file
-with no attack row is refused. A host the inventory cannot resolve is named in
-a warning and its rows match nothing.
-
-Retraining refuses to run, and names every reason at once, when the batch
-covers no more days than `--holdout-days` (7), when every incident falls in
-the held-out days, or when fewer than `--min-positives` (10) sessions overlap
-an incident.
-
-A first batch should be your full alert archive with its incident history;
-records covering about 15 distinct incidents are a comfortable start. Keep the
-whole archive for later retrains, and trim old data only when `meerkat drift`
-reports a major shift.
-
-Meerkat trains on the earlier days and scores itself on the most recent ones. It
-fits five forests and saves one only when a majority of them pass two tests on
-the held-out days. A forest passes the first test when it reaches at least as
-many incidents as the shipped bundle, so an equal score is enough. It passes the
-second when the two models disagree on at least six held-out incidents, because
-below six a sign test cannot separate a real difference from chance. The forest
-with the median reach is the one saved, never the best one.
-
-`--refit-ranking-weights` also fits the family ranking weights on your own
-incidents, from scores kept out of fold day by day. They are adopted only when
-they beat the shipped weights on the held-out days, majority of seeds; a saved
-retrain reports which weights it carries either way.
-
-### 6. Watch for change
-
-```bash
-meerkat drift
-```
-
-<p align="center">
-  <img
-    src="docs/assets/drift.svg"
-    alt="drift output: alert, session and family counts against the training set, then a table of features ranked by population stability index with a verdict, the training median and the current value"
-    width="100%"
-  >
-</p>
-
-This needs no incident records. It reports whether the incoming alerts have
-changed shape since the model was trained, for example new rules or machines
-missing from the inventory. It does not report whether the ranking has become less
-accurate, which cannot be established without labelled outcomes.
-
-PSI, the population stability index, compares one feature's distribution now
-against the same feature at training time. Below 0.10 counts as stable, above
-0.25 as a major shift.
-
-The session and family counts in the capture above are the client directory's,
-so they differ from the ones in the pipeline figure, which come from the demo.
-
-## MITRE ATT&CK
-
-Alerts are mapped to ATT&CK techniques from the detector's own rule metadata where
-it exists, and from a keyword table otherwise. `inspect` shows the tactics seen on
-a machine in the order they occurred, which is often what makes a family worth
-escalating.
-
-```bash
-meerkat export navigator
-```
-
-writes a layer file that opens in the
-[ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/) under
-**Open Existing Layer**.
-
-It covers one run, the latest or `--run ID`, and every alert in it. `--queue-only`
-narrows it to the queue. The layer is written inside that run's directory, so runs
-are never combined.
-
-<p align="center">
-  <img
-    src="docs/assets/attack-coverage.svg"
-    alt="ATT&CK Navigator layer showing the techniques observed in the demo environment"
-    width="100%"
-  >
-</p>
-
-Mapped tactics are reported independently and are not a claim that they form one
-campaign.
+Every command, flag and input format is in the [manual](docs/manual.md).
 
 ## Results
 
@@ -390,9 +166,13 @@ Before any ranking, the grouping does the heavy lifting: an average company-day
 of 56,899 alerts becomes 78 review items, and the item count stays between 59
 and 86 while daily volume ranges from 9,012 to 109,497.
 
-Coverage is then reported next to what the queue costs to read, because
-reaching attack steps by queueing the biggest items is not triage. At a budget
-of 10 families a day:
+Coverage alone rewards big queues: the biggest families reach many attack
+steps only because they hold most of the day's alerts. So every result
+reports coverage beside what the queue costs to read.
+
+Every row below works at the same budget, **K = 10: the analyst opens ten
+families a day, ten reviews in total**. The comparison is what those ten
+opened items reach:
 
 | Ranking method | steps reached | alerts inside the queue | share of the day |
 |---|---:|---:|---:|
@@ -410,6 +190,12 @@ ceiling. 60 of the 79 scripted steps are findable at all; without AMiner, 41
 are, and Meerkat reaches all 41. Full tables and the tests behind every
 comparison: [bench/README.md](bench/README.md).
 
+The 25% arrives as ten review items a day, and a family is homogeneous by
+its key: the same rule, on the same machine, on the same day, so one
+judgement usually covers it. `inspect` shows the sessions inside, their
+burst shape and the one field that varies between alerts, so a family of
+7,068 firings is judged from a handful of sessions.
+
 The [technical report](docs/report/meerkat.pdf) covers the method, the designs
 that were dropped, and the limits of the evaluation.
 
@@ -419,42 +205,23 @@ that were dropped, and the limits of the evaluation.
   script. They do not establish how the tool performs in production.
 - An attack that trips the same rule as the surrounding noise, at the same
   severity and mixed in time with it, leaves nothing to separate.
-- Ranking is by likelihood, not by business risk. A critical server and a spare
-  workstation showing identical activity score the same.
-- Triage runs in batches, not continuously. Review decisions are stored locally
-  for a single user.
+- Ranking is by likelihood alone and carries no notion of business
+  criticality. A critical server and a spare workstation showing identical
+  activity score the same.
+- Triage runs in batches, one complete day at a time. A real SOC works in
+  shifts on a live stream, and meerkat does not fit that schedule.
 - Wazuh, Suricata and AMiner are supported. Another detector needs an adapter.
-- Retraining is only as good as the incident records a company can supply. It
-  replaces the forest and refits the re-ranker's scaler; the re-ranker's
-  coefficients and the calibrator stay as shipped.
-- Below roughly 300 training sessions, drift reporting is mostly noise and
-  unmoved features read as major drift about half the time.
-- A detector that numbers each anomaly instead of naming its type breaks session
-  grouping and rule rarity, and `check` warns rather than failing.
+- Retraining is only as good as the incident records a company can supply, and
+  the shipped ranking weights stay unless `--refit-ranking-weights` beats them
+  on your own held-out incidents.
+- Below roughly 300 training sessions, drift reporting is mostly noise.
 
-## Model files
+## Documentation
 
-Models are [skops](https://skops.readthedocs.io/) files: loading one rebuilds only
-the types allowlisted in `core/classifier.py`, so it does not execute the file the
-way unpickling does. Meerkat also bounds how far a bundle may unpack and checks
-each tree's arrays, but none of that makes an untrusted bundle safe, so load your
-own. The JSON beside it records the scikit-learn version, training data and a
-checksum, which catches corruption but is not a signature. Run directories under
-`runs/` are plain pickles, so open only your own.
-
-## Reproducing the results
-
-The results table is produced by `bench/`, which is in the repository but not in
-the installed package. It needs the AIT Alert Data Set itself, Zenodo record
-[8263181](https://zenodo.org/records/8263181), a 2.7 GB download that no clone
-carries. [bench/README.md](bench/README.md) gives the file layout and the commands.
-
-## Development
-
-```bash
-python -m unittest discover -s tests -p "test_*.py"
-ruff check core meerkat bench tests
-```
+- [The manual](docs/manual.md): install, inputs, every command, the model.
+- [bench/README.md](bench/README.md): reproducing the results table.
+- [The technical report](docs/report/meerkat.pdf): the method, the designs
+  that were dropped, and the limits of the evaluation.
 
 ## Citing
 

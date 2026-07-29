@@ -1,4 +1,5 @@
-# the README screenshots and the pipeline figure, checked against a saved run
+# the README and manual recorded outputs and the pipeline figure, checked
+# against a saved run
 
 import json
 import os
@@ -35,19 +36,6 @@ def saved_run() -> tuple[dict, pd.DataFrame]:
     return meta, pd.read_pickle(directory / "families.pkl")
 
 
-def svg_terminal_text(path: Path) -> str:
-    root = ET.parse(path).getroot()
-    matrix = next(
-        group
-        for group in root.iter(f"{SVG_NAMESPACE}g")
-        if (group.get("class") or "").endswith("-matrix")
-    )
-    return "".join(
-        "".join(node.itertext())
-        for node in matrix.iter(f"{SVG_NAMESPACE}text")
-    )
-
-
 def command_output(arguments: list[str], columns: int) -> str:
     environment = os.environ.copy()
     environment["COLUMNS"] = str(columns)
@@ -71,38 +59,9 @@ def without_whitespace(text: str) -> str:
 HAS_RUN = (ROOT / "runs" / "latest.txt").exists()
 
 
-@unittest.skipUnless(
-    HAS_RUN,
-    "needs a saved run; produced locally by `meerkat demo`, absent in CI "
-    "because the raw alerts live in Git LFS",
-)
-class ReadmeAssetTests(unittest.TestCase):
-    def assert_matches_command(
-        self,
-        asset: str,
-        arguments: list[str],
-        columns: int,
-    ) -> None:
-        expected = svg_terminal_text(ROOT / "docs" / "assets" / asset)
-        actual = command_output(arguments, columns)
-        self.assertEqual(without_whitespace(expected), without_whitespace(actual))
-
-    def test_queue_screenshot_matches_live_command(self):
-        # a screenshot goes stale the moment the rendering changes, so the SVG
-        # text is diffed against the live command at the same 138 columns
-        self.assert_matches_command(
-            "queue.svg", ["queue", "--day", "2022-01-21"], 138
-        )
-
-    def test_inspect_screenshot_matches_live_command(self):
-        # F212 is the family the README walks a reader through, so its panels
-        # have to still render the way the committed SVG shows them
-        self.assert_matches_command("inspect.svg", ["inspect", "F212"], 120)
-
-
 def manual_fence(heading: str) -> str:
     text = (ROOT / "docs" / "manual.md").read_text(encoding="utf-8")
-    section = text.index(f"### {heading}\n")
+    section = text.index(f"### meerkat {heading}\n")
     start = text.index("```text\n", section) + len("```text\n")
     return text[start:text.index("\n```", start)]
 
@@ -137,65 +96,22 @@ class ManualCaptureTests(unittest.TestCase):
         )
 
 
-class WalkthroughCaptureTests(unittest.TestCase):
-    # inventory, check and drift were captured against a directory of client
-    # alerts that is not in the repo, so they cannot be diffed against a live
-    # run the way queue and inspect are. What is checked instead is that each
-    # one is a real terminal export and still carries the figures the README
-    # quotes beside it.
-    def terminal_text(self, asset: str) -> str:
-        path = ROOT / "docs" / "assets" / asset
-        text = svg_terminal_text(path)
-        self.assertTrue(text.strip(), f"{asset} rendered no text")
-        return without_whitespace(text.replace("\xa0", " "))
-
-    def test_the_captures_are_rich_terminal_exports(self):
-        for asset in ("inventory.svg", "check.svg", "drift.svg"):
-            with self.subTest(asset=asset):
-                root = ET.parse(ROOT / "docs" / "assets" / asset).getroot()
-                self.assertEqual(root.get("class"), "rich-terminal")
-
-    def test_each_capture_still_carries_the_figures_the_readme_quotes(self):
-        # the figures used to be copied into this file, so a re-exported SVG
-        # and an edited README could disagree with each other and both pass.
-        # Read them off the README instead, which is the document making the
-        # claim, and check the capture still shows them.
-        found = 0
-        for asset in ("inventory.svg", "check.svg", "drift.svg"):
-            caption = figure_caption(asset)
-            text = self.terminal_text(asset)
-            for figure in re.findall(r"\d+(?:[.,]\d+)*%?", caption):
-                found += 1
-                with self.subTest(asset=asset, figure=figure):
-                    self.assertIn(figure.replace(",", ""), text)
-        self.assertGreater(found, 0, "no README caption quotes a figure any more")
-
-    def test_the_check_capture_still_ends_in_the_verdict_the_readme_names(self):
-        # the README's point about this capture is that alerts on machines
-        # outside the inventory are a warning and not a problem, so the run
-        # both reports a share and still passes
-        prose = README.read_text(encoding="utf-8")
-        claim = re.search(
-            r"reports (\d+%) of them and still ends in `([^`]+)`", prose
+@unittest.skipUnless(
+    HAS_RUN,
+    "needs a saved run; produced locally by `meerkat demo`, absent in CI "
+    "because the raw alerts live in Git LFS",
+)
+class ReadmeCaptureTests(unittest.TestCase):
+    def test_the_readme_queue_capture_matches_the_live_command(self):
+        text = README.read_text(encoding="utf-8")
+        start = text.index("```text\n") + len("```text\n")
+        fence = text[start:text.index("\n```", start)]
+        self.assertEqual(
+            without_borders(fence),
+            without_borders(
+                command_output(["queue", "--day", "2022-01-21"], 138)
+            ),
         )
-        self.assertIsNotNone(claim, "the README no longer describes check.svg")
-        text = self.terminal_text("check.svg")
-        self.assertIn(claim.group(1), text)
-        self.assertIn(without_whitespace(claim.group(2)), text)
-
-    def test_the_drift_capture_is_the_client_directory_and_not_the_demo(self):
-        # the README says the counts here differ from the pipeline figure's,
-        # which is the mistake an earlier figure made in the other direction
-        counts = re.search(
-            r"(\d+)alerts,(\d+)sessions,(\d+)families", self.terminal_text("drift.svg")
-        )
-        self.assertIsNotNone(counts, "drift.svg no longer opens with its counts")
-        figure = "".join(
-            ET.parse(ROOT / "docs" / "assets" / "pipeline.svg").getroot().itertext()
-        )
-        for group in (2, 3):
-            with self.subTest(count=counts.group(group)):
-                self.assertNotIn(f"{int(counts.group(group)):,}", figure)
 
 
 class BadgeTests(unittest.TestCase):
