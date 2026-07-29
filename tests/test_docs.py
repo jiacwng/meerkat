@@ -100,6 +100,43 @@ class ReadmeAssetTests(unittest.TestCase):
         self.assert_matches_command("inspect.svg", ["inspect", "F212"], 120)
 
 
+def manual_fence(heading: str) -> str:
+    text = (ROOT / "docs" / "manual.md").read_text(encoding="utf-8")
+    section = text.index(f"### {heading}\n")
+    start = text.index("```text\n", section) + len("```text\n")
+    return text[start:text.index("\n```", start)]
+
+
+def without_borders(text: str) -> str:
+    # the manual records on linux, where rich draws heavy box glyphs; windows
+    # consoles get light ones. The cells are what rot, so borders are ignored.
+    return without_whitespace(re.sub(r"[─-╿]", "", text))
+
+
+@unittest.skipUnless(
+    HAS_RUN,
+    "needs a saved run; produced locally by `meerkat demo`, absent in CI "
+    "because the raw alerts live in Git LFS",
+)
+class ManualCaptureTests(unittest.TestCase):
+    # the manual embeds recorded output as text, so it goes stale the same way
+    # a screenshot does and is diffed against the live command the same way
+
+    def test_the_manual_queue_capture_matches_the_live_command(self):
+        self.assertEqual(
+            without_borders(manual_fence("queue")),
+            without_borders(
+                command_output(["queue", "--day", "2022-01-21"], 138)
+            ),
+        )
+
+    def test_the_manual_inspect_capture_matches_the_live_command(self):
+        self.assertEqual(
+            without_borders(manual_fence("inspect")),
+            without_borders(command_output(["inspect", "F212"], 120)),
+        )
+
+
 class WalkthroughCaptureTests(unittest.TestCase):
     # inventory, check and drift were captured against a directory of client
     # alerts that is not in the repo, so they cannot be diffed against a live

@@ -3,8 +3,17 @@
 ## 1.1.0 - 2026-07-29
 
 This minor release carries breaking changes; read the Breaking list before
-upgrading. Scores unchanged: the normalized frame digest is `4b390168afda96bf`
-before and after.
+upgrading. 1.0.0 was a first cut and not usable for real work; this is the
+first release meant to be used.
+
+The release attaches two files. The `.whl` is the package `pip install`
+takes; the `.tar.gz` is the same code as a source archive. One wheel serves
+Linux, macOS and Windows, Python 3.11 or newer. A wheel install brings the
+CLI alone; the demo data, the trained bundle and the benchmark need the
+repository clone. [docs/manual.md](docs/manual.md) is the manual.
+
+Scores unchanged: the normalized frame digest is `4b390168afda96bf` before
+and after.
 
 ### Breaking
 
