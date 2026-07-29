@@ -84,7 +84,7 @@ def refit_forest(
     bundle: TriageBundle,
     sessions: pd.DataFrame,
     prior: pd.Series,
-    n_estimators: int = 300,
+    n_estimators: int = 200,
     seed: int = 0,
     min_positives: int = 10,
 ) -> TriageBundle:

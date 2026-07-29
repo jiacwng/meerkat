@@ -114,6 +114,11 @@ after.
 
 ### Changed
 
+- `retrain` fits 200 trees by default, was 300. The shipped model was trained
+  with 200, so a no-flag retrain now fits the same forest it is compared
+  against. A saved retrain reports what was refit, rescaled and kept, and the
+  bundle's provenance records depth, leaf size and class weight beside trees
+  and seed.
 - The family view no longer prints `family_id`, a second run id, or the list
   of the panels it just printed.
 - The README terminal captures use a flat style.

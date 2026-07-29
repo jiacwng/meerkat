@@ -1812,6 +1812,10 @@ def cmd_retrain(args) -> None:
         f"{sum(verdict['passed'])} of {len(verdict['passed'])} seeds passed, "
         "median kept"
     )
+    console.print(
+        "[dim]refit: forest (your sessions)  rescaled: re-ranker scale "
+        "(your families)  kept: ranking weights, calibrator (shipped)[/dim]"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -2951,7 +2955,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="bag-size discount; a ticket contributes k/n per "
                              "session and k=1 keeps every ticket's total at 1.0")
     tuning.add_argument("--min-positives", type=_positive, default=10)
-    tuning.add_argument("--trees", type=int, default=300)
+    tuning.add_argument("--trees", type=int, default=200)
     tuning.add_argument("--seed", type=int, default=0)
     tuning.add_argument("--fits", type=_positive, default=5,
                         help="forests to fit; a majority must beat the shipped one")

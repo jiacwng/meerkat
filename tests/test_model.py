@@ -230,6 +230,28 @@ class TestBundleGate(unittest.TestCase):
         path.write_bytes(path.read_bytes() + b"\n")
         self.assertFalse(classifier.read_provenance(path)["matches_file"])
 
+    def test_the_default_forest_is_the_one_the_benchmark_trained(self):
+        # 300 in core against 200 in bench meant a no-flag retrain fitted a
+        # different forest than the shipped one it must beat
+        self.assertEqual(
+            classifier.fit_model(
+                pd.DataFrame({"signal": [0.0, 1.0]}), pd.Series([False, True]),
+            ).n_estimators,
+            200,
+        )
+
+    def test_provenance_records_the_forest_settings(self):
+        model = classifier.fit_model(
+            pd.DataFrame({"signal": [0.0, 1.0]}), pd.Series([False, True]),
+            n_estimators=2, seed=0,
+        )
+        path = self.directory / "bundle.skops"
+        classifier.save_model(model, path)
+        record = classifier.read_provenance(path)
+        self.assertIsNone(record["max_depth"])
+        self.assertEqual(record["min_samples_leaf"], 1)
+        self.assertEqual(record["class_weight"], "balanced")
+
 
 # Drift reports covariate shift and refuses to claim anything about accuracy.
 # Two bugs in the first version of the PSI code were found by running it on real
