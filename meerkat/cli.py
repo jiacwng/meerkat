@@ -2247,9 +2247,7 @@ pre {{ color:#b9bcba; font-family:Consolas,Menlo,monospace; font-size:14px;
 
 
 def _recorded_html(render, title: str) -> str:
-    # the terminal views are the single source of content; the page is the
-    # same render, captured. Alert text passed through safe() upstream and is
-    # escaped again by the exporter.
+    # the page is the terminal render, recorded; safe() and the exporter escape
     import io
 
     from rich.console import Console
@@ -2319,8 +2317,7 @@ def cmd_export_html(args) -> None:
         title = f"meerkat {run.run_id} {handle}"
         default_name = f"family-{handle.lower()}.html"
     else:
-        # the handoff report: what was escalated carries its evidence, what
-        # was closed takes one line, the rest is stated unreviewed
+        # escalations carry their evidence, closed take a line, rest is stated
         queued = run.families[run.families["in_queue"]]
         escalated, closed, unreviewed = [], [], []
         for _, family in queued.iterrows():
@@ -3078,8 +3075,7 @@ def main(argv: list[str] | None = None) -> None:
                 errno.EPIPE, errno.EINVAL
             ):
                 _quiet_pipe_exit()
-            # a path the OS refuses (--output to a directory, a missing
-            # parent) is the user's to fix, not a crash
+            # a path the OS refuses is the user's to fix, not a crash
             errors.print(f"[red]{error}[/red]")
             raise SystemExit(EXIT_ERROR)
     except AlertFileError as error:

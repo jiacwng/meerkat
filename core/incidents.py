@@ -37,6 +37,24 @@ REQUIRED_COLUMNS = ("start", "end", "host", "verdict")
 REVIEWED_COLUMNS = ("start", "end")
 
 
+def _epoch_seconds(values: pd.Series, column: str, path: Path) -> pd.Series:
+    # epoch seconds or ISO 8601 only, so an ambiguous 12/01/2026 is not guessed
+    numeric = pd.to_numeric(values, errors="coerce")
+    parsed = pd.to_datetime(
+        values.where(numeric.isna()), errors="coerce", utc=True,
+        format="ISO8601",
+    )
+    seconds = (parsed - pd.Timestamp(0, tz="UTC")) / pd.Timedelta(seconds=1)
+    combined = numeric.fillna(seconds)
+    bad = combined.isna()
+    if bad.any():
+        raise ValueError(
+            f"{path} has {int(bad.sum())} row(s) whose {column} is neither "
+            "epoch seconds nor ISO 8601"
+        )
+    return combined.astype(float)
+
+
 def load_incidents(path: Path) -> pd.DataFrame:
     with path.open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
@@ -49,8 +67,8 @@ def load_incidents(path: Path) -> pd.DataFrame:
             f"expected columns {', '.join(REQUIRED_COLUMNS)}"
         )
     frame = pd.DataFrame(rows)
-    frame["start"] = frame["start"].astype(float)
-    frame["end"] = frame["end"].astype(float)
+    frame["start"] = _epoch_seconds(frame["start"], "start", path)
+    frame["end"] = _epoch_seconds(frame["end"], "end", path)
     frame["verdict"] = (
         frame["verdict"].str.strip().str.lower().str.replace(" ", "_")
     )
@@ -92,8 +110,8 @@ def load_reviewed_periods(path: Path) -> pd.DataFrame:
             f"expected columns {', '.join(REVIEWED_COLUMNS)}"
         )
     frame = pd.DataFrame(rows, columns=REVIEWED_COLUMNS)
-    frame["start"] = frame["start"].astype(float)
-    frame["end"] = frame["end"].astype(float)
+    frame["start"] = _epoch_seconds(frame["start"], "start", path)
+    frame["end"] = _epoch_seconds(frame["end"], "end", path)
     return frame
 
 

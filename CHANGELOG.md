@@ -19,6 +19,8 @@ after.
   forests reach at least as many unseen incidents as the shipped bundle and
   disagree with it on at least six of them. Ticket labels score 49 at budget 5
   against 51 with per-alert ground truth.
+- Incident and reviewed-period times read ISO 8601 beside epoch seconds; a
+  time in neither format is refused with its column named.
 - `meerkat check`, reports per-detector counts, inventory match rate, role
   coverage and rule cardinality from a bounded sample.
 - `meerkat drift`, reports input distribution change with no labels. Population
