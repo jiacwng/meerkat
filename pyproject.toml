@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meerkat"
-version = "1.0.0"
+version = "1.1.0"
 description = "SOC alert-triage: rank a daily review queue with ATT&CK context"
 readme = "README.md"
 requires-python = ">=3.11"
