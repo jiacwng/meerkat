@@ -1338,6 +1338,16 @@ class NativeAminerExports(unittest.TestCase):
         frame = self.normalized(self.build([bad, aminer_export_record()]))
         self.assertEqual(len(frame), 1)
 
+    def test_embedded_ruleset_mitre_tags_become_native_ids(self):
+        # modern rulesets carry their own ATT&CK mapping in rule metadata; the
+        # reader keeps it, and a ruleset without it changes nothing
+        record = eve_alert_record()
+        record["alert"]["metadata"] = {"mitre_technique_id": ["T1595", "T1046"]}
+        fields = normalize.extract_suricata_fields(
+            normalize.as_wrapped_suricata(record), company_inventory()
+        )
+        self.assertEqual(fields.native_technique_ids, "T1595;T1046")
+
     def test_the_log_resource_field_is_read_in_both_shapes(self):
         listed = {"LogData": {"LogResources": ["/var/log/auth.log"]}}
         single = {"AnalysisComponent": {"LogResource": "file:///logs/access.log"}}

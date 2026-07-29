@@ -147,6 +147,18 @@ def _hint(text: str) -> None:
     errors.print(f"[dim]{text}[/dim]")
 
 
+def _page(render, disabled: bool) -> None:
+    # long output pages on a tty when a pager exists; pipes and json never page
+    import os
+    import shutil
+    if (not disabled and sys.stdout.isatty()
+            and (os.environ.get("PAGER") or shutil.which("less"))):
+        with console.pager(styles=True):
+            render()
+    else:
+        render()
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -503,11 +515,10 @@ def _values(alert_slice: pd.DataFrame, field: str, cap: int = 6) -> str | None:
     shown = rendered[:cap]
     extra = len(rendered) - len(shown)
     text = ", ".join(shown)
-    return text + (f"  (+{extra} more)" if extra else "")
+    return text + (f"  (+{extra} more; --distinct {field})" if extra else "")
 
 
 def _render_panels(alert_slice: pd.DataFrame) -> None:
-    present = []
     for title, rows in EVIDENCE_PANELS:
         lines = []
         for label, field in rows:
@@ -516,17 +527,11 @@ def _render_panels(alert_slice: pd.DataFrame) -> None:
                 lines.append((label, value))
         if not lines:
             continue
-        present.append(title)
         console.print(f"[bold cyan]{title}[/bold cyan]")
         width = max(len(label) for label, _ in lines)
         for label, value in lines:
             console.print(f"  {label.rjust(width)} : {safe(value)}")
         console.print()
-    console.print(
-        "[dim]Available evidence: "
-        + (", ".join(present) if present else "none")
-        + "[/dim]\n"
-    )
 
 
 def _render_attack_observations(alert_slice: pd.DataFrame) -> None:
@@ -547,10 +552,7 @@ def _render_attack_observations(alert_slice: pd.DataFrame) -> None:
             for timestamp, tactic in host_steps
         )
         console.print(f"  {safe(host)}: {chain}")
-    console.print(
-        "  [dim]independently mapped tactics, not a confirmed single "
-        "campaign[/dim]\n"
-    )
+    console.print("  [dim]tactics mapped independently[/dim]\n")
 
 
 def _render_why(family: pd.Series) -> None:
@@ -560,10 +562,6 @@ def _render_why(family: pd.Series) -> None:
         signals.append(
             f"{nearby} detectors active on this host within 10 minutes"
         )
-    signals.append(
-        f"{int(family['alert_count'])} alerts across "
-        f"{int(family['n_child_sessions'])} session(s)"
-    )
     if int(family["technique_count"]) > 0:
         signals.append(
             f"maps to {int(family['technique_count'])} ATT&CK technique(s)"
@@ -579,9 +577,11 @@ def render_queue(
     reviews: dict[str, dict],
     title: str,
 ) -> None:
-    table = Table(title=title, title_justify="left", header_style="bold")
+    table = Table(title=f"{title}  |  F1 = top priority",
+                  title_justify="left", header_style="bold")
     table.add_column("handle", no_wrap=True)
     table.add_column("date", no_wrap=True)
+    table.add_column("start", no_wrap=True)
     table.add_column("host", no_wrap=True, max_width=18, overflow="ellipsis")
     table.add_column("detector", no_wrap=True)
     table.add_column("finding", no_wrap=True, max_width=40, overflow="ellipsis")
@@ -597,6 +597,7 @@ def render_queue(
         table.add_row(
             family["handle"],
             fmt_date(family["day"]),
+            fmt_time(family["start"])[11:16],
             safe(family["host_label"]),
             detector_label(family["detector_source"]),
             safe(family["title"] or family["rule_id"])[:40],
@@ -622,11 +623,7 @@ def render_family(
     reviews: dict[str, dict],
 ) -> None:
     alert_slice = run.family_alerts(family)
-    console.print(f"\n[bold]{family_heading(family)}[/bold]")
-    # family_id is built from the entity and the rule id, so it carries the same
-    # attacker-written text they do
-    console.print(f"[dim]family_id {safe(family['family_id'])}[/dim]")
-    console.print(f"[dim]run {run.run_id}[/dim]\n")
+    console.print(f"\n[bold]{family_heading(family)}[/bold]\n")
     console.print("[bold cyan]Overview[/bold cyan]")
     console.print(f"  entity        : {safe(family['entity_id'])}")
     if family["asset_roles"]:
@@ -666,12 +663,7 @@ def render_family(
         console.print(f"  outcome       : {outcome}")
     techniques = sorted(family["technique_id_set"])
     if techniques:
-        # the id comes off the alert and technique_name hands an unknown one back
-        # verbatim, so neither half of this is ours
-        named = ", ".join(
-            f"{safe(tid)} {safe(technique_name(tid))}" for tid in techniques
-        )
-        console.print(f"  techniques    : {named}")
+        console.print(f"  techniques    : {_technique_text(techniques)}")
     review = reviews.get(family["family_id"])
     if review:
         console.print(
@@ -693,7 +685,8 @@ def render_family(
 
 
 def _render_session_list(run: RunState, family: pd.Series) -> None:
-    table = Table(title="Sessions", title_justify="left", header_style="bold")
+    table = Table(title="Sessions  |  S1 = strongest", title_justify="left",
+                  header_style="bold")
     table.add_column("handle")
     table.add_column("start")
     table.add_column("span")
@@ -753,33 +746,120 @@ def render_session(
         f"  volume : {int(session['size'])} alerts, "
         f"score {session['ranking_score']:.2f}"
     )
+    native = (
+        pd.to_numeric(alert_slice["severity"], errors="coerce").dropna()
+        if "severity" in alert_slice.columns else pd.Series(dtype=float)
+    )
+    if len(native):
+        level = native.max()
+        rendered = str(int(level)) if float(level).is_integer() else f"{level:g}"
+        console.print(
+            f"  severity: {detector_label(session['detector_source'])} "
+            f"{rendered} (native scale)"
+        )
+    stamps = pd.to_numeric(alert_slice["timestamp"], errors="coerce").dropna()
+    span = float(session["duration_s"])
+    if len(stamps) >= 5 and span > 0:
+        inner = float(stamps.quantile(0.9) - stamps.quantile(0.1))
+        if inner <= span * 0.1:
+            shape = "single spike"
+        elif inner <= span * 0.5:
+            shape = "clustered bursts"
+        else:
+            shape = "steady across the window"
+        console.print(f"  shape  : {shape}")
     outcome = _http_outcome(alert_slice)
     if outcome:
         console.print(f"  outcome: {outcome}")
+    technique_ids = _slice_technique_ids(alert_slice)
+    if technique_ids:
+        console.print(f"  techniques: {_technique_text(technique_ids)}")
     console.print()
     _render_panels(alert_slice)
+
+
+# within a session the rule is constant, so these are where variance lives
+WHAT_DIFFERS = (
+    "web_request", "http_status", "source_port", "destination_port",
+    "dns_query", "tls_server_name", "command", "destination_user",
+    "source_user",
+)
+ATTACK_URL = "https://attack.mitre.org/techniques/{}/"
+
+
+def _differs_field(alert_slice: pd.DataFrame) -> str:
+    for field in WHAT_DIFFERS:
+        if field not in alert_slice.columns:
+            continue
+        values = alert_slice[field].astype(str)
+        values = values[~values.isin(("", "nan", "None"))]
+        if values.nunique() > 1:
+            return field
+    return ""
+
+
+def _technique_text(technique_ids) -> str:
+    parts = []
+    for technique_id in sorted(technique_ids):
+        name = technique_name(technique_id)
+        if name != technique_id:
+            # only ids the ATT&CK lookup vets become links; alert text never does
+            url = ATTACK_URL.format(technique_id.replace(".", "/"))
+            parts.append(f"[link={url}]{safe(technique_id)}[/link] {safe(name)}")
+        else:
+            parts.append(safe(technique_id))
+    return ", ".join(parts)
+
+
+def _slice_technique_ids(alert_slice: pd.DataFrame) -> set[str]:
+    ids: set[str] = set()
+    for value in alert_slice.get("native_technique_ids", pd.Series(dtype=str)):
+        for technique_id in str(value).split(";"):
+            if technique_id and technique_id != "nan":
+                ids.add(technique_id)
+    return ids
 
 
 def render_alert_rows(alert_slice: pd.DataFrame, limit: int) -> None:
     table = Table(
         title=f"Alerts (showing {min(limit, len(alert_slice))} of "
-        f"{len(alert_slice)})",
+        f"{len(alert_slice)})  |  A1 = first in time",
         title_justify="left",
         header_style="bold",
     )
+    differs = _differs_field(alert_slice)
     table.add_column("handle")
     table.add_column("time")
     table.add_column("detector")
     table.add_column("name")
+    if differs:
+        table.add_column(differs)
     table.add_column("source")
-    for position, (_, alert) in enumerate(alert_slice.head(limit).iterrows()):
-        table.add_row(
+
+    def row(position: int) -> None:
+        alert = alert_slice.iloc[position]
+        cells = [
             f"A{position + 1}",
             fmt_time(alert["timestamp"]),
             detector_label(alert["detector_source"]),
             safe(alert["name"])[:44],
-            safe(f"{alert['source_file']}:{alert['source_position']}"),
-        )
+        ]
+        if differs:
+            cells.append(safe(str(alert[differs]))[:28])
+        cells.append(safe(f"{alert['source_file']}:{alert['source_position']}"))
+        table.add_row(*cells)
+
+    total = len(alert_slice)
+    if total > limit + 3:
+        # a giant shows its head and its tail, so its shape is one glance
+        for position in range(limit - 3):
+            row(position)
+        table.add_row("...", f"{total - limit} more", "", "", *([""] if differs else []), "")
+        for position in range(total - 3, total):
+            row(position)
+    else:
+        for position in range(min(limit, total)):
+            row(position)
     console.print(table)
 
 
@@ -805,6 +885,9 @@ def render_alert_detail(
             continue
         text = str(value)
         if text in ("", "nan", "None", "[]", "set()"):
+            continue
+        if field == "native_technique_ids":
+            table.add_row(str(field), _technique_text(text.split(";")))
             continue
         table.add_row(str(field), safe(text)[:220])
     console.print(table)
@@ -1170,10 +1253,10 @@ def cmd_queue(args) -> None:
         )
         print(json.dumps(queue_records(run, families), indent=2, default=str))
         return
-    _print_queue(
+    _page(lambda: _print_queue(
         run, args.all, args.host, args.detector, args.rule, args.review_state,
         args.day,
-    )
+    ), args.no_pager)
     top = run.families[run.families["in_queue"]]
     if len(top):
         _hint(
@@ -1389,17 +1472,22 @@ def cmd_inspect(args) -> None:
         return
 
     wants_rows = bool(args.alerts or args.raw or wheres or excludes)
-    if session is not None:
-        render_session(family, _canon_handle(args.session), session, alert_slice)
-    else:
-        render_family(run, family, reviews)
 
-    if wants_rows:
-        limit = args.alerts or (5 if args.raw else 20)
-        if args.raw:
-            _render_raw(alert_slice, _raw_dir_for(run, args), limit)
+    def render() -> None:
+        if session is not None:
+            render_session(
+                family, _canon_handle(args.session), session, alert_slice
+            )
         else:
-            render_alert_rows(alert_slice, limit)
+            render_family(run, family, reviews)
+        if wants_rows:
+            limit = args.alerts or (5 if args.raw else 20)
+            if args.raw:
+                _render_raw(alert_slice, _raw_dir_for(run, args), limit)
+            else:
+                render_alert_rows(alert_slice, limit)
+
+    _page(render, args.no_pager)
 
     if session is not None:
         session_handle = _canon_handle(args.session)
@@ -1600,13 +1688,14 @@ def cmd_retrain(args) -> None:
     # train on the earlier days and keep the last ones to check the result, so no
     # reported number comes from days the forest has already seen
     days = sorted(sessions["day"].unique())
+    failures = []
     if len(days) <= args.holdout_days:
-        errors.print(
-            f"[red]{len(days)} days of alerts, need more than "
-            f"{args.holdout_days}[/red]"
+        failures.append(
+            f"{len(days)} days of alerts, need more than {args.holdout_days}"
         )
-        raise SystemExit(EXIT_ERROR)
-    cutoff = days[-args.holdout_days]
+        cutoff = days[0]
+    else:
+        cutoff = days[-args.holdout_days]
     train = sessions[sessions["day"] < cutoff].copy()
     held = sessions[sessions["day"] >= cutoff].copy()
 
@@ -1628,11 +1717,20 @@ def cmd_retrain(args) -> None:
         f"{len(held_incidents)} held out, {bags} sessions inside one"
     )
     if not len(train_incidents):
-        errors.print(
-            f"[red]every incident falls in the last {args.holdout_days} days, "
-            "so training has nothing to learn from[/red]  lower --holdout-days, "
+        failures.append(
+            f"every incident falls in the last {args.holdout_days} days, "
+            "so training has nothing to learn from; lower --holdout-days, "
             "or supply incidents covering an earlier period"
         )
+    if bags < args.min_positives:
+        failures.append(
+            f"only {bags} sessions fall inside an incident; at least "
+            f"{args.min_positives} are needed to retrain"
+        )
+    if failures:
+        # every precondition reports at once, instead of one run per failure
+        for failure in failures:
+            errors.print(f"[red]{failure}[/red]")
         raise SystemExit(EXIT_ERROR)
     # one forest per seed, because a single fit decides approval on a metric coarse
     # enough for seed noise to flip it
@@ -1920,8 +2018,11 @@ def cmd_drift(args) -> None:
     table.add_column("verdict")
     table.add_column("training median", justify="right")
     table.add_column("now", justify="right")
-    shown = [d for d in drifts if d.verdict != "stable"] or drifts[:5]
-    for d in shown[:args.top]:
+    if args.all:
+        shown = list(drifts)
+    else:
+        shown = [d for d in drifts if d.verdict != "stable"] or drifts[:5]
+    for d in shown if args.all else shown[:args.top]:
         style = VERDICT_STYLE[d.verdict]
         table.add_row(
             safe(d.name), f"{d.psi:.3f}", f"[{style}]{d.verdict}[/{style}]",
@@ -2358,6 +2459,7 @@ def build_parser() -> argparse.ArgumentParser:
                             "already saved, so this needs no rescoring")
     queue.add_argument("--json", action="store_true",
                        help="emit the queue as JSON instead of a table")
+    queue.add_argument("--no-pager", action="store_true")
     _add_run_selector(queue)
     queue.set_defaults(func=cmd_queue)
 
@@ -2382,6 +2484,7 @@ def build_parser() -> argparse.ArgumentParser:
                               "directory the run recorded")
     inspect.add_argument("--json", action="store_true",
                          help="emit the family, sessions and alerts as JSON")
+    inspect.add_argument("--no-pager", action="store_true")
     _add_run_selector(inspect)
     inspect.set_defaults(func=cmd_inspect)
 
@@ -2482,6 +2585,8 @@ def build_parser() -> argparse.ArgumentParser:
     drift.add_argument("--model", type=Path, default=_UNSET)
     drift.add_argument("--top", type=_positive, default=10,
                        help="how many features to list")
+    drift.add_argument("--all", action="store_true",
+                       help="list every feature, stable ones included")
     drift.add_argument("--json", action="store_true",
                        help="emit the full report as JSON, every feature included")
     _add_alert_files(drift)

@@ -228,6 +228,12 @@ def extract_suricata_fields(
         if isinstance(first_query, dict):
             dns_query = str(first_query.get("rrname") or "")
 
+    # modern rulesets embed their own ATT&CK mapping in the rule metadata
+    metadata = alert.get("metadata") or {}
+    embedded = metadata.get("mitre_technique_id") or []
+    if isinstance(embedded, str):
+        embedded = [embedded]
+
     return ExtractedFields(
         name=alert["signature"],
         host=asset.hostname if asset else entity_id,
@@ -235,6 +241,7 @@ def extract_suricata_fields(
         observer_id=observer_id,
         entity_in_inventory=entity_id in inventory,
         severity=float(alert["severity"]),
+        native_technique_ids=";".join(str(t) for t in embedded),
         rule_id=str(alert.get("signature_id", "")),
         source_ip=source_ip,
         destination_ip=destination_ip,

@@ -617,7 +617,8 @@ class MarkupInAlertTextTests(unittest.TestCase):
         # entity, rule, family_id and the unknown technique id all reach the
         # Overview block, and none of them may open a tag
         self.assertNotIn(OSC8, text)
-        for fragment in ("10.0.0.1", "T1059", "acme#19013"):
+        # family_id no longer renders; the remaining carriers must still show
+        for fragment in ("10.0.0.1", "T1059"):
             self.assertIn(fragment, plain(text))
 
     def test_an_unrecognised_role_from_the_inventory_is_escaped_when_scoring(self):
