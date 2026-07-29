@@ -85,6 +85,28 @@ class NoColor(unittest.TestCase):
         self.assertTrue(parse(["--no-color", "runs"]).no_color)
 
 
+class WhatDiffers(unittest.TestCase):
+    def test_the_varying_field_is_found_and_constants_are_skipped(self):
+        import pandas as pd
+        slice_ = pd.DataFrame({
+            "web_request": ["/a", "/a", "/a"],
+            "source_port": ["1", "2", "3"],
+        })
+        self.assertEqual(cli._differs_field(slice_), "source_port")
+
+    def test_nothing_varies_means_no_column(self):
+        import pandas as pd
+        slice_ = pd.DataFrame({"web_request": ["/a", "/a"]})
+        self.assertEqual(cli._differs_field(slice_), "")
+
+
+class TechniqueText(unittest.TestCase):
+    def test_only_vetted_ids_become_links(self):
+        text = cli._technique_text(["T1595", "T9999"])
+        self.assertIn("[link=https://attack.mitre.org/techniques/T1595/]", text)
+        self.assertNotIn("T9999/", text)
+
+
 class Orientation(unittest.TestCase):
     def run_bare(self, cwd: Path) -> subprocess.CompletedProcess:
         environment = os.environ.copy()

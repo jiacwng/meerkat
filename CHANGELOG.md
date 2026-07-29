@@ -32,17 +32,25 @@ after.
 - Handles are unpadded: `F1`, `S1`. Runs saved with padded handles still open.
 - Alert handles: `inspect F3 S1 A2` opens one alert's full record, `--raw` adds
   the source line. Alert tables carry the handles.
-- The family view always lists its sessions; every view prints the next command
-  on stderr, so pipes stay clean.
-- `--json` on `inspect`, `check` and `drift`. The drift report carries every
-  feature.
+- The family view always lists its sessions; every view prints the next
+  command on stderr.
 - `--no-color`, and `meerkat completion` prints a bash completion script.
-- The README terminal captures use a flat style.
+- The queue shows each family's start time, and table titles say what the
+  handle order means: F1 top priority, S1 strongest, A1 first in time.
+- Alert tables carry the field that varies inside the session. Session views
+  report native severity, burst shape and techniques.
+- ATT&CK ids embedded in Suricata rule metadata are read as native techniques.
+  Ids the lookup knows link to attack.mitre.org; nothing else becomes a link.
+- Long `queue` and `inspect` output pages on a terminal that has a pager;
+  `--no-pager` refuses.
+- `drift --all` lists every feature. `retrain` reports every failed
+  precondition in one run.
 - `meerkat export queue --format csv|json`.
-- `--json` on `queue` and `runs`. Errors go to stderr.
+- `--json` on `queue`, `runs`, `inspect`, `check` and `drift`. The drift
+  report carries every feature. Errors go to stderr.
 - `queue --budget`, recuts a saved run without rescoring.
-- Alert files resolved by name first, `<company>_wazuh.json` and
-  `<company>_aminer.json`, then by format. Every recognised file is read,
+- Alert files resolved by name first, `<environment>_wazuh.json` and
+  `<environment>_aminer.json`, then by format. Every recognised file is read,
   including a native Suricata `eve.json` beside a Wazuh export. `--wazuh-file`
   and `--aminer-file` read only the named file.
 - `bench/digest.py`, says in seconds whether a change moved the normalized
@@ -91,6 +99,9 @@ after.
 
 ### Changed
 
+- The family view no longer prints `family_id`, a second run id, or the list
+  of the panels it just printed.
+- The README terminal captures use a flat style.
 - CLI messages describe what the tool does with the input rather than instruct
   the operator, and figures measured on the benchmark stay in the report.
 - `export navigator` documents its scope: a saved run, every alert in it by
@@ -105,7 +116,7 @@ after.
   reachable rather than 60.
 - Bag-size discount default 2/n to 1/n. Ten paired seeds found no difference
   across 1/n to 5/n.
-- Tests 137 to 287.
+- Tests 137 to 400.
 
 ## 1.0.0
 

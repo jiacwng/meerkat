@@ -16,7 +16,7 @@
   <a href="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml">
     <img src="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml/badge.svg" alt="CI status">
   </a>
-  <img src="https://img.shields.io/badge/tests-396%20passing-brightgreen" alt="396 tests passing">
+  <img src="https://img.shields.io/badge/tests-400%20passing-brightgreen" alt="400 tests passing">
   <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 to 3.13">
   <img src="https://img.shields.io/badge/license-MIT-informational" alt="MIT license">
 </p>
@@ -142,8 +142,8 @@ families scoring this high in training, about 87% were real. A low value means
   meerkat check                     report what triage will see, before running it
   meerkat triage --input DIR        score one batch into a run
   meerkat queue                     the ranked queue for a saved run
-  meerkat inspect F003 [S1]         open one family, one session, or raw alerts
-  meerkat review F003 benign        record a decision
+  meerkat inspect F3 [S1] [A2]      open one family, session, or alert
+  meerkat review F3 benign          record a decision
   meerkat retrain --incidents FILE  refit the model on your own incident records
   meerkat drift                     how far your alerts have moved from training
   meerkat export queue              the queue as csv or json
@@ -256,8 +256,8 @@ reopens that run instead of scoring again.
 
 ```bash
 meerkat queue --day 2022-01-21
-meerkat inspect F003
-meerkat review F003 escalate --session S1 --note "Unexpected service change"
+meerkat inspect F3
+meerkat review F3 escalate --session S1 --note "Unexpected service change"
 ```
 
 `inspect` opens one family: its ranking signals, the evidence pulled from the
