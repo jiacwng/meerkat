@@ -12,7 +12,7 @@ class ImportBudget(unittest.TestCase):
         # a fresh interpreter, so nothing this test process imported can leak in
         probe = (
             "import sys; import meerkat.cli; "
-            "heavy = [m for m in ('sklearn', 'skops') if m in sys.modules]; "
+            "heavy = [m for m in ('sklearn', 'skops', 'textual') if m in sys.modules]; "
             "sys.exit(', '.join(heavy) if heavy else 0)"
         )
         result = subprocess.run(

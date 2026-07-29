@@ -142,17 +142,25 @@ def _canon_handle(text: str) -> str:
     return f"{match.group(1).upper()}{match.group(2)}" if match else str(text).upper()
 
 
+# browse's prompt loop offers its own navigation, so it switches these off
+hints_enabled = True
+
+
 def _hint(text: str) -> None:
     # navigation help is decoration, so it goes to stderr and never into a pipe
-    errors.print(f"[dim]{text}[/dim]")
+    if hints_enabled:
+        errors.print(f"[dim]{text}[/dim]")
 
 
 def _page(render, disabled: bool) -> None:
-    # long output pages on a tty when a pager exists; pipes and json never page
+    # long output pages on a tty when a pager exists; pipes and json never page.
+    # git's less flags: colors render, short output quits instantly, the screen
+    # is not cleared on exit so the view stays in the scrollback
     import os
     import shutil
     if (not disabled and sys.stdout.isatty()
             and (os.environ.get("PAGER") or shutil.which("less"))):
+        os.environ.setdefault("LESS", "-FRX")
         with console.pager(styles=True):
             render()
     else:
@@ -309,7 +317,7 @@ def load_run(runs_dir: Path, run_id: str | None = None) -> RunState:
     directory = runs_dir / safe_run_id(run_id)
     if not (directory / "run.json").exists():
         raise FileNotFoundError(f"run {run_id} not found in {runs_dir}")
-    return RunState(
+    state = RunState(
         run_id=run_id,
         directory=directory,
         meta=json.loads((directory / "run.json").read_text(encoding="utf-8")),
@@ -317,6 +325,10 @@ def load_run(runs_dir: Path, run_id: str | None = None) -> RunState:
         sessions=pd.read_pickle(directory / "sessions.pkl"),
         alerts=pd.read_pickle(directory / "alerts.pkl"),
     )
+    # runs saved before the unpadded convention display F1 style everywhere
+    if "handle" in state.families.columns:
+        state.families["handle"] = state.families["handle"].map(_canon_handle)
+    return state
 
 
 # A session's identity has to survive a retrain. session_id is a row counter, the
@@ -347,9 +359,17 @@ def append_review(
     note: str,
     session_key: str | None = None,
     session_handle: str | None = None,
+    analyst: str | None = None,
 ) -> dict:
+    if analyst is None:
+        import getpass
+        try:
+            analyst = getpass.getuser()
+        except OSError:
+            analyst = ""
     entry = {
         "timestamp": _now_iso(),
+        "analyst": analyst,
         "run_id": run_id,
         "family_id": family_id,
         "handle": handle,
@@ -579,16 +599,16 @@ def render_queue(
 ) -> None:
     table = Table(title=f"{title}  |  F1 = top priority",
                   title_justify="left", header_style="bold")
-    table.add_column("handle", no_wrap=True)
+    table.add_column("handle", no_wrap=True, min_width=4)
     table.add_column("date", no_wrap=True)
     table.add_column("start", no_wrap=True)
     table.add_column("host", no_wrap=True, max_width=18, overflow="ellipsis")
     table.add_column("detector", no_wrap=True)
     table.add_column("finding", no_wrap=True, max_width=40, overflow="ellipsis")
     table.add_column("alerts", justify="right", no_wrap=True)
-    table.add_column("score", justify="right", no_wrap=True)
-    table.add_column("conf%", justify="right", no_wrap=True)
-    table.add_column("review", no_wrap=True)
+    table.add_column("score", justify="right", no_wrap=True, min_width=5)
+    table.add_column("conf%", justify="right", no_wrap=True, min_width=5)
+    table.add_column("review", no_wrap=True, min_width=6)
     if not len(families):
         console.print(f"[dim]{title}: no families match[/dim]")
         return
@@ -647,10 +667,12 @@ def render_family(
     if len(rule_peers) >= 3:
         median = float(rule_peers["alert_count"].median())
         ratio = int(family["alert_count"]) / median
-        ratio_text = f"{ratio:.1f}".rstrip("0").rstrip(".")
-        volume_comparison = (
-            f", {ratio_text}x the median for this rule in this run"
-        )
+        # a comparison near 1x says nothing, so it only speaks when it differs
+        if ratio >= 2 or ratio <= 0.5:
+            ratio_text = f"{ratio:.1f}".rstrip("0").rstrip(".")
+            volume_comparison = (
+                f", {ratio_text}x the median for this rule in this run"
+            )
     alerts_n = int(family["alert_count"])
     sessions_n = int(family["n_child_sessions"])
     console.print(
@@ -1285,7 +1307,7 @@ def cmd_runs(args) -> None:
         console.print(f"[dim]no runs in {args.runs_dir}[/dim]")
         return
     table = Table(title="Saved runs", title_justify="left", header_style="bold")
-    table.add_column("run")
+    table.add_column("run", no_wrap=True, min_width=30)
     table.add_column("company")
     table.add_column("budget", justify="right")
     table.add_column("families", justify="right")
@@ -1316,8 +1338,8 @@ def _parse_pairs(pairs, columns) -> list[tuple[str, str]]:
         field, value = pair.split("=", 1)
         if field not in columns:
             errors.print(
-                f"[red]unknown field {field!r}[/red]  "
-                "check the normalized schema"
+                f"[red]unknown field {field!r}[/red]  fields: "
+                f"{', '.join(sorted(columns))}"
             )
             raise SystemExit(EXIT_ERROR)
         parsed.append((field, value))
@@ -1343,7 +1365,7 @@ def _apply_filters(alert_slice, wheres, excludes):
 
 def _render_raw(alert_slice, raw_dir: Path, limit: int) -> None:
     for source_file, group in alert_slice.head(limit).groupby(
-        "source_file", sort=False
+        "source_file", sort=False, observed=True
     ):
         path = raw_dir / str(source_file)
         wanted = {int(position): None for position in group["source_position"]}
@@ -1377,13 +1399,23 @@ def cmd_inspect(args) -> None:
     wheres = _parse_pairs(args.where, columns)
     excludes = _parse_pairs(args.exclude, columns)
     if args.distinct and args.distinct not in columns:
-        errors.print(f"[red]unknown field {args.distinct!r}[/red]")
+        errors.print(
+            f"[red]unknown field {args.distinct!r}[/red]  fields: "
+            f"{', '.join(sorted(columns))}"
+        )
         raise SystemExit(EXIT_ERROR)
 
     try:
         family = run.family_by_handle(args.handle)
     except KeyError as error:
-        errors.print(f"[red]{error.args[0]}[/red]")
+        letter = _canon_handle(args.handle)[:1]
+        if letter in ("S", "A"):
+            errors.print(
+                f"[red]{error.args[0]}[/red]  sessions and alerts live inside "
+                "a family: `meerkat inspect F1 S1` then `... S1 A1`"
+            )
+        else:
+            errors.print(f"[red]{error.args[0]}[/red]")
         raise SystemExit(EXIT_ERROR)
 
     if args.session:
@@ -1515,7 +1547,14 @@ def cmd_review(args) -> None:
     try:
         family = run.family_by_handle(args.handle)
     except KeyError as error:
-        errors.print(f"[red]{error.args[0]}[/red]")
+        letter = _canon_handle(args.handle)[:1]
+        if letter in ("S", "A"):
+            errors.print(
+                f"[red]{error.args[0]}[/red]  sessions and alerts live inside "
+                "a family: `meerkat inspect F1 S1` then `... S1 A1`"
+            )
+        else:
+            errors.print(f"[red]{error.args[0]}[/red]")
         raise SystemExit(EXIT_ERROR)
 
     # Dismissing a family is exact: if nothing in it was an attack, nothing in any
@@ -2111,6 +2150,83 @@ def _csv_safe(value):
     return value
 
 
+def effective_decisions(run) -> dict[str, dict[str, dict]]:
+    # replay the audit in order: a session entry covers that session, a family
+    # entry covers every session, and the last entry covering a session wins
+    covered: dict[str, dict[str, dict]] = {}
+    for entry in review_history(run.directory):
+        family_id = entry["family_id"]
+        scopes = covered.setdefault(family_id, {})
+        if entry.get("session_handle"):
+            scopes[entry["session_handle"]] = entry
+        else:
+            covered[family_id] = {"*": entry}
+    return covered
+
+
+def decision_rows(run, families) -> list[dict]:
+    decisions = effective_decisions(run)
+    rows = []
+    for _, family in families.iterrows():
+        scopes = decisions.get(family["family_id"], {})
+        for handle, session_id in run.session_handles(family):
+            session = run.sessions[
+                run.sessions["session_id"].eq(session_id)
+            ].iloc[0]
+            entry = scopes.get(handle) or scopes.get("*")
+            decided_by = ""
+            if entry is not None:
+                decided_by = "session" if entry.get("session_handle") else "family"
+            for position, (_, alert) in enumerate(
+                run.session_alerts(session).iterrows()
+            ):
+                rows.append({
+                    "family": family["handle"],
+                    "finding": family["title"] or family["rule_id"],
+                    "host": family["host_label"],
+                    "detector": alert["detector_source"],
+                    "rule_id": alert["rule_id"],
+                    "session": handle,
+                    "alert": f"A{position + 1}",
+                    "time": fmt_time(alert["timestamp"]),
+                    "name": alert["name"],
+                    "decision": entry["decision"] if entry else "",
+                    "decided_by": decided_by,
+                    "analyst": entry.get("analyst", "") if entry else "",
+                    "note": entry.get("note", "") if entry else "",
+                    "source": f"{alert['source_file']}:{alert['source_position']}",
+                })
+    return rows
+
+
+def cmd_export_decisions(args) -> None:
+    run = _load_run(args)
+    families = run.families if args.all else run.families[run.families["in_queue"]]
+    if len(families) > 100:
+        errors.print(f"collecting {len(families)} families...")
+    rows = decision_rows(run, families)
+    if args.decided_only:
+        rows = [row for row in rows if row["decision"]]
+    suffix = "json" if args.format == "json" else "csv"
+    output = args.output or (run.directory / f"decisions.{suffix}")
+    if args.format == "json":
+        output.write_text(
+            json.dumps(rows, indent=2, default=str), encoding="utf-8"
+        )
+    else:
+        pd.DataFrame(rows).map(_csv_safe).to_csv(output, index=False)
+    reviewed = sum(1 for row in rows if row["decision"])
+    if not reviewed:
+        errors.print(
+            "[yellow]no reviews recorded on these families yet[/yellow]  "
+            "the grid carries empty decision columns"
+        )
+    console.print(
+        f"[green]exported[/green] {len(rows)} alert rows "
+        f"({reviewed} carrying a decision) to {output}"
+    )
+
+
 def cmd_export_queue(args) -> None:
     run = _load_run(args)
     families = run.families if args.all else run.families[run.families["in_queue"]]
@@ -2155,7 +2271,7 @@ def cmd_demo(args) -> None:
         budget=args.budget, runs_dir=args.runs_dir,
     ))
     console.print(
-        "\n[dim]next: `meerkat inspect F001` to open the top family, "
+        "\n[dim]next: `meerkat inspect F1` to open the top family, "
         "`meerkat export navigator` for the ATT&CK layer[/dim]"
     )
 
@@ -2282,6 +2398,13 @@ def _apply_config(args) -> None:
         setattr(args, attribute, value)
 
 
+def cmd_browse(args) -> None:
+    from meerkat.browse import browse_loop
+    run = _load_run(args)
+    _announce_run(run)
+    browse_loop(run)
+
+
 def cmd_completion(args) -> None:
     # a static script harvested from the parser, so it never drifts from it
     parser = build_parser()
@@ -2338,7 +2461,7 @@ def cmd_orientation(args) -> None:
         f"{len(reviews)} reviewed"
     )
     console.print(
-        "[dim]next: `meerkat queue` to work it, `meerkat inspect F001` to open "
+        "[dim]next: `meerkat queue` to work it, `meerkat inspect F1` to open "
         "the top family, `meerkat triage --input DIR` to score a new day[/dim]"
     )
 
@@ -2469,6 +2592,8 @@ def build_parser() -> argparse.ArgumentParser:
     runs.add_argument("--runs-dir", type=Path, default=_UNSET)
     runs.add_argument("--json", action="store_true",
                       help="emit the run list as JSON instead of a table")
+    runs.add_argument("--no-pager", action="store_true",
+                      help="accepted for consistency; runs never pages")
     runs.set_defaults(func=cmd_runs)
 
     inspect = sub.add_parser("inspect", help="open a family, session or alert")
@@ -2476,11 +2601,17 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("session", nargs="?", help="session handle, e.g. S1")
     inspect.add_argument("alert", nargs="?",
                          help="alert handle, e.g. A2, in the session's own order")
-    inspect.add_argument("--where", action="append", metavar="field=value")
-    inspect.add_argument("--exclude", action="append", metavar="field=value")
-    inspect.add_argument("--distinct", metavar="field")
-    inspect.add_argument("--alerts", type=_positive, metavar="N")
-    inspect.add_argument("--raw", action="store_true")
+    inspect.add_argument("--where", action="append", metavar="field=value",
+                         help="keep alerts matching a field, e.g. "
+                              "--where http_status=404; repeatable")
+    inspect.add_argument("--exclude", action="append", metavar="field=value",
+                         help="drop alerts matching a field; repeatable")
+    inspect.add_argument("--distinct", metavar="field",
+                         help="count the distinct values of one field")
+    inspect.add_argument("--alerts", type=_positive, metavar="N",
+                         help="show up to N alert rows")
+    inspect.add_argument("--raw", action="store_true",
+                         help="print the source lines as the detector wrote them")
     inspect.add_argument("--raw-dir", type=Path, default=None,
                          help="where the alert files live; defaults to the "
                               "directory the run recorded")
@@ -2497,7 +2628,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--session",
         help="which burst, e.g. S1, or all. Required to escalate.",
     )
-    review.add_argument("--note", default="")
+    review.add_argument("--note", default="",
+                        help="free text stored with the decision")
+    review.add_argument("--analyst", default=None,
+                        help="who decided; defaults to the login name")
     _add_run_selector(review)
     review.set_defaults(func=cmd_review)
 
@@ -2530,6 +2664,37 @@ def build_parser() -> argparse.ArgumentParser:
                            help="every scored family, not only the daily top-K")
     _add_run_selector(queue_out)
     queue_out.set_defaults(func=cmd_export_queue)
+
+    decisions = export_sub.add_parser(
+        "decisions",
+        help="the review pass as a grid: every alert with its inherited decision",
+        description="One row per alert of the queued families (or every scored "
+                    "family with --all): the session it belongs to, and the "
+                    "decision it inherits. A session review covers its alerts; "
+                    "a family review covers every session without its own.",
+    )
+    decisions.add_argument("--format", choices=("csv", "json"), default="csv")
+    decisions.add_argument("--output", type=Path, default=None)
+    decisions.add_argument("--all", action="store_true",
+                           help="every scored family, not only the daily top-K")
+    decisions.add_argument("--decided-only", action="store_true",
+                           help="only rows that carry a decision; the handoff "
+                                "summary a shift ends with")
+    _add_run_selector(decisions)
+    decisions.set_defaults(func=cmd_export_decisions)
+
+    browse = sub.add_parser(
+        "browse",
+        help="a prompt loop over the queue: type handles to drill in",
+        description="Prints the queue, then reads commands at a `browse>` "
+                    "prompt. `F3` opens a family, `S1` a session, `A2` an "
+                    "alert; `review <decision> [note]` records a decision on "
+                    "what is open; `b` walks back, `all`/`queue` switch scope, "
+                    "`q` quits. Decisions land in the run's reviews.jsonl, "
+                    "last entry per scope wins.",
+    )
+    _add_run_selector(browse)
+    browse.set_defaults(func=cmd_browse)
 
     completion = sub.add_parser(
         "completion",
@@ -2718,6 +2883,14 @@ def main(argv: list[str] | None = None) -> None:
             stream.reconfigure(encoding="utf-8")
     parser = build_parser()
     args = parser.parse_args(argv)
+    # `queue | head` closes the pipe early; that is an exit, not a crash
+    import contextlib
+
+    def _quiet_pipe_exit() -> None:
+        with contextlib.suppress(OSError):
+            sys.stdout.flush()
+        raise SystemExit(0)
+
     if args.no_color:
         # the module globals are what every renderer prints through
         globals()["console"] = Console(no_color=True)
@@ -2730,7 +2903,15 @@ def main(argv: list[str] | None = None) -> None:
         if args.command is None:
             cmd_orientation(args)
             return
-        args.func(args)
+        try:
+            args.func(args)
+        except (BrokenPipeError, OSError) as error:
+            import errno
+            if isinstance(error, BrokenPipeError) or error.errno in (
+                errno.EPIPE, errno.EINVAL
+            ):
+                _quiet_pipe_exit()
+            raise
     except AlertFileError as error:
         # the message already names the file and the line, which is the whole
         # point: one bad record in a 45 MB export should not print a traceback.
