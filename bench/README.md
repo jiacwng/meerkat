@@ -103,17 +103,19 @@ how many labelled attack windows the daily queue reaches at a review budget of K
 families per day, averaged over seeds 53, 52 and 51 with 200 trees.
 
 A family counts toward a window only when it holds an alert labelled to it.
-Beside each count, the alerts the queue contains and their share of the day,
-because a ranker can buy windows by queueing the biggest items.
+Beside each count, the alerts sitting underneath the day's queued items,
+per evaluated day (41 days over the eight networks), because a ranker can buy
+windows by queueing the biggest items. An average evaluated day holds 57,295
+alerts.
 
-| Ranker | windows K=5 | K=10 | K=25 | alerts@10 | share@10 |
-|---|---:|---:|---:|---:|---:|
-| **Family re-ranker (ours)** | **51** | **58** | **58** | **29,597** | **25%** |
-| Best child session | 44 | 54 | 58 | 219,506 | 30% |
-| Family size | 29 | 30 | 39 | 284,595 | 93% |
-| Native detector severity | 19 | 33 | 46 | 23,279 | 7% |
-| Random | 22 | 32 | 44 | 46,767 | 18% |
-| Floor: one item per day | 60 | 60 | 60 | 293,637 | 100% |
+| Ranker | windows K=5 | K=10 | K=25 | alerts/day@10 |
+|---|---:|---:|---:|---:|
+| **Family re-ranker (ours)** | **51** | **58** | **58** | **5,775** |
+| Best child session | 44 | 54 | 58 | 42,830 |
+| Family size | 29 | 30 | 39 | 55,531 |
+| Native detector severity | 19 | 33 | 46 | 4,542 |
+| Random | 22 | 32 | 44 | 9,125 |
+| Floor: one item per day | 60 | 60 | 60 | 57,295 |
 
 `python -m bench.evaluate` regenerates every row and writes `sign_tests.csv`,
 exact sign tests per seed over the eight folds. Against family size, severity
