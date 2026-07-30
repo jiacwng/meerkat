@@ -67,13 +67,10 @@ The queue holds each day's top families, and the **budget** is yours to set.
 </p>
 
 A random forest scores each session, and a logistic regression ranks each
-family from its sessions' scores, its shape and the role of the machine it
-landed on. The forest retrains on your own incident records; the
+family from its sessions' scores, its shape and the role of the machine it appeared on. The forest retrains on your own incident records; the
 [manual](docs/manual.md) covers what ships fixed and what is yours.
 
-Meerkat is an open-source project built for research and learning. It does
-not claim to replace a commercial triage platform. Its claims are in
-[Results](#results) and their limits in [Limitations](#limitations).
+Meerkat is an open-source project built for research and learning. [Results](#results) reports what was measured and [Limitations](#limitations) reports the limits.
 
 ## Quick start
 
@@ -111,9 +108,7 @@ Review queue (top 10 per day, 2022-01-21)  |  F1 = top priority
 └────────┴────────────┴───────┴───────────────┴──────────┴──────────────────────────────────────────┴────────┴───────┴─────────┴────────┘
 ```
 
-`score` sets the order. `esc%` fills in as you review: how often you escalated
-your past reviewed families at the same score. It never changes the order, and
-a fresh environment shows the score alone.
+`score` alone sets the order. `esc%` fills in as you review: how often you escalated your past reviewed families at the same score. A fresh environment shows the score alone.
 
 ## From queue to decision
 
@@ -159,10 +154,9 @@ Every command, flag and input format is in the [manual](docs/manual.md).
 
 Measured on the [AIT Alert Data Set](https://zenodo.org/records/8263181): eight
 simulated company networks in which a scripted attack was run and every alert it
-produced was labelled. The model trains on seven networks and is scored on the
-eighth, so the network being scored is never one it trained on.
+produced was labelled. The model trains on seven networks and is scored on the eighth.
 
-Before any ranking, the grouping does the heavy lifting: an average company-day
+Before any ranking, the grouping does most of the reduction: an average company-day
 of 56,899 alerts becomes 78 review items, and the item count stays between 59
 and 86 while daily volume ranges from 9,012 to 109,497.
 
@@ -170,9 +164,7 @@ Coverage alone rewards big queues: the biggest families reach many attack
 steps only because they hold most of the day's alerts. So every result
 reports coverage beside what the queue costs to read.
 
-Every row below works at the same budget, **K = 10: the analyst opens ten
-families a day, ten reviews in total**. The comparison is what those ten
-opened items reach:
+Every row below works at the same budget, **K = 10: the analyst opens ten families a day**. The comparison is what those ten opened items reach:
 
 | Ranking method | steps reached | alerts inside the queue | share of the day |
 |---|---:|---:|---:|
@@ -183,9 +175,7 @@ opened items reach:
 | Random order | 32 | 46,767 | 18% |
 | Reviewing everything | 60 | 293,637 | 100% |
 
-A step counts as reached only when the queue holds an alert labelled to it.
-On steps alone the first two rows are close; Meerkat reads 4 to 7 times fewer
-alerts for them. The last row reviews the whole day as one item and is the
+The share column is the mean of each day's share, so it does not equal the alert column divided by the total. A step counts as reached only when the queue holds an alert labelled to it. On steps alone the first two rows are close; Meerkat reads about seven times fewer alerts for them in total, and per network the ratio runs from parity to 24. The last row reviews the whole day as one item and is the
 ceiling. 60 of the 79 scripted steps are findable at all; without AMiner, 41
 are, and Meerkat reaches all 41. Full tables and the tests behind every
 comparison: [bench/README.md](bench/README.md).
@@ -194,15 +184,14 @@ The 25% arrives as ten review items a day, and a family is homogeneous by
 its key: the same rule, on the same machine, on the same day, so one
 judgement usually covers it. `inspect` shows the sessions inside, their
 burst shape and the one field that varies between alerts, so a family of
-7,068 firings is judged from a handful of sessions.
+7,068 firings is judged from a few sessions.
 
 The [technical report](docs/report/meerkat.pdf) covers the method, the designs
 that were dropped, and the limits of the evaluation.
 
 ## Limitations
 
-- The results come from one simulated testbed whose networks share an attack
-  script. They do not establish how the tool performs in production.
+- The headline results come from one simulated testbed whose networks share an attack script; a second testbed (CAM-LDS) cross-checks the transfer of the ranking weights only. Neither establishes how the tool performs in production.
 - An attack that trips the same rule as the surrounding noise, at the same
   severity and mixed in time with it, leaves nothing to separate.
 - Ranking is by likelihood alone and carries no notion of business
@@ -220,8 +209,7 @@ that were dropped, and the limits of the evaluation.
 
 - [The manual](docs/manual.md): install, inputs, every command, the model.
 - [bench/README.md](bench/README.md): reproducing the results table.
-- [The technical report](docs/report/meerkat.pdf): the method, the designs
-  that were dropped, and the limits of the evaluation.
+- [The technical report](docs/report/meerkat.pdf): the full method and evaluation.
 
 ## Citing
 

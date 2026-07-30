@@ -1,8 +1,6 @@
 # meerkat manual
 
-Meerkat is an open-source triage tool built as a research project. It does
-not claim to replace a commercial platform; this manual says what each
-command does and what each input must look like.
+Meerkat is an open-source triage tool built as a research project. This manual says what each command does and what each input must look like.
 
 - [Install](#install)
 - [Quickstart](#quickstart)
@@ -48,8 +46,7 @@ plain pickles; open only your own.
 
 ## Quickstart
 
-`meerkat demo` scores the bundled example with the shipped model and prints
-the first day's queue. Every later command reopens that saved run.
+`meerkat demo` scores the bundled example with the shipped model and prints the first day's queue. Every later command reopens the saved run.
 
 For your own alerts, put the detector exports in a directory named `alerts`,
 then:
@@ -93,8 +90,7 @@ as a feature:
 }
 ```
 
-`meerkat inventory --list-roles` prints the vocabulary, which follows OCSF
-names. Assets with no role are scored without it.
+`meerkat inventory --list-roles` prints the vocabulary, which follows OCSF names. Assets with no role are scored without it. An alert spans several lines in the export, so the line counts the tool reports are larger than the alert counts.
 
 ### Incident records, for retraining
 
@@ -125,7 +121,7 @@ start. Keep the whole archive for later retrains, and trim old data only when
 ### Configuration
 
 `meerkat.toml` in the working directory and `MEERKAT_*` variables fill flags
-that were not passed. Flags beat variables, variables beat the file. The keys
+that were not passed. Flags override variables, and variables override the file. The keys
 are `environment`, `input`, `inventory`, `model` and `runs_dir`. `demo`
 ignores both.
 
@@ -274,7 +270,7 @@ score alone.
 
 | option | description |
 | --- | --- |
-| `--all` | every scored family, not only the daily top K |
+| `--all` | every scored family |
 | `--host HOST` | filter by host or entity |
 | `--detector NAME` | filter by detector source |
 | `--rule TEXT` | filter by rule id substring |
@@ -403,8 +399,7 @@ Related families on this host
 
 ### meerkat review
 
-Record a decision on a family or one of its sessions. Decisions land in the
-run's `reviews.jsonl`, append-only; the last entry covering a scope wins. A
+Record a decision on a family or one of its sessions. Decisions are appended to the run's `reviews.jsonl`; the last entry covering a scope wins. A
 session review covers its alerts; a family review covers every session
 without its own.
 
@@ -439,8 +434,7 @@ lives here.
 | `queue` | back to the budgeted view |
 | `q` | quit |
 
-Decisions land in the same `reviews.jsonl` as `meerkat review`, with the same
-rules.
+Decisions are appended to the same `reviews.jsonl` as `meerkat review`, with the same rules.
 
 ---
 
@@ -464,10 +458,10 @@ records every setting.
 | --- | --- |
 | `--incidents FILE` | CSV of `start,end,host,verdict`, required; format in [Inputs](#inputs) |
 | `--inventory FILE` | required; incidents name hosts through it |
-| `--out FILE` | where the new bundle lands |
+| `--out FILE` | where the new bundle is written |
 | `--holdout-days N` | days held out for the comparison, default 7 |
 | `--budget K` | budget the comparison scores at, default 10 |
-| `--model FILE` | bundle to start from; its ranking weights are kept unless contested |
+| `--model FILE` | bundle to start from; `--refit-ranking-weights` can replace its ranking weights |
 | `--reviewed-periods FILE` | CSV of `start,end` periods whose alerts were fully reviewed; only sessions inside them can count as negatives |
 | `--refit-ranking-weights` | also fit the family ranking weights on your incidents; adopted only if they beat the shipped ones on the held-out days. Below about 15 positive families the run warns and continues |
 | `--prior-k K` | bag-size discount; a ticket contributes k/n per session, default 1 |
@@ -539,7 +533,7 @@ Four exports, all from a saved run. Each takes `--run` and `--runs-dir`.
 | `navigator` | an ATT&CK Navigator layer of the run, every alert in it |
 | `navigator --queue-only` | only alerts of families that entered the queue |
 | `--all` | every scored family, not only the daily top K |
-| `--output FILE` | where the file lands, default inside the run directory |
+| `--output FILE` | where the file is written, default inside the run directory |
 
 ---
 
@@ -562,9 +556,7 @@ and its reviews.
 
 ### meerkat completion
 
-Print a bash completion script harvested from the argument parser, so it
-never drifts from the real flags. Covers command names, flags, and the
-`export` subcommands.
+Print a bash completion script generated from the argument parser, so it always matches the real flags. Covers command names, flags, and the `export` subcommands.
 
     meerkat completion >> ~/.bashrc
 
@@ -581,12 +573,11 @@ scores become the day's queue.
 The forest, the inventory, the drift baseline and the `esc%` statistics come
 from your environment. The family ranking weights ship pre-trained, fitted
 across several environments, because a single campaign of incidents is too
-little to fit them honestly; `retrain --refit-ranking-weights` contests them
-on your own incidents. The `esc%` column comes from your own review
+small a sample for a stable fit; `retrain --refit-ranking-weights` refits
+them on your own incidents and keeps whichever set scores better. The `esc%` column comes from your own review
 history, counted per score band.
 
-Retraining learns from incident windows rather than per-alert verdicts,
-because that is what a SOC can write down: sessions inside a reported
+Retraining learns from incident windows, because that is what a SOC can write down: sessions inside a reported
 incident share the weight of one label, sessions outside every incident are
 the negatives, and the gate keeps any refit that does not beat the shipped
 bundle from being saved.
@@ -604,8 +595,7 @@ code change moved the normalized frame.
 **Batch.** One run covers complete days; meerkat does not tail a live
 alert stream.
 
-**The labels are weak by design.** Retraining learns from incident windows
-rather than per-alert verdicts. The retrain gate compensates.
+**The labels are coarse.** Retraining learns from incident windows, and the retrain gate compensates.
 
 **Three detectors.** Wazuh, Suricata and AMiner. Others would need their own
 normalisation.
