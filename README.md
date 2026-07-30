@@ -154,37 +154,36 @@ Every command, flag and input format is in the [manual](docs/manual.md).
 
 Measured on the [AIT Alert Data Set](https://zenodo.org/records/8263181): eight
 simulated company networks in which a scripted attack was run and every alert it
-produced was labelled. The model trains on seven networks and is scored on the eighth.
+produced was labelled. The model trains on seven networks and is scored on the
+eighth.
 
-Before any ranking, the grouping does most of the reduction: an average company-day
-of 56,899 alerts becomes 78 review items, and the item count stays between 59
-and 86 while daily volume ranges from 9,012 to 109,497.
+Before any ranking, the grouping does most of the reduction: an average
+company-day of 56,899 alerts becomes 78 review items, and the item count stays
+between 59 and 86 while daily volume ranges from 9,012 to 109,497.
 
-Coverage alone rewards big queues: the biggest families reach many attack
-steps only because they hold most of the day's alerts. So every result
-reports coverage beside what the queue costs to read.
+One queue item is a family: every alert of one rule, on one machine, over one
+day. The key keeps the item uniform, so one judgement usually settles it, and
+the sessions inside are there to open when it does not. The day's workload is
+ten of these summaries. The alert column below is what sits underneath them,
+opened on demand while investigating; an average evaluated day holds 57,295
+alerts in total.
 
-Every row below works at the same budget, **K = 10: the analyst opens ten families a day**. The comparison is what those ten opened items reach:
-
-| Ranking method | steps reached | alerts inside the queue | share of the day |
+| Ranking method | steps reached (of 60) | items opened per day | alerts behind them, per day |
 |---|---:|---:|---:|
-| **Meerkat** | **58** | **29,597** | **25%** |
-| Best single session in the family | 54 | 219,506 | 30% |
-| Family size (alert count) | 30 | 284,595 | 93% |
-| Detectors' own severity | 33 | 23,279 | 7% |
-| Random order | 32 | 46,767 | 18% |
-| Reviewing everything | 60 | 293,637 | 100% |
+| **Meerkat** | **58** | **10** | **5,775** |
+| Best single session in the family | 54 | 10 | 42,830 |
+| Family size (alert count) | 30 | 10 | 55,531 |
+| Detectors' own severity | 33 | 10 | 4,542 |
+| Random order | 32 | 10 | 9,125 |
+| Whole day as one item | 60 | 1 | 57,295 |
 
-The share column is the mean of each day's share, so it does not equal the alert column divided by the total. A step counts as reached only when the queue holds an alert labelled to it. On steps alone the first two rows are close; Meerkat reads about seven times fewer alerts for them in total, and per network the ratio runs from parity to 24. The last row reviews the whole day as one item and is the
-ceiling. 60 of the 79 scripted steps are findable at all; without AMiner, 41
-are, and Meerkat reaches all 41. Full tables and the tests behind every
-comparison: [bench/README.md](bench/README.md).
-
-The 25% arrives as ten review items a day, and a family is homogeneous by
-its key: the same rule, on the same machine, on the same day, so one
-judgement usually covers it. `inspect` shows the sessions inside, their
-burst shape and the one field that varies between alerts, so a family of
-7,068 firings is judged from a few sessions.
+A step is one phase of the scripted attack on one machine, and it counts as
+reached only when the queue holds an alert labelled to it. 60 of the 79
+scripted steps are findable at all; without AMiner, 41 are, and Meerkat reaches
+all 41. Meerkat carries about 4,100 alerts underneath the queue per step
+reached, against 32,500 for the nearest ordering with comparable coverage.
+Severity is the one cheaper row and reaches 33 of the 60 steps. Full tables
+and the tests behind every comparison: [bench/README.md](bench/README.md).
 
 The [technical report](docs/report/meerkat.pdf) covers the method, the designs
 that were dropped, and the limits of the evaluation.
