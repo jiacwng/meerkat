@@ -131,11 +131,6 @@ the sessions inside are there to open when it does not. The day's workload is
 ten of these summaries. The alert column below is what sits underneath them,
 opened on demand while investigating.
 
-No commercial triage tool appears here: they rank incidents a correlation
-layer has already built, so they cannot run on a raw open-source alert stream.
-The comparison is against the ordering a team applies to that stream with no
-tool, the severity the detectors already print.
-
 | Ranking method | steps reached (of 60) | items opened per day | alerts behind them, per day |
 |---|---:|---:|---:|
 | **Meerkat** | **58** | **10** | **5,775** |
