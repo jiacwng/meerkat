@@ -28,36 +28,27 @@
   <a href="docs/manual.md">Manual</a>
   &nbsp;&middot;&nbsp;
   <a href="#results">Results</a>
-  &nbsp;&middot;&nbsp;
-  <a href="docs/report/meerkat.pdf">Technical report</a>
 </p>
 
 ## Overview
 
-Wazuh, Suricata and a log anomaly detector each raise alerts on their own
-severity scale, tens of thousands a day on a mid-sized network. None of them
-ranks the others, so whoever looks first has to choose what to open. Meerkat
-scores the day's alerts and builds a review queue sized to the time a team
-actually has.
+Wazuh, Suricata and a log anomaly detector each raise their own alerts, tens
+of thousands a day, on severity scales that do not compare, and none ranks
+the others. Meerkat scores the day's alerts and builds a review queue sized
+to the time a team has.
 
-The measure it optimises is coverage at a budget: for a fixed number of cases
-opened per day, how much of an attack does the queue point at. Ranking single
-alerts fills a budget badly, because one step of an intrusion can raise
-thousands of near-identical alerts while a privilege escalation raises three.
-
-Commercial platforms already put an aggregation layer in front of the
-analyst: Microsoft Sentinel groups alerts into incidents, and correlators
-such as AIP's GraphWeaver join related alerts into incident graphs. Most
-published ranking work starts from those incidents. An open-source detector
-stack has no such layer, which leaves the question this project is about:
+Commercial stacks group alerts into incidents before ranking them (Microsoft
+Sentinel, AIP's GraphWeaver). An open-source detector stack has no such layer,
+which leaves the question:
 
 > **What should one item in the review queue be, so that limited review
 > reaches as much of the attack as possible?**
 
-Meerkat's answer is grouping before ranking: a **session** is one rule firing
-on one machine until that stream is quiet for ten minutes, and a **family**
-joins the same day's sessions that share a machine, a detector and a rule.
-The queue holds each day's top families, and the **budget** is yours to set.
+Meerkat groups before ranking: a **session** is one rule firing on one machine
+until it falls quiet for ten minutes, and a **family** joins the same day's
+sessions sharing a machine, a detector and a rule. A random forest scores each
+session, a logistic regression ranks each family, and the day's top families
+are the queue. The budget is yours to set.
 
 <p align="center">
   <img
@@ -66,12 +57,6 @@ The queue holds each day's top families, and the **budget** is yours to set.
     width="100%"
   >
 </p>
-
-A random forest scores each session, and a logistic regression ranks each
-family from its sessions' scores, its shape and the role of the machine it appeared on. The forest retrains on your own incident records; the
-[manual](docs/manual.md) covers what ships fixed and what is yours.
-
-Meerkat is an open-source project built for research and learning. [Results](#results) reports what was measured and [Limitations](#limitations) reports the limits.
 
 ## Quick start
 
@@ -111,45 +96,23 @@ Review queue (top 10 per day, 2022-01-21)  |  F1 = top priority
 
 `score` alone sets the order. `esc%` fills in as you review: how often you escalated your past reviewed families at the same score. A fresh environment shows the score alone.
 
-## From queue to decision
-
-The daily loop, start to handoff:
+## Using it
 
 ```bash
-meerkat inventory        # starter asset inventory from your alerts, once
-meerkat check            # what triage will see; fix what it flags
-meerkat triage           # score the batch into a run
-meerkat browse           # work the queue: drill in, record decisions
-meerkat export decisions # the review pass as a grid, for handoff
+meerkat inventory        # asset inventory from your alerts, once
+meerkat check            # what triage will see
+meerkat triage           # score a batch into a run
+meerkat browse           # work the queue, record decisions
+meerkat export decisions # the review pass as a grid
+meerkat retrain --incidents tickets.csv  # refit on your own history
 ```
 
-`inventory` writes the asset list the model reads machine roles from, once
-per environment. `check` reports what triage will see and what to fix first.
-`triage` scores the batch into a saved run, and every later command reopens
-that run. `browse` is the review pass itself: open a family, read its
-sessions and alerts, record the decision at the prompt. `export decisions`
-turns the pass into a grid for handoff, one row per alert with the decision
-it inherits. Along the way, `inspect` opens any family, session or single
-alert with its evidence and the ATT&CK techniques observed on that machine,
-and `export navigator` writes an
-[ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/) layer.
-
-The model itself retrains on your history:
-
-```bash
-meerkat retrain --incidents tickets.csv
-```
-
-refits the forest on your own alert archive, supervised by what your
-investigations concluded. It asks for three things: an incident CSV meeting
-the requirements in the manual, with about 15 distinct incidents as a
-comfortable start; the alert archive those incidents happened in, since
-`retrain` reads every alert file in the input directory; and the inventory,
-because incident hosts are resolved through it. A retrain is saved
-only when it beats the shipped model on your own held-out incidents, so it
-can decline, and a declined retrain changes nothing.
-
-Every command, flag and input format is in the [manual](docs/manual.md).
+`inspect` opens any family, session or alert with its evidence and ATT&CK
+techniques; `export navigator` writes an ATT&CK Navigator layer. Retraining
+needs an incident CSV, the alert archive it covers, and the inventory, and it
+saves a new model only when it beats the shipped one on your own held-out
+incidents. The [manual](docs/manual.md) covers every command, flag and input
+format.
 
 ## Results
 
@@ -178,16 +141,14 @@ alerts in total.
 | Random order | 32 | 10 | 9,125 |
 | Whole day as one item | 60 | 1 | 57,295 |
 
-A step is one phase of the scripted attack on one machine, and it counts as
-reached only when the queue holds an alert labelled to it. 60 of the 79
-scripted steps are findable at all; without AMiner, 41 are, and Meerkat reaches
-all 41. Meerkat carries about 4,100 alerts underneath the queue per step
-reached, against 32,500 for the nearest ordering with comparable coverage.
-Severity is the one cheaper row and reaches 33 of the 60 steps. Full tables
-and the tests behind every comparison: [bench/README.md](bench/README.md).
+A step is one phase of the scripted attack on one machine, reached when the
+queue holds an alert labelled to it. 60 of the 79 steps are findable at all;
+Meerkat carries about 4,100 alerts underneath the queue per step reached,
+against 32,500 for the nearest ordering with comparable coverage. Full tables
+and tests: [bench/README.md](bench/README.md).
 
-The [technical report](docs/report/meerkat.pdf) covers the method, the designs
-that were dropped, and the limits of the evaluation.
+The [technical report](docs/report/meerkat.pdf) covers the method and the
+limits of the evaluation.
 
 ## Limitations
 
@@ -205,26 +166,11 @@ that were dropped, and the limits of the evaluation.
   on your own held-out incidents.
 - Below roughly 300 training sessions, drift reporting is mostly noise.
 
-## Documentation
+## Reference
 
-- [The manual](docs/manual.md): install, inputs, every command, the model.
-- [bench/README.md](bench/README.md): reproducing the results table.
-- [The technical report](docs/report/meerkat.pdf): the full method and evaluation.
+- [Manual](docs/manual.md) — install, inputs, commands, the model
+- [Benchmark](bench/README.md) — reproduce the results table
 
-## Citing
-
-If you publish anything from these numbers, cite the dataset they were measured
-on. `CITATION.cff` at the repository root carries the entries.
-
-- M. Landauer, F. Skopik and M. Wurzenberger, *Introducing a New Alert Data Set
-  for Multi-Step Attack Analysis*, CSET 2024.
-- M. Landauer, F. Skopik, M. Frank, W. Hotwagner, M. Wurzenberger and A. Rauber,
-  *Maintainable Log Datasets for Evaluation of Intrusion Detection Systems*,
-  IEEE Transactions on Dependable and Secure Computing, 2023.
-
-## License
-
-MIT, see [LICENSE](LICENSE).
-
-The repository ships part of the AIT Alert Data Set under CC BY 4.0, and a lookup
-derived from MITRE ATT&CK. [NOTICE](NOTICE) carries both attributions.
+Cite the AIT Alert Data Set if you publish these numbers; `CITATION.cff` has
+the entries. MIT licensed, see [LICENSE](LICENSE); [NOTICE](NOTICE) carries
+the AIT and MITRE ATT&CK attributions.
