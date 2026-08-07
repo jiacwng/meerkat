@@ -133,6 +133,17 @@ class BadgeTests(unittest.TestCase):
         claimed = int(re.search(r"tests-(\d+)%20passing", readme).group(1))
         self.assertEqual(claimed, clone)
 
+    def test_the_coverage_badge_matches_the_ci_floor(self):
+        # the badge states the coverage CI enforces, so it cannot overstate:
+        # it is tied to the --fail-under value the workflow refuses below
+        import re
+
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        badge = int(re.search(r"coverage-(\d+)%25", readme).group(1))
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        floor = int(re.search(r"--fail-under=(\d+)", ci).group(1))
+        self.assertEqual(badge, floor)
+
 
 @unittest.skipUnless(
     HAS_RUN,

@@ -1,0 +1,19 @@
+# Dependabot opens PRs when a dependency or an action has a newer or a fixed
+# version. Grouped so a quiet week produces one PR, not many.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
