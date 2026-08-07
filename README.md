@@ -129,23 +129,23 @@ One queue item is a family: every alert of one rule, on one machine, over one
 day. The key keeps the item uniform, so one judgement usually settles it, and
 the sessions inside are there to open when it does not. The day's workload is
 ten of these summaries. The alert column below is what sits underneath them,
-opened on demand while investigating; an average evaluated day holds 57,295
-alerts in total.
+opened on demand while investigating.
+
+No commercial triage tool appears here: they rank incidents a correlation
+layer has already built, so they cannot run on a raw open-source alert stream.
+The comparison is against the ordering a team applies to that stream with no
+tool, the severity the detectors already print.
 
 | Ranking method | steps reached (of 60) | items opened per day | alerts behind them, per day |
 |---|---:|---:|---:|
 | **Meerkat** | **58** | **10** | **5,775** |
-| Best single session in the family | 54 | 10 | 42,830 |
-| Family size (alert count) | 30 | 10 | 55,531 |
 | Detectors' own severity | 33 | 10 | 4,542 |
-| Random order | 32 | 10 | 9,125 |
-| Whole day as one item | 60 | 1 | 57,295 |
 
 A step is one phase of the scripted attack on one machine, reached when the
-queue holds an alert labelled to it. 60 of the 79 steps are findable at all;
-Meerkat carries about 4,100 alerts underneath the queue per step reached,
-against 32,500 for the nearest ordering with comparable coverage. Full tables
-and tests: [bench/README.md](bench/README.md).
+queue holds an alert labelled to it. 60 of the 79 steps are findable at all.
+At ten items a day, Meerkat reaches 58; the detectors' own severity ordering
+reaches 33, at a similar reading cost. Full tables and every baseline:
+[bench/README.md](bench/README.md).
 
 The [technical report](docs/report/meerkat.pdf) covers the method and the
 limits of the evaluation.
