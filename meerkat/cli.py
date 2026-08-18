@@ -2805,6 +2805,140 @@ def _add_run_selector(parser) -> None:
     parser.add_argument("--runs-dir", type=Path, default=_UNSET)
 
 
+PULL_SOURCES = ("indexer", "file")
+
+
+def _pull_window(args):
+    from meerkat import connectors
+    if args.day:
+        if args.from_time or args.to_time:
+            errors.print("[red]give --day, or --from with --to[/red]")
+            raise SystemExit(EXIT_ERROR)
+        try:
+            return connectors.day_window(args.day)
+        except ValueError:
+            errors.print(f"[red]--day is not a date: {safe(args.day)}[/red]")
+            raise SystemExit(EXIT_ERROR)
+    if not (args.from_time and args.to_time):
+        errors.print("[red]a window is required: --day, or both --from and --to[/red]")
+        raise SystemExit(EXIT_ERROR)
+    try:
+        start = connectors.parse_moment(args.from_time)
+        end = connectors.parse_moment(args.to_time)
+        datetime.fromtimestamp(start, UTC)
+        datetime.fromtimestamp(end, UTC)
+    except (ValueError, OverflowError, OSError):
+        errors.print("[red]--from and --to take a date or epoch seconds[/red]")
+        raise SystemExit(EXIT_ERROR)
+    if end <= start:
+        errors.print("[red]--to must be after --from[/red]")
+        raise SystemExit(EXIT_ERROR)
+    return connectors.Window(start, end)
+
+
+def _indexer_config(args):
+    import os
+
+    from meerkat import connectors
+    config, _ = _load_config()
+    raw = config.get("pull")
+    section = raw if isinstance(raw, dict) else {}
+
+    def pick(flag, variable, key, default=None):
+        if flag is not None:
+            return flag
+        if os.environ.get(variable) is not None:
+            return os.environ[variable]
+        if key in section:
+            return section[key]
+        return default
+
+    def secret(variable, key):
+        if os.environ.get(variable) is not None:
+            return os.environ[variable]
+        return section.get(key)
+
+    host = pick(args.host, "MEERKAT_INDEXER_HOST", "host")
+    if not host:
+        errors.print("[red]indexer mode needs a host[/red]  pass --host, set "
+                     "MEERKAT_INDEXER_HOST, or set host under [pull] in meerkat.toml")
+        raise SystemExit(EXIT_ERROR)
+    verify = True
+    if args.insecure:
+        verify = False
+    elif "verify_tls" in section:
+        verify = bool(section["verify_tls"])
+    port_raw = pick(None, "MEERKAT_INDEXER_PORT", "port", 9200)
+    try:
+        port = int(port_raw)
+    except (TypeError, ValueError):
+        errors.print(f"[red]indexer port is not a number: {safe(port_raw)}[/red]")
+        raise SystemExit(EXIT_ERROR)
+    return connectors.IndexerConfig(
+        host=str(host),
+        port=port,
+        index=str(pick(None, "MEERKAT_INDEXER_INDEX", "index", "wazuh-alerts-*")),
+        user=pick(args.user, "MEERKAT_INDEXER_USER", "user"),
+        password=secret("MEERKAT_INDEXER_PASSWORD", "password"),
+        token=secret("MEERKAT_INDEXER_TOKEN", "token"),
+        verify_tls=verify,
+    )
+
+
+def cmd_pull(args) -> None:
+    from meerkat import connectors
+    company = resolve_company(args)
+    window = _pull_window(args)
+    args.input.mkdir(parents=True, exist_ok=True)
+    wazuh_out = args.input / f"{company}_wazuh.json"
+    eve_out = args.input / f"{company}_eve.json"
+    targets = [wazuh_out]
+    if args.source == "file" and args.eve_file:
+        targets.append(eve_out)
+    for path in targets:
+        if path.exists():
+            errors.print(f"[red]{path} already exists[/red]  pull stops at an "
+                         "existing file; move or delete it first")
+            raise SystemExit(EXIT_ERROR)
+
+    eve_records: list[dict] = []
+    if args.source == "file":
+        if not args.alerts_file:
+            errors.print("[red]file mode needs --alerts-file[/red]  the wazuh "
+                         "alerts.json to read from")
+            raise SystemExit(EXIT_ERROR)
+        records = connectors.read_window_file(args.alerts_file, window)
+        if args.eve_file:
+            eve_records = connectors.read_window_file(args.eve_file, window)
+    else:
+        config = _indexer_config(args)
+        if not config.verify_tls:
+            errors.print("[yellow]TLS verification disabled[/yellow]  credentials "
+                         "are sent over an unverified channel")
+        try:
+            records = connectors.query_window(config, window)
+        except connectors.ConnectorError as error:
+            errors.print(f"[red]{safe(error)}[/red]")
+            raise SystemExit(EXIT_ERROR)
+
+    total = len(records) + len(eve_records)
+    if total == 0:
+        errors.print("[yellow]no alerts in the window[/yellow]  nothing written")
+        return
+
+    connectors.write_records(wazuh_out, records)
+    if eve_records:
+        connectors.write_records(eve_out, eve_records)
+
+    start_iso = datetime.fromtimestamp(window.start, UTC).isoformat()
+    end_iso = datetime.fromtimestamp(window.end, UTC).isoformat()
+    console.print(f"pulled {total} alerts for {safe(company)} ({args.source})")
+    console.print(f"  window {start_iso} .. {end_iso}")
+    console.print(f"  wrote {wazuh_out}")
+    if eve_records:
+        console.print(f"  wrote {eve_out}  ({len(eve_records)} suricata)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="meerkat",
@@ -2868,6 +3002,37 @@ def build_parser() -> argparse.ArgumentParser:
     triage.add_argument("--model", type=Path, default=_UNSET)
     triage.add_argument("--runs-dir", type=Path, default=_UNSET)
     triage.set_defaults(func=cmd_triage)
+
+    pull = sub.add_parser(
+        "pull", help="fetch a window of Wazuh alerts into the input directory"
+    )
+    pull.add_argument("--environment", dest="company", type=_company_label,
+                      default=_UNSET, metavar="NAME",
+                      help="run label; defaults to the input directory's name")
+    pull.add_argument("--input", type=Path, default=_UNSET,
+                      help="directory the alerts are written to; default ./alerts")
+    pull.add_argument("--source", choices=PULL_SOURCES, default="indexer",
+                      help="indexer queries the Wazuh indexer; file reads a "
+                           "local alerts.json")
+    pull.add_argument("--from", dest="from_time", metavar="TIME",
+                      help="window start, ISO 8601 or epoch seconds")
+    pull.add_argument("--to", dest="to_time", metavar="TIME",
+                      help="window end (exclusive), ISO 8601 or epoch seconds")
+    pull.add_argument("--day", metavar="YYYY-MM-DD",
+                      help="one UTC day as the window")
+    pull.add_argument("--alerts-file", type=Path, default=None,
+                      help="file mode: the wazuh alerts.json to read")
+    pull.add_argument("--eve-file", type=Path, default=None,
+                      help="file mode: a native suricata eve.json to read")
+    pull.add_argument("--host", default=None,
+                      help="indexer host, or MEERKAT_INDEXER_HOST / [pull] host")
+    pull.add_argument("--user", default=None,
+                      help="indexer username, or MEERKAT_INDEXER_USER; the password "
+                           "or token comes from MEERKAT_INDEXER_PASSWORD, "
+                           "MEERKAT_INDEXER_TOKEN, or the [pull] table in meerkat.toml")
+    pull.add_argument("--insecure", action="store_true",
+                      help="skip TLS verification, for a self-signed indexer")
+    pull.set_defaults(func=cmd_pull)
 
     queue = sub.add_parser("queue", help="reopen a saved run's queue")
     queue.add_argument("--all", action="store_true", help="every scored family")

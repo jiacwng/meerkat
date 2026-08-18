@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `meerkat pull` fetches a window of alerts into the input directory, from the
+  Wazuh indexer over HTTPS or from a local `alerts.json`. The window is one UTC
+  day, or an explicit range in ISO 8601 or epoch seconds. Credentials come from
+  the environment or `meerkat.toml`.
+
 ## 1.1.0 - 2026-07-29
 
 This minor release carries breaking changes; read the Breaking list before
