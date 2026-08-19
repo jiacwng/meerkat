@@ -157,8 +157,7 @@ def extract_wazuh_fields(
         asset = inventory.assets_by_ip.get(agent_ip)
         host = asset.hostname if asset else agent_ip or agent["name"]
     mitre = rule.get("mitre") or {}
-    # a single id is sometimes a bare string, and a string is iterable, so
-    # "T1059" used to join to "T;1;0;5;9" and technique_count read 5 not 1
+    # a single id arrives as a bare string, which is iterable, so wrap it before joining
     mitre_ids = mitre.get("id") or []
     if isinstance(mitre_ids, str):
         mitre_ids = [mitre_ids]
@@ -284,10 +283,8 @@ def aminer_host_candidates(record: dict) -> set[str]:
     for raw_line in raw_lines:
         raw = str(raw_line).strip()
 
-        # a log line the miner flagged is attacker-influenced, so a "{" that is
-        # not json, or json without a host, is a bad line rather than a crash.
-        # json.loads answers deep nesting with RecursionError rather than
-        # JSONDecodeError, and one `{"a":{"a":...` line used to end the run.
+        # a miner-flagged line is attacker-influenced, and deep nesting raises
+        # RecursionError, so both are caught below, not JSONDecodeError
         if raw.startswith("{"):
             try:
                 embedded = json.loads(raw)
@@ -458,15 +455,12 @@ def classify_wazuh_record(record: dict) -> str:
         return ""
     if "alert" in record.get("data", {}):
         return "suricata"
-    # a wazuh alert always carries rule and agent. Claiming anything else is one
-    # sent the extractor straight into a KeyError the user then read as a
-    # traceback, so an object without them is not recognised rather than fatal.
+    # a wazuh alert always carries rule and agent
     if not isinstance(record.get("rule"), dict) or "agent" not in record:
         return ""
     return "wazuh"
 
 
-# the chain this replaced ended in else, so any other tool was read as AMiner
 READERS: dict[str, Callable[[dict, Inventory], ExtractedFields]] = {
     "wazuh": extract_wazuh_fields,
     "suricata": extract_suricata_fields,
@@ -611,8 +605,7 @@ def sniff_alert_family(path: Path, max_lines: int = SNIFF_LINES) -> str:
                 read += 1
                 try:
                     record = json.loads(line)
-                # a deeply nested line raises RecursionError, not a decode error,
-                # and one such file in the directory took every command down
+                # a deeply nested line raises RecursionError
                 except (json.JSONDecodeError, RecursionError, ValueError):
                     continue
                 if isinstance(record, dict):
@@ -642,8 +635,7 @@ def read_alert_record(line: str, path: Path, position: int) -> dict | None:
             "Alert files are JSON lines, one object per line."
         ) from error
     except RecursionError as error:
-        # json.loads recurses, so a record nested a few thousand deep raises
-        # this instead and used to end the whole ingest with a traceback
+        # json.loads recurses, so a record nested a few thousand deep raises this
         raise AlertFileError(
             f"{path.name} line {position + 1} nests too deeply to parse. "
             "Alert files are JSON lines, one object per line."
@@ -734,10 +726,8 @@ def resolve_alert_files(
 
 def read_family_record(record: dict, family: str) -> tuple[dict, str] | None:
     if family == AMINER_FAMILY:
-        # the family is decided from the first few lines, so a mixed export, or
-        # one line shaped like a miner record, used to reach the extractor and
-        # raise KeyError there. Wazuh's branch has always checked per record.
-        # The blocks checked are the miner's own; the envelope is the export's.
+        # a mixed export or a miner-shaped line can reach here, so validate the
+        # miner's own blocks per record. The envelope is the export's.
         analysis = record.get("AnalysisComponent")
         log_data = record.get("LogData")
         if not isinstance(analysis, dict) or not isinstance(log_data, dict):
@@ -844,9 +834,8 @@ def iter_normalized_rows(
         mine: Counter[tuple] = Counter()
         with path.open(encoding="utf-8-sig", errors="replace") as fh:
             for position, line in enumerate(fh):
-                # a concatenated export often carries a blank line between parts,
-                # and one of them used to abort the whole run. position still
-                # advances, so the event-label join stays aligned.
+                # a concatenated export often carries a blank line between parts;
+                # position still advances, so the event-label join stays aligned
                 record = read_alert_record(line, path, position)
                 if record is None:
                     continue

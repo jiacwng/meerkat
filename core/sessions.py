@@ -60,10 +60,7 @@ def _count_union(values: pd.Series) -> int:
 
 
 def _split_values(values: pd.Series) -> frozenset[str]:
-    # cast before filling. These columns are categorical, and pandas refuses to
-    # fill a category that does not already exist, so a client running one
-    # detector crashed here: the AIT corpus only worked because its miner rows
-    # happened to contribute the empty string as a category.
+    # cast to str before filling: pandas fills only a category that already exists
     found = set()
     for value in values.astype(str).fillna(""):
         found.update(part for part in value.split(";") if part)

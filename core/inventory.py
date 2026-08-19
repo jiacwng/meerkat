@@ -66,9 +66,7 @@ def load_inventory(path: Path) -> Inventory:
                 raise ValueError(
                     f"{path.name}: an asset is missing \"{required}\""
                 )
-        # "roles" is the documented key, "groups" is what AIT and Wazuh use.
-        # a string is iterable, so "webserver" used to become six one-letter
-        # roles and the asset silently ended up with none
+        # "roles" is the documented key; AIT and Wazuh use "groups"
         declared = item.get("roles") or item.get("groups") or []
         if isinstance(declared, str):
             declared = [declared]

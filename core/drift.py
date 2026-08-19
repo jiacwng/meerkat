@@ -41,17 +41,12 @@ UNSEEN_RULE_WARN = 0.20
 
 @dataclass
 class TrainingProfile:
-    # edges AND the reference share per bin. Storing edges alone and assuming an
-    # even 10% per bin is wrong the moment deciles collapse: a binary feature gives
-    # 9 edges that reduce to 2 cuts, and the training data was never spread evenly
-    # across the 3 bins those imply. Measured on AIT, that mistake reported
-    # PSI 3.583 for has_technique when nothing about it had moved.
+    # edges and the reference share per bin, because collapsed deciles (a binary
+    # feature) break an even-10%-per-bin assumption
     feature_bins: dict[str, tuple[tuple[float, ...], tuple[float, ...]]] = field(
         default_factory=dict
     )
-    # the real median. Reading it off the middle bin edge is wrong the moment
-    # deciles collapse, and a binary feature then reported a training median of
-    # 1.0 against a current 0.0 while PSI correctly said nothing had moved.
+    # the real median, stored because collapsed deciles make a bin edge wrong
     feature_medians: dict[str, float] = field(default_factory=dict)
     session_score_bins: tuple[tuple[float, ...], tuple[float, ...]] = ((), ())
     family_score_bins: tuple[tuple[float, ...], tuple[float, ...]] = ((), ())
@@ -71,11 +66,8 @@ class FeatureDrift:
 
 
 def _bin_shares(edges: np.ndarray, values: np.ndarray) -> np.ndarray:
-    # searchsorted with side="left" makes each bin right-closed, so a value sitting
-    # exactly ON a quantile edge falls with the group below it. np.histogram is
-    # left-closed instead, which put every zero of a binary feature into the upper
-    # bin and made both distributions collapse into one: an unmoved feature and a
-    # real fifty-fifty shift both scored PSI 0.
+    # side="left" makes each bin right-closed, so a value on a quantile edge
+    # falls in the bin below
     index = np.searchsorted(edges, values, side="left")
     return np.bincount(index, minlength=len(edges) + 1) / len(values)
 

@@ -1,9 +1,9 @@
 """Score sessions with a trained bundle, and refit one on a client's own data.
 
-The evaluation harness that used to live here is in bench/, which the product
-cannot import. This file keeps its name because TriageBundle's import path is
-recorded inside every saved model bundle and in classifier.TRUSTED_TYPES, so
-moving the class would refuse every bundle already written.
+The evaluation harness lives in bench/, outside the installed product. This file
+keeps its name because TriageBundle's import path is recorded inside every saved
+model bundle and in classifier.TRUSTED_TYPES, so moving the class would refuse
+every bundle already written.
 
 Public API:
     add_window_ids(frame, windows)          -> frame with a window_id column
@@ -58,8 +58,8 @@ class TriageBundle:
     training_scenarios: tuple[str, ...]
     n_estimators: int
     seed: int
-    # optional so a bundle written before drift existed still loads. Read it with
-    # getattr, because skops restores a missing field as absent rather than None.
+    # optional so older bundles still load; read with getattr, since skops
+    # restores a missing field as absent
     profile: TrainingProfile | None = None
     # who fitted the family ranking weights: "shipped" or "local"
     ranking_weights: str = "shipped"

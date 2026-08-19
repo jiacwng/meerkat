@@ -72,9 +72,6 @@ def load_incidents(path: Path) -> pd.DataFrame:
     frame["verdict"] = (
         frame["verdict"].str.strip().str.lower().str.replace(" ", "_")
     )
-    # a swapped start and end matches nothing and used to be diagnosed as
-    # "every incident is recent". A non-finite time fails both sides of the
-    # holdout comparison, so the row vanished from training AND from scoring.
     finite = frame["start"].notna() & frame["end"].notna()
     finite &= frame["start"].abs().ne(float("inf")) & frame["end"].abs().ne(float("inf"))
     if not finite.all():
