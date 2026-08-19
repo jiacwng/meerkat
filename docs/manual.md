@@ -167,6 +167,61 @@ scores the same input the same way.
 
 ---
 
+### meerkat pull
+
+Fetch a window of Wazuh alerts and write them where the other commands read
+them, as `<environment>_wazuh.json` under the input directory. Two sources:
+`indexer` queries the Wazuh indexer over HTTPS, `file` copies a window out of
+a local `alerts.json`. The window is one UTC day with `--day`, or an explicit
+`--from` and `--to` in ISO 8601 or epoch seconds. The window is half-open, so
+`--to` is the first moment left out, and `--day` captures a whole UTC day.
+Forwarded Suricata alerts arrive inside the Wazuh file already; a native
+`eve.json` is read with `--eve-file` and written as `<environment>_eve.json`.
+Pull stops when the target file already exists.
+
+    meerkat pull [--environment NAME] [--input DIR] [--source indexer|file]
+                 [--day YYYY-MM-DD | --from TIME --to TIME]
+                 [--host H] [--user U] [--insecure]
+                 [--alerts-file FILE] [--eve-file FILE]
+
+| option | description |
+| --- | --- |
+| `--environment NAME` | run label; defaults to the input directory's name |
+| `--source` | `indexer`, the default, or `file` |
+| `--day`, `--from`, `--to` | the window, UTC |
+| `--host` | the indexer host; port 9200 and index `wazuh-alerts-*` come from env or config |
+| `--user U` | indexer username |
+| `--insecure` | skip TLS verification, for a self-signed indexer |
+| `--alerts-file`, `--eve-file` | file mode: the sources to read |
+| `--input DIR` | where the files are written, default `./alerts` |
+
+The password comes from the environment or the config file. The
+`MEERKAT_INDEXER_PASSWORD` environment variable keeps the secret off disk. A
+`[pull]` table in `meerkat.toml` is the other option:
+
+```toml
+[pull]
+host = "wazuh.example"
+user = "admin"
+password = "..."
+verify_tls = true
+```
+
+`meerkat.toml` holds a secret, so it is gitignored; keep it out of version
+control, or store it at `~/.config/meerkat/config.toml`. The non-secret keys
+also work as `MEERKAT_INDEXER_HOST`, `_PORT`, `_INDEX` and `_USER` environment
+variables; a flag wins, then the environment variable, then the config. A
+bearer or API token goes in `MEERKAT_INDEXER_TOKEN` for a setup that
+authenticates with a token. Recorded output:
+
+```text
+pulled 8210 alerts for acme (indexer)
+  window 2022-01-21T00:00:00+00:00 .. 2022-01-22T00:00:00+00:00
+  wrote alerts/acme_wazuh.json
+```
+
+---
+
 ### meerkat inventory
 
 Write a starter asset inventory from the Wazuh alert file, one asset per
