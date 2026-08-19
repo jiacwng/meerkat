@@ -1221,7 +1221,7 @@ def cmd_triage(args) -> None:
     console.print(f"scoring {company} with {args.model}")
     scored_sessions, families, alerts = _score_company(
         bundle, args.input, company, args.inventory,
-        args.labels, args.event_csv_dir,
+        getattr(args, "labels", None), getattr(args, "event_csv_dir", None),
         wazuh_file=args.wazuh_file, aminer_file=args.aminer_file,
     )
     families = decorate_families(families, alerts, args.budget)
@@ -2995,9 +2995,6 @@ def build_parser() -> argparse.ArgumentParser:
                         help="asset inventory JSON; defaults to where "
                              "`meerkat inventory` writes it")
     _add_alert_files(triage)
-    triage.add_argument("--labels", type=Path, default=None,
-                        help="optional label CSV, for evaluation only")
-    triage.add_argument("--event-csv-dir", type=Path, default=None)
     triage.add_argument("--budget", type=_positive, default=10)
     triage.add_argument("--model", type=Path, default=_UNSET)
     triage.add_argument("--runs-dir", type=Path, default=_UNSET)
@@ -3046,8 +3043,6 @@ def build_parser() -> argparse.ArgumentParser:
                             "already saved, so this needs no rescoring")
     queue.add_argument("--json", action="store_true",
                        help="emit the queue as JSON instead of a table")
-    queue.add_argument("--no-pager", action="store_true",
-                       help="accepted for consistency; queue never pages")
     _add_run_selector(queue)
     queue.set_defaults(func=cmd_queue)
 
@@ -3055,8 +3050,6 @@ def build_parser() -> argparse.ArgumentParser:
     runs.add_argument("--runs-dir", type=Path, default=_UNSET)
     runs.add_argument("--json", action="store_true",
                       help="emit the run list as JSON instead of a table")
-    runs.add_argument("--no-pager", action="store_true",
-                      help="accepted for consistency; runs never pages")
     runs.set_defaults(func=cmd_runs)
 
     inspect = sub.add_parser("inspect", help="open a family, session or alert")
@@ -3179,11 +3172,8 @@ def build_parser() -> argparse.ArgumentParser:
     completion.set_defaults(func=cmd_completion)
 
     demo = sub.add_parser("demo", help="run the bundled russellmitchell demo")
-    demo.add_argument("--raw-dir", type=Path, default=DEMO_RAW)
-    demo.add_argument("--model", type=Path, default=DEFAULT_MODEL)
-    demo.add_argument("--budget", type=_positive, default=10)
-    demo.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
-    demo.set_defaults(func=cmd_demo)
+    demo.set_defaults(func=cmd_demo, raw_dir=DEMO_RAW, model=DEFAULT_MODEL,
+                      budget=10, runs_dir=DEFAULT_RUNS)
 
     inventory = sub.add_parser(
         "inventory", help="scaffold an asset inventory from a wazuh alert file"

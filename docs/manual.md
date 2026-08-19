@@ -1,6 +1,6 @@
 # meerkat manual
 
-Meerkat is an open-source triage tool built as a research project. This manual says what each command does and what each input must look like.
+Meerkat is an open-source triage tool built as a research project.
 
 - [Install](#install)
 - [Quickstart](#quickstart)
@@ -153,17 +153,9 @@ Exit codes:
 Score the bundled example alerts and print the first day's queue. Needs the
 repository clone with Git LFS fetched.
 
-    meerkat demo [--raw-dir DIR] [--model FILE] [--budget K] [--runs-dir DIR]
+    meerkat demo
 
-| option | description |
-| --- | --- |
-| `--raw-dir DIR` | where the bundled alerts live, default `data/raw` |
-| `--model FILE` | model bundle, default `models/meerkat_bundle.skops` |
-| `--budget K` | families reviewed per day, default 10 |
-| `--runs-dir DIR` | where the run is saved, default `runs/` |
-
-The demo ignores `meerkat.toml` and `MEERKAT_*` variables, so it always
-scores the same input the same way.
+The demo takes no options and ignores `meerkat.toml` and `MEERKAT_*` variables.
 
 ---
 
@@ -298,15 +290,13 @@ a timestamp and are never overwritten.
 
     meerkat triage [--environment NAME] [--input DIR] [--inventory FILE]
                    [--budget K] [--model FILE] [--runs-dir DIR]
-                   [--wazuh-file FILE] [--aminer-file FILE] [--labels FILE]
+                   [--wazuh-file FILE] [--aminer-file FILE]
 
 | option | description |
 | --- | --- |
 | `--budget K` | families reviewed per day, default 10 |
 | `--model FILE` | model bundle, default `models/meerkat_bundle.skops` |
 | `--runs-dir DIR` | where runs are saved, default `runs/` |
-| `--labels FILE` | optional label CSV, for evaluation only |
-| `--event-csv-dir DIR` | benchmark label directory, evaluation only |
 | `--environment`, `--input`, `--inventory` | the shared openers |
 | `--wazuh-file FILE`, `--aminer-file FILE` | read only the named file |
 
@@ -333,7 +323,6 @@ score alone.
 | `--day YYYY-MM-DD` | one day's queue |
 | `--budget K` | re-cut the saved run at a different K; no rescoring |
 | `--json` | the queue as JSON |
-| `--no-pager` | accepted for consistency; queue never pages |
 
 Recorded output:
 
@@ -602,7 +591,6 @@ newest successful run is what every other command opens by default.
 | option | description |
 | --- | --- |
 | `--json` | the list as JSON |
-| `--no-pager` | accepted for consistency; runs never pages |
 
 A run is a directory under `runs/`; deleting the directory deletes the run
 and its reviews.
