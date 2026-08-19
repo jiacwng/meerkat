@@ -1,6 +1,6 @@
 # meerkat manual
 
-Meerkat is an open-source triage tool built as a research project. This manual says what each command does and what each input must look like.
+Meerkat is an open-source triage tool built as a research project.
 
 - [Install](#install)
 - [Quickstart](#quickstart)
@@ -153,17 +153,64 @@ Exit codes:
 Score the bundled example alerts and print the first day's queue. Needs the
 repository clone with Git LFS fetched.
 
-    meerkat demo [--raw-dir DIR] [--model FILE] [--budget K] [--runs-dir DIR]
+    meerkat demo
+
+The demo takes no options and ignores `meerkat.toml` and `MEERKAT_*` variables.
+
+---
+
+### meerkat pull
+
+Fetch a window of Wazuh alerts and write them where the other commands read
+them, as `<environment>_wazuh.json` under the input directory. Two sources:
+`indexer` queries the Wazuh indexer over HTTPS, `file` copies a window out of
+a local `alerts.json`. The window is one UTC day with `--day`, or an explicit
+`--from` and `--to` in ISO 8601 or epoch seconds. The window is half-open, so
+`--to` is the first moment left out, and `--day` captures a whole UTC day.
+Forwarded Suricata alerts arrive inside the Wazuh file already; a native
+`eve.json` is read with `--eve-file` and written as `<environment>_eve.json`.
+Pull stops when the target file already exists.
+
+    meerkat pull [--environment NAME] [--input DIR] [--source indexer|file]
+                 [--day YYYY-MM-DD | --from TIME --to TIME]
+                 [--host H] [--user U] [--insecure]
+                 [--alerts-file FILE] [--eve-file FILE]
 
 | option | description |
 | --- | --- |
-| `--raw-dir DIR` | where the bundled alerts live, default `data/raw` |
-| `--model FILE` | model bundle, default `models/meerkat_bundle.skops` |
-| `--budget K` | families reviewed per day, default 10 |
-| `--runs-dir DIR` | where the run is saved, default `runs/` |
+| `--environment NAME` | run label; defaults to the input directory's name |
+| `--source` | `indexer`, the default, or `file` |
+| `--day`, `--from`, `--to` | the window, UTC |
+| `--host` | the indexer host; port 9200 and index `wazuh-alerts-*` come from env or config |
+| `--user U` | indexer username |
+| `--insecure` | skip TLS verification, for a self-signed indexer |
+| `--alerts-file`, `--eve-file` | file mode: the sources to read |
+| `--input DIR` | where the files are written, default `./alerts` |
 
-The demo ignores `meerkat.toml` and `MEERKAT_*` variables, so it always
-scores the same input the same way.
+The password comes from the environment or the config file. The
+`MEERKAT_INDEXER_PASSWORD` environment variable keeps the secret off disk. A
+`[pull]` table in `meerkat.toml` is the other option:
+
+```toml
+[pull]
+host = "wazuh.example"
+user = "admin"
+password = "..."
+verify_tls = true
+```
+
+`meerkat.toml` holds a secret, so it is gitignored; keep it out of version
+control, or store it at `~/.config/meerkat/config.toml`. The non-secret keys
+also work as `MEERKAT_INDEXER_HOST`, `_PORT`, `_INDEX` and `_USER` environment
+variables; a flag wins, then the environment variable, then the config. A
+bearer or API token goes in `MEERKAT_INDEXER_TOKEN` for a setup that
+authenticates with a token. Recorded output:
+
+```text
+pulled 8210 alerts for acme (indexer)
+  window 2022-01-21T00:00:00+00:00 .. 2022-01-22T00:00:00+00:00
+  wrote alerts/acme_wazuh.json
+```
 
 ---
 
@@ -243,15 +290,13 @@ a timestamp and are never overwritten.
 
     meerkat triage [--environment NAME] [--input DIR] [--inventory FILE]
                    [--budget K] [--model FILE] [--runs-dir DIR]
-                   [--wazuh-file FILE] [--aminer-file FILE] [--labels FILE]
+                   [--wazuh-file FILE] [--aminer-file FILE]
 
 | option | description |
 | --- | --- |
 | `--budget K` | families reviewed per day, default 10 |
 | `--model FILE` | model bundle, default `models/meerkat_bundle.skops` |
 | `--runs-dir DIR` | where runs are saved, default `runs/` |
-| `--labels FILE` | optional label CSV, for evaluation only |
-| `--event-csv-dir DIR` | benchmark label directory, evaluation only |
 | `--environment`, `--input`, `--inventory` | the shared openers |
 | `--wazuh-file FILE`, `--aminer-file FILE` | read only the named file |
 
@@ -278,7 +323,6 @@ score alone.
 | `--day YYYY-MM-DD` | one day's queue |
 | `--budget K` | re-cut the saved run at a different K; no rescoring |
 | `--json` | the queue as JSON |
-| `--no-pager` | accepted for consistency; queue never pages |
 
 Recorded output:
 
@@ -547,7 +591,6 @@ newest successful run is what every other command opens by default.
 | option | description |
 | --- | --- |
 | `--json` | the list as JSON |
-| `--no-pager` | accepted for consistency; runs never pages |
 
 A run is a directory under `runs/`; deleting the directory deletes the run
 and its reviews.
