@@ -16,7 +16,7 @@
   <a href="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml">
     <img src="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml/badge.svg" alt="CI status">
   </a>
-  <img src="https://img.shields.io/badge/tests-427%20passing-brightgreen" alt="427 tests passing">
+  <img src="https://img.shields.io/badge/tests-452%20passing-brightgreen" alt="452 tests passing">
   <img src="https://img.shields.io/badge/coverage-75%25-brightgreen" alt="75% coverage">
   <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 to 3.13">
   <img src="https://img.shields.io/badge/license-MIT-informational" alt="MIT license">
@@ -130,11 +130,6 @@ day. The key keeps the item uniform, so one judgement usually settles it, and
 the sessions inside are there to open when it does not. The day's workload is
 ten of these summaries. The alert column below is what sits underneath them,
 opened on demand while investigating.
-
-No commercial triage tool appears here: they rank incidents a correlation
-layer has already built, so they cannot run on a raw open-source alert stream.
-The comparison is against the ordering a team applies to that stream with no
-tool, the severity the detectors already print.
 
 | Ranking method | steps reached (of 60) | items opened per day | alerts behind them, per day |
 |---|---:|---:|---:|

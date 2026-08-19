@@ -10,6 +10,8 @@ local/
 *.local.md
 paper/
 runs/
+# holds the indexer password for `meerkat pull`; never commit it
+meerkat.toml
 # ============================================================
 # Python
 # ============================================================
