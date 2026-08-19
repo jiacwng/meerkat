@@ -167,9 +167,7 @@ def fit_soft_labels(
     # reviewed-period file every session counts as reviewed and this drops out.
     negative = ~in_bag
     if not negative.any() and reviewed is None:
-        # every session inside an incident leaves nothing to contrast against, and
-        # the forest then scores every session 1.0. The mirror case was already
-        # refused; this one used to return a degenerate ranker in silence.
+        # every session sits inside an incident, so the forest scores them all 1.0
         raise ValueError(
             "every session falls inside an incident, so there is nothing to "
             "learn a negative from; supply incidents covering part of the period"
@@ -339,10 +337,7 @@ def save_model(model: object, path: Path) -> None:
 
 
 def load_model(path: Path) -> object:
-    # THE FORMAT CHECK IS A GATE, NOT A DISPATCH. This used to fall through to
-    # pickle.load for anything that was not a skops zip, which handed every
-    # downloaded bundle arbitrary code execution and made the allowlist below
-    # decorative. A file that is not a skops bundle is refused outright.
+    # the format check is a gate: only a skops bundle reaches load
     if not _is_skops(path):
         with path.open("rb") as file:
             head = file.read(64)
@@ -379,10 +374,6 @@ class UntrustedBundleError(Exception):
 
 
 def _is_skops(path: Path) -> bool:
-    # skops writes a zip holding schema.json; a pickle never starts with the zip
-    # magic, and a zip without that member is not a bundle either. Accepting one
-    # on the magic alone sent it into skops, which answered with a KeyError on
-    # the missing member instead of the refusal above.
     with path.open("rb") as file:
         if file.read(4) != b"PK\x03\x04":
             return False
@@ -530,8 +521,7 @@ def read_provenance(path: Path) -> dict | None:
     if not sidecar.exists():
         return None
     # a bundle from elsewhere brings its own sidecar, so this file is as
-    # untrusted as the bundle. A list rather than an object used to reach
-    # .get and answer with an AttributeError instead of the refusal.
+    # untrusted as the bundle
     try:
         record = json.loads(sidecar.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, RecursionError, UnicodeDecodeError) as error:

@@ -65,9 +65,8 @@ from meerkat import __version__
 
 DEFAULT_MODEL = Path("models/meerkat_bundle.skops")
 DEFAULT_RUNS = Path("runs")
-# a plain convention a company can adopt, and deliberately NOT data/raw: pointing
-# every command inside the benchmark's directory is what made the tool look
-# inoperable until someone knew to pass --input
+# a plain convention a company can adopt, kept clear of data/raw so commands
+# run outside the benchmark directory
 DEFAULT_INPUT = Path("alerts")
 
 # the bundled demo is the only part of the product that knows the benchmark's
@@ -220,7 +219,6 @@ class RunState:
     alerts: pd.DataFrame
 
     def family_by_handle(self, handle: str) -> pd.Series:
-        # F1 and F001 name the same family, so runs saved by any version open
         wanted = _canon_handle(handle)
         stored = self.families["handle"].map(_canon_handle)
         match = self.families[stored.eq(wanted)]
@@ -271,9 +269,8 @@ def save_run(
     alerts: pd.DataFrame,
 ) -> Path:
     directory = runs_dir / run_id
-    # never write into a finished run. Two triages in the same millisecond used
-    # to interleave their pickles and the later latest.txt won, with both
-    # reporting success.
+    # each triage writes into its own directory, so two in the same millisecond
+    # stay separate
     suffix = 1
     while (directory / "run.json").exists():
         suffix += 1
@@ -303,9 +300,8 @@ def load_run(runs_dir: Path, run_id: str | None = None) -> RunState:
     if run_id is None:
         run_id = latest_run_id(runs_dir)
     if run_id is None:
-        # DEFAULT_RUNS is relative to the working directory, like DEFAULT_MODEL,
-        # so triaging in one directory and queueing in another used to advise
-        # running the triage that had already been run
+        # DEFAULT_RUNS is relative to the working directory, so this finds only
+        # a run written here
         where = "" if runs_dir.is_absolute() else (
             f"\n{runs_dir} is resolved from the current directory, so a run "
             "written from somewhere else is not found here. Pass --runs-dir "
@@ -325,7 +321,6 @@ def load_run(runs_dir: Path, run_id: str | None = None) -> RunState:
         sessions=pd.read_pickle(directory / "sessions.pkl"),
         alerts=pd.read_pickle(directory / "alerts.pkl"),
     )
-    # runs saved before the unpadded convention display F1 style everywhere
     if "handle" in state.families.columns:
         state.families["handle"] = state.families["handle"].map(_canon_handle)
     return state
@@ -1015,14 +1010,12 @@ def render_distinct(alert_slice: pd.DataFrame, field: str) -> None:
 # shared command helpers
 # --------------------------------------------------------------------------
 
-# every command checked this for itself and `drift` did not, so a missing
-# bundle raised a traceback there and a clean message everywhere else. Call it
-# early, before reading any alerts, so the answer is immediate.
+# call this early, before reading alerts, so a missing bundle fails fast.
 #
-# There are two ways to arrive with no bundle and they need different answers.
-# DEFAULT_MODEL is relative to the working directory and models/ is not part of
-# the installed package, so running from anywhere but a clone finds nothing at
-# all. Inside a clone the file is usually there but unfetched from Git LFS.
+# a missing bundle has two causes that need different answers. DEFAULT_MODEL is
+# relative to the working directory, and the installed package leaves out
+# models/, so running outside a clone points at an empty path. inside a clone
+# the file is usually there, waiting on git lfs pull.
 def _require_bundle(path: Path) -> None:
     if path.exists():
         return
@@ -1113,8 +1106,6 @@ def _is_lfs_pointer(path: Path) -> bool:
 
 
 def _require(path: Path, what: str) -> None:
-    # checked up front, so a missing file reports itself instead of surfacing as
-    # a traceback halfway through normalization
     if not path.exists():
         errors.print(f"[red]{what} not found:[/red] {path}")
         raise SystemExit(EXIT_ERROR)
@@ -1151,9 +1142,7 @@ def _score_company(
 
     inventory = load_inventory(inventory_path)
     # an inventory scaffolded by `meerkat inventory` has empty roles until
-    # someone fills them in, and the queue changes quietly rather than failing,
-    # so the condition is worth reporting. What it costs was measured on one
-    # benchmark, so report the state and leave the decision alone.
+    # someone fills them in, and the queue shifts quietly, so report it
     unroled = inventory.assets_without_roles()
     if unroled:
         share = len(unroled) / max(len(set(inventory.assets_by_ip.values())), 1)
@@ -1180,8 +1169,6 @@ def _score_company(
         input_dir, labels_path, company, inventory_path, event_csv_dir,
         wazuh_file=wazuh_file, aminer_file=aminer_file,
     )
-    # the same condition `check` reports. Without it the empty feature matrix
-    # reaches the forest and sklearn answers with its own traceback.
     if frame.empty:
         errors.print(
             "[red]no alerts parsed[/red]  the files resolved but held no rows"
@@ -1211,7 +1198,6 @@ def cmd_triage(args) -> None:
         errors.print(f"[red]{error}[/red]")
         raise SystemExit(EXIT_ERROR)
     bundle = _load_bundle(args.model)
-    # the miner is optional, but say so: dropping it costs coverage
     if not any(family == AMINER_FAMILY for _, family in alert_files):
         console.print(
             f"[yellow]no {_aminer_name(args, company)}[/yellow]  scoring wazuh "
@@ -1453,8 +1439,7 @@ def _render_raw(alert_slice, raw_dir: Path, limit: int) -> None:
         if not path.exists():
             console.print(f"[yellow]raw source {safe(path)} not available[/yellow]")
             continue
-        # one byte that is not utf-8 anywhere in the file used to be a traceback
-        # here, while every ingest path replaces it and carries on
+        # match ingest: replace invalid utf-8 bytes
         with path.open(encoding="utf-8", errors="replace") as file:
             for index, line in enumerate(file):
                 if index in wanted:
@@ -2053,9 +2038,7 @@ def cmd_check(args) -> None:
         console.print(f"  covering {fmt_time(start)} to {fmt_time(end)}")
 
     problems = 0
-    # entity_id is what the inventory is keyed on, so name the entity. Printing
-    # host instead reported web01 as outside an inventory that held it, because
-    # the address beside that name was the part that did not match.
+    # entity_id is what the inventory is keyed on, so name the entity
     unmatched = frame.loc[~frame["entity_in_inventory"].astype(bool), "entity_id"]
     if len(unmatched):
         share = len(unmatched) / len(frame)
@@ -2286,10 +2269,7 @@ def _csv_safe(value):
     # strip control characters first: this file is opened in a spreadsheet and
     # cat'd in a terminal, and rule names and hostnames are attacker-written
     value = _CONTROL.sub("", value)
-    # a hostname is attacker-controlled, so quote the leading character rather
-    # than the whole cell. This used to test `value[:1] in "=+-@\t\r"`, and ""
-    # is in every string, so every blank cell in every export came out as a
-    # lone apostrophe.
+    # a hostname is attacker-controlled, so quote only its leading character
     if value and value[0] in _CSV_FORMULA_LEAD:
         return "'" + value
     return value
@@ -2590,9 +2570,7 @@ def safe_run_id(run_id: str) -> str:
 
 
 def _company_label(value: str) -> str:
-    # the label becomes a run directory name, so it takes the run id rule. It
-    # used to be checked in new_run_id, after normalizing and scoring the whole
-    # dataset, so `--company ../evil` cost the full run before it failed.
+    # the label becomes a run directory name, so it takes the run id rule
     try:
         return safe_run_id(value)
     except ValueError as error:
@@ -2600,14 +2578,11 @@ def _company_label(value: str) -> str:
 
 
 def _load_or_exit(load, path: Path, what: str):
-    # core raises ValueError with a message written for a person. Letting it
-    # escape turned every one of them into a traceback.
+    # core raises ValueError with a message written for a person
     try:
         return load(path)
     except (ValueError, OSError) as error:
-        # some of these quote the cell they choked on, and an incident CSV with
-        # a start of "[/b]" then reached rich as markup and raised MarkupError
-        # from inside the handler written to avoid a traceback
+        # the error may quote a cell containing rich markup, so escape it
         errors.print(f"[red]{what} could not be read[/red]  {safe(error)}")
         raise SystemExit(EXIT_ERROR)
 
@@ -2617,9 +2592,6 @@ def _raw_dir_for(run: RunState, args) -> Path:
 
 
 def require_directory(path: Path) -> None:
-    # a missing directory used to fall through to the inventory check, so a
-    # first-time user with nothing in place was told the inventory was missing.
-    # The inventory is written from the alerts, so that is the wrong end.
     if not path.exists():
         errors.print(
             f"[red]no alert directory at {path}[/red]  create it and put your "
@@ -2764,9 +2736,8 @@ def cmd_orientation(args) -> None:
 
 
 def resolve_company(args) -> str:
-    # the company name used to double as a filename prefix. Discovery is by format
-    # now, so it is only a run label, and the input directory names it well enough
-    # that a single-site user never has to pass it.
+    # only a run label now; the input directory names it, so a single-site
+    # user rarely passes it
     if getattr(args, "company", None):
         return args.company
     # a drive or filesystem root resolves to an empty name, and there is nothing
