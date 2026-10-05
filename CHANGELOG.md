@@ -9,6 +9,36 @@
   day, or an explicit range in ISO 8601 or epoch seconds. Credentials come from
   the environment or `meerkat.toml`.
 
+### Security
+
+- Opening a run no longer unpickles its files without limits. Only the pandas
+  and numpy types a saved run holds are accepted, named one by one, so a
+  hostile run file cannot run code.
+- `pull` refuses a redirect from the indexer, which would resend the
+  credentials to another host. A response above 256 MB or a window above two
+  million alerts is refused.
+- Error messages escape terminal markup, so a handle, a path or a file name
+  cannot restyle or break the output.
+
+### Fixed
+
+- `review --session all` records a decision for the whole family.
+- `review --analyst NAME` records the name; it was ignored.
+- `retrain` finds the inventory like the other commands: `--inventory`, then
+  `MEERKAT_INVENTORY` or `meerkat.toml`, then `<input>/inventory/<environment>.json`.
+  It was required.
+- `pull --day 9999-12-31` exits with an error message. It printed a traceback.
+- `verify_tls` under `[pull]` must be `true` or `false`; the string `"false"`
+  kept verification on.
+- `pull` writes each file in one step, so an interrupted pull leaves no
+  partial file.
+- A session review no longer replaces the family decision in the queue.
+  Lines in `reviews.jsonl` without a `family_id` or a `decision` are skipped.
+- An AMiner record no longer stops the ingest. Embedded JSON of an unexpected
+  shape leaves the CPU fields empty. A record whose `RawLogData` or
+  `Timestamps` is not a list is skipped. `LogResources` given as one string is
+  one resource.
+
 ## 1.1.0 - 2026-07-29
 
 This minor release carries breaking changes; read the Breaking list before

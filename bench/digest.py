@@ -10,7 +10,7 @@ from pathlib import Path
 
 from core.normalize import normalize_scenario
 
-# recorded on main at 2a89055, russellmitchell, 36358 rows over 52 columns
+# russellmitchell: 36358 rows across 52 columns
 KNOWN = "4b390168afda96bf"
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import pickle
 import re
 import sys
 import warnings
@@ -260,6 +261,54 @@ class RunState:
         return same.sort_values("gap_s", kind="stable")
 
 
+# every (module, name) a saved run asks for under pandas 2 and 3, plus numpy 1's
+# path to the same two functions. A whole package is never trusted: numpy ships
+# an exec wrapper and pandas a pickle reader with no allowlist.
+_PICKLE_ALLOWED = frozenset({
+    ("builtins", "slice"),
+    ("numpy", "dtype"),
+    ("numpy", "ndarray"),
+    ("numpy.core.multiarray", "_reconstruct"),
+    ("numpy.core.numeric", "_frombuffer"),
+    ("numpy._core.multiarray", "_reconstruct"),
+    ("numpy._core.numeric", "_frombuffer"),
+    ("pandas", "Categorical"),
+    ("pandas", "CategoricalDtype"),
+    ("pandas", "DataFrame"),
+    ("pandas", "Index"),
+    ("pandas", "RangeIndex"),
+    ("pandas", "StringDtype"),
+    ("pandas.arrays", "StringArray"),
+    ("pandas._libs.arrays", "__pyx_unpickle_NDArrayBacked"),
+    ("pandas._libs.internals", "_unpickle_block"),
+    ("pandas.core.arrays.categorical", "Categorical"),
+    ("pandas.core.dtypes.dtypes", "CategoricalDtype"),
+    ("pandas.core.frame", "DataFrame"),
+    ("pandas.core.indexes.base", "Index"),
+    ("pandas.core.indexes.base", "_new_Index"),
+    ("pandas.core.indexes.range", "RangeIndex"),
+    ("pandas.core.internals.managers", "BlockManager"),
+})
+
+
+class _RunUnpickler(pickle.Unpickler):
+    # a run holds plain pandas frames, so refuse any class outside them. A bare
+    # unpickle of a hostile run file would run its code, the way load_model
+    # refuses to for a model bundle.
+    def find_class(self, module, name):
+        if (module, name) in _PICKLE_ALLOWED:
+            return super().find_class(module, name)
+        raise pickle.UnpicklingError(f"blocked type in run file: {module}.{name}")
+
+
+def _read_run_frame(path: Path) -> pd.DataFrame:
+    try:
+        with path.open("rb") as handle:
+            return _RunUnpickler(handle).load()
+    except (pickle.UnpicklingError, EOFError, AttributeError, ImportError) as error:
+        raise ValueError(f"{path.name} is not a readable run file: {error}") from error
+
+
 def save_run(
     runs_dir: Path,
     run_id: str,
@@ -317,9 +366,9 @@ def load_run(runs_dir: Path, run_id: str | None = None) -> RunState:
         run_id=run_id,
         directory=directory,
         meta=json.loads((directory / "run.json").read_text(encoding="utf-8")),
-        families=pd.read_pickle(directory / "families.pkl"),
-        sessions=pd.read_pickle(directory / "sessions.pkl"),
-        alerts=pd.read_pickle(directory / "alerts.pkl"),
+        families=_read_run_frame(directory / "families.pkl"),
+        sessions=_read_run_frame(directory / "sessions.pkl"),
+        alerts=_read_run_frame(directory / "alerts.pkl"),
     )
     if "handle" in state.families.columns:
         state.families["handle"] = state.families["handle"].map(_canon_handle)
@@ -393,16 +442,25 @@ def review_history(directory: Path) -> list[dict]:
         except json.JSONDecodeError:
             # a hand-edited line must not take the whole history down
             continue
-        if isinstance(entry, dict):
+        if not isinstance(entry, dict):
+            continue
+        if isinstance(entry.get("family_id"), str) and isinstance(
+            entry.get("decision"), str
+        ):
             entries.append(entry)
     return entries
 
 
 def current_reviews(directory: Path) -> dict[str, dict]:
-    # the last line wins, earlier lines stay as an audit trail
+    # the last line wins, earlier lines stay as an audit trail. A session entry
+    # stands for the family only until a family-wide decision exists.
     latest: dict[str, dict] = {}
     for entry in review_history(directory):
-        latest[entry["family_id"]] = entry
+        family_id = entry["family_id"]
+        held = latest.get(family_id)
+        if entry.get("session_handle") and held and not held.get("session_handle"):
+            continue
+        latest[family_id] = entry
     return latest
 
 
@@ -596,7 +654,7 @@ def _render_why(family: pd.Series) -> None:
 
 
 # fewer reviewed families than this in a band and no rate is shown: three
-# escalations out of four is a coincidence, not a track record
+# escalations out of four is too thin to read as a rate
 ESC_BAND_FLOOR = 5
 
 
@@ -609,8 +667,8 @@ def escalation_bands(runs_dir: Path) -> dict[float, tuple[int, int]]:
         return bands
     for directory in sorted(runs_dir.iterdir()):
         try:
-            pickle = directory / "families.pkl"
-            if not directory.is_dir() or not pickle.exists():
+            families_pkl = directory / "families.pkl"
+            if not directory.is_dir() or not families_pkl.exists():
                 continue
             history = review_history(directory)
         except OSError:
@@ -627,7 +685,7 @@ def escalation_bands(runs_dir: Path) -> dict[float, tuple[int, int]]:
             else:
                 state[family_id] = {"*": entry["decision"]}
         try:
-            families = pd.read_pickle(pickle)
+            families = _read_run_frame(families_pkl)
         except Exception:
             # an unreadable old run must not take down the queue
             continue
@@ -1021,14 +1079,14 @@ def _require_bundle(path: Path) -> None:
         return
     if path == DEFAULT_MODEL and not path.parent.exists():
         errors.print(
-            f"[red]no model at {path}[/red]\n"
-            f"{path} is relative to the current directory, and models/ is not "
+            f"[red]no model at {safe(path)}[/red]\n"
+            f"{safe(path)} is relative to the current directory, and models/ is not "
             "part of the installed package. Run from a clone of the "
             "repository, or pass --model with the path to a bundle.\n"
         )
     else:
         errors.print(
-            f"[red]no model at {path}[/red]\n"
+            f"[red]no model at {safe(path)}[/red]\n"
             "if this is a clone, the bundle is stored with Git LFS:\n\n"
             "  git lfs install\n"
             "  git lfs pull\n"
@@ -1071,13 +1129,13 @@ def _load_bundle(path: Path):
     record = read_provenance(path)
     if record is None:
         errors.print(
-            f"[yellow]note[/yellow] {path.name} has no provenance sidecar, so "
+            f"[yellow]note[/yellow] {safe(path.name)} has no provenance sidecar, so "
             "there is no record of what trained it."
         )
     elif not record.get("matches_file", True):
         errors.print(
-            f"[red]warning[/red] {path.name} does not match the sha256 in "
-            f"{path.name}.json, so it changed after it was written. Retrain with "
+            f"[red]warning[/red] {safe(path.name)} does not match the sha256 in "
+            f"{safe(path.name)}.json, so it changed after it was written. Retrain with "
             "`meerkat retrain` rather than trusting it."
         )
     return bundle
@@ -1087,7 +1145,7 @@ def _load_run(args) -> RunState:
     try:
         return load_run(args.runs_dir, args.run)
     except (FileNotFoundError, ValueError) as error:
-        errors.print(f"[red]{error}[/red]")
+        errors.print(f"[red]{safe(error)}[/red]")
         raise SystemExit(EXIT_ERROR)
 
 
@@ -1107,7 +1165,7 @@ def _is_lfs_pointer(path: Path) -> bool:
 
 def _require(path: Path, what: str) -> None:
     if not path.exists():
-        errors.print(f"[red]{what} not found:[/red] {path}")
+        errors.print(f"[red]{what} not found:[/red] {safe(path)}")
         raise SystemExit(EXIT_ERROR)
 
 
@@ -1195,7 +1253,7 @@ def cmd_triage(args) -> None:
             args.input, company, args.wazuh_file, args.aminer_file
         )
     except FileNotFoundError as error:
-        errors.print(f"[red]{error}[/red]")
+        errors.print(f"[red]{safe(error)}[/red]")
         raise SystemExit(EXIT_ERROR)
     bundle = _load_bundle(args.model)
     if not any(family == AMINER_FAMILY for _, family in alert_files):
@@ -1251,7 +1309,7 @@ def _select_families(
             # stderr, or `queue --json | jq` gets 46 bytes of prose on stdout and
             # fails to parse, which is the contract stated at the top of this file
             errors.print(
-                f"[red]no day {day} in this run[/red]  available: "
+                f"[red]no day {safe(day)} in this run[/red]  available: "
                 + ", ".join(sorted(set(run.families["day"].map(fmt_date))))
             )
             raise SystemExit(EXIT_ERROR)
@@ -1400,12 +1458,12 @@ def _parse_pairs(pairs, columns) -> list[tuple[str, str]]:
     parsed = []
     for pair in pairs or []:
         if "=" not in pair:
-            errors.print(f"[red]expected field=value, got {pair!r}[/red]")
+            errors.print(f"[red]expected field=value, got {safe(repr(pair))}[/red]")
             raise SystemExit(EXIT_ERROR)
         field, value = pair.split("=", 1)
         if field not in columns:
             errors.print(
-                f"[red]unknown field {field!r}[/red]  fields: "
+                f"[red]unknown field {safe(repr(field))}[/red]  fields: "
                 f"{', '.join(sorted(columns))}"
             )
             raise SystemExit(EXIT_ERROR)
@@ -1466,7 +1524,7 @@ def cmd_inspect(args) -> None:
     excludes = _parse_pairs(args.exclude, columns)
     if args.distinct and args.distinct not in columns:
         errors.print(
-            f"[red]unknown field {args.distinct!r}[/red]  fields: "
+            f"[red]unknown field {safe(repr(args.distinct))}[/red]  fields: "
             f"{', '.join(sorted(columns))}"
         )
         raise SystemExit(EXIT_ERROR)
@@ -1477,18 +1535,18 @@ def cmd_inspect(args) -> None:
         letter = _canon_handle(args.handle)[:1]
         if letter in ("S", "A"):
             errors.print(
-                f"[red]{error.args[0]}[/red]  sessions and alerts live inside "
+                f"[red]{safe(error.args[0])}[/red]  sessions and alerts live inside "
                 "a family: `meerkat inspect F1 S1` then `... S1 A1`"
             )
         else:
-            errors.print(f"[red]{error.args[0]}[/red]")
+            errors.print(f"[red]{safe(error.args[0])}[/red]")
         raise SystemExit(EXIT_ERROR)
 
     if args.session:
         try:
             session = run.session_by_handle(family, args.session)
         except KeyError as error:
-            errors.print(f"[red]{error.args[0]}[/red]")
+            errors.print(f"[red]{safe(error.args[0])}[/red]")
             raise SystemExit(EXIT_ERROR)
         alert_slice = run.session_alerts(session)
     else:
@@ -1547,7 +1605,7 @@ def cmd_inspect(args) -> None:
         if not 1 <= position <= len(ordered):
             errors.print(
                 f"[red]no alert {safe(args.alert)}[/red]  "
-                f"{_canon_handle(args.session)} holds A1..A{len(ordered)}"
+                f"{safe(_canon_handle(args.session))} holds A1..A{len(ordered)}"
             )
             raise SystemExit(EXIT_ERROR)
         alert = ordered.iloc[position - 1]
@@ -1616,11 +1674,11 @@ def cmd_review(args) -> None:
         letter = _canon_handle(args.handle)[:1]
         if letter in ("S", "A"):
             errors.print(
-                f"[red]{error.args[0]}[/red]  sessions and alerts live inside "
+                f"[red]{safe(error.args[0])}[/red]  sessions and alerts live inside "
                 "a family: `meerkat inspect F1 S1` then `... S1 A1`"
             )
         else:
-            errors.print(f"[red]{error.args[0]}[/red]")
+            errors.print(f"[red]{safe(error.args[0])}[/red]")
         raise SystemExit(EXIT_ERROR)
 
     # Dismissing a family is exact: if nothing in it was an attack, nothing in any
@@ -1642,14 +1700,19 @@ def cmd_review(args) -> None:
         try:
             session = run.session_by_handle(family, args.session)
         except KeyError as error:
-            errors.print(f"[red]{error.args[0]}[/red]")
+            errors.print(f"[red]{safe(error.args[0])}[/red]")
             raise SystemExit(EXIT_ERROR)
 
     entry = append_review(
         run.directory, run.run_id, family["family_id"], family["handle"],
         args.decision, args.note or "",
         session_key=(session_label_key(session, run.alerts) if session is not None else None),
-        session_handle=args.session.upper() if args.session else None,
+        session_handle=(
+            args.session.upper()
+            if args.session and args.session.lower() != "all"
+            else None
+        ),
+        analyst=args.analyst,
     )
     scope = (
         f"{family['handle']}/{args.session.upper()}" if session is not None
@@ -1773,10 +1836,8 @@ def cmd_retrain(args) -> None:
     from core.scenario_eval import refit_forest
 
     _require(args.incidents, "incident records")
-    _require(args.inventory, "inventory")
+    company = _open_company(args)
     _require_bundle(args.model)
-    require_directory(args.input)
-    company = resolve_company(args)
 
     inventory = _load_or_exit(load_inventory, args.inventory, "the inventory")
     incidents = _load_or_exit(load_incidents, args.incidents, "the incident records")
@@ -1841,7 +1902,7 @@ def cmd_retrain(args) -> None:
     if failures:
         # every precondition reports at once, instead of one run per failure
         for failure in failures:
-            errors.print(f"[red]{failure}[/red]")
+            errors.print(f"[red]{safe(failure)}[/red]")
         raise SystemExit(EXIT_ERROR)
     # one forest per seed, because a single fit decides approval on a metric coarse
     # enough for seed noise to flip it
@@ -1854,7 +1915,7 @@ def cmd_retrain(args) -> None:
             for offset in range(args.fits)
         ]
     except ValueError as error:
-        errors.print(f"[red]{error}[/red]")
+        errors.print(f"[red]{safe(error)}[/red]")
         raise SystemExit(EXIT_ERROR)
 
     verdict = compare_models(
@@ -1953,7 +2014,7 @@ def _contest_ranking_weights(
 
 CHECK_SAMPLE = 5_000
 # above this share of distinct rule ids, the detector is probably numbering each
-# anomaly instead of naming its type, which quietly ruins rarity and the session key
+# anomaly instead of naming its type, which corrupts rarity and the session key
 RULE_CARDINALITY_WARN = 0.5
 
 
@@ -1964,7 +2025,7 @@ def cmd_check(args) -> None:
             args.input, company, args.wazuh_file, args.aminer_file
         )
     except FileNotFoundError as error:
-        errors.print(f"[red]{error}[/red]")
+        errors.print(f"[red]{safe(error)}[/red]")
         raise SystemExit(EXIT_ERROR)
 
     report: dict = {"environment": company, "files": [], "problems": []}
@@ -2107,7 +2168,7 @@ def cmd_check(args) -> None:
 # --------------------------------------------------------------------------
 # drift: how far the current alerts sit from what the model was trained on
 #
-# This needs NO incidents, which is the point. Evaluation needs confirmed
+# This needs no incidents. Evaluation needs confirmed
 # tickets and a client is short of those. It reports covariate shift only:
 # it can say the input moved and it cannot say the queue got worse.
 # --------------------------------------------------------------------------
@@ -2126,7 +2187,7 @@ def cmd_drift(args) -> None:
     profile = getattr(bundle, "profile", None)
     if profile is None:
         errors.print(
-            f"[red]{args.model.name} carries no training profile[/red]  it predates "
+            f"[red]{safe(args.model.name)} carries no training profile[/red]  it predates "
             "drift reporting. Refit with `meerkat retrain` to record one."
         )
         raise SystemExit(EXIT_ERROR)
@@ -2431,7 +2492,7 @@ def cmd_export_html(args) -> None:
         try:
             family = run.family_by_handle(args.handle)
         except KeyError as error:
-            errors.print(f"[red]{error.args[0]}[/red]")
+            errors.print(f"[red]{safe(error.args[0])}[/red]")
             raise SystemExit(EXIT_ERROR)
         handle = family["handle"]
 
@@ -2525,7 +2586,7 @@ def cmd_demo(args) -> None:
     for path in (wazuh, aminer):
         if not path.exists() or _is_lfs_pointer(path):
             errors.print(
-                f"[red]demo data missing: {path}[/red]\n"
+                f"[red]demo data missing: {safe(path)}[/red]\n"
                 "the raw AIT files are stored with Git LFS. fetch them with:\n\n"
                 "  git lfs install\n"
                 "  git lfs pull\n"
@@ -2594,14 +2655,14 @@ def _raw_dir_for(run: RunState, args) -> Path:
 def require_directory(path: Path) -> None:
     if not path.exists():
         errors.print(
-            f"[red]no alert directory at {path}[/red]  create it and put your "
+            f"[red]no alert directory at {safe(path)}[/red]  create it and put your "
             "detector exports inside, or point --input at the folder that "
             "already holds them."
         )
         raise SystemExit(EXIT_ERROR)
     if not path.is_dir():
         errors.print(
-            f"[red]--input must be a directory[/red]  {path} is a file. Point it "
+            f"[red]--input must be a directory[/red]  {safe(path)} is a file. Point it "
             "at the folder holding your alert exports."
         )
         raise SystemExit(EXIT_ERROR)
@@ -2633,7 +2694,7 @@ def _load_config() -> tuple[dict, str]:
             with path.open("rb") as handle:
                 return tomllib.load(handle), str(path)
         except tomllib.TOMLDecodeError as error:
-            errors.print(f"[red]{path} is not valid TOML[/red]  {error}")
+            errors.print(f"[red]{safe(path)} is not valid TOML[/red]  {safe(error)}")
             raise SystemExit(EXIT_ERROR)
     return {}, ""
 
@@ -2658,7 +2719,7 @@ def _apply_config(args) -> None:
             value = _company_label(raw) if attribute == "company" else Path(raw)
         except argparse.ArgumentTypeError as error:
             where = variable if os.environ.get(variable) else source
-            errors.print(f"[red]bad {key} in {where}[/red]  {error}")
+            errors.print(f"[red]bad {key} in {safe(where)}[/red]  {safe(error)}")
             raise SystemExit(EXIT_ERROR)
         setattr(args, attribute, value)
 
@@ -2746,7 +2807,7 @@ def resolve_company(args) -> str:
         return safe_run_id(args.input.resolve().name)
     except ValueError:
         errors.print(
-            f"[red]cannot name a run after {args.input}[/red]  a filesystem "
+            f"[red]cannot name a run after {safe(args.input)}[/red]  a filesystem "
             "root has no directory name to use. Pass --environment with a "
             "label, or point --input at a named directory."
         )
@@ -2787,7 +2848,7 @@ def _pull_window(args):
             raise SystemExit(EXIT_ERROR)
         try:
             return connectors.day_window(args.day)
-        except ValueError:
+        except (ValueError, OverflowError):
             errors.print(f"[red]--day is not a date: {safe(args.day)}[/red]")
             raise SystemExit(EXIT_ERROR)
     if not (args.from_time and args.to_time):
@@ -2832,13 +2893,17 @@ def _indexer_config(args):
     host = pick(args.host, "MEERKAT_INDEXER_HOST", "host")
     if not host:
         errors.print("[red]indexer mode needs a host[/red]  pass --host, set "
-                     "MEERKAT_INDEXER_HOST, or set host under [pull] in meerkat.toml")
+                     "MEERKAT_INDEXER_HOST, or set host under \\[pull] in meerkat.toml")
         raise SystemExit(EXIT_ERROR)
     verify = True
     if args.insecure:
         verify = False
     elif "verify_tls" in section:
-        verify = bool(section["verify_tls"])
+        verify = section["verify_tls"]
+        if not isinstance(verify, bool):
+            errors.print("[red]verify_tls under \\[pull] must be true or false[/red]  "
+                         f"got {safe(repr(verify))}")
+            raise SystemExit(EXIT_ERROR)
     port_raw = pick(None, "MEERKAT_INDEXER_PORT", "port", 9200)
     try:
         port = int(port_raw)
@@ -2868,7 +2933,7 @@ def cmd_pull(args) -> None:
         targets.append(eve_out)
     for path in targets:
         if path.exists():
-            errors.print(f"[red]{path} already exists[/red]  pull stops at an "
+            errors.print(f"[red]{safe(path)} already exists[/red]  pull stops at an "
                          "existing file; move or delete it first")
             raise SystemExit(EXIT_ERROR)
 
@@ -3207,7 +3272,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--reviewed-periods", type=Path,
         help="CSV of start,end periods whose alerts were fully reviewed",
     )
-    retrain.add_argument("--inventory", type=Path, required=True)
+    retrain.add_argument("--inventory", type=Path, default=_UNSET)
     retrain.add_argument("--input", type=Path, default=_UNSET)
     _add_alert_files(retrain)
     retrain.add_argument("--model", type=Path, default=_UNSET,
@@ -3251,14 +3316,14 @@ def cmd_inventory(args) -> None:
     try:
         alert_files = resolve_alert_files(args.input, company)
     except FileNotFoundError as error:
-        errors.print(f"[red]{error}[/red]")
+        errors.print(f"[red]{safe(error)}[/red]")
         raise SystemExit(EXIT_ERROR)
     # an asset is one agent address, and only a wazuh export carries agent.ip
     source = next(
         (path for path, family in alert_files if family == WAZUH_FAMILY), None
     )
     if source is None:
-        errors.print(f"[red]wazuh alerts not found in:[/red] {args.input}")
+        errors.print(f"[red]wazuh alerts not found in:[/red] {safe(args.input)}")
         raise SystemExit(EXIT_ERROR)
     out = args.out or (args.input / "inventory" / f"{company}.json")
 
@@ -3289,7 +3354,7 @@ def cmd_inventory(args) -> None:
             names.setdefault(address, hostname.strip() or address)
 
     if not names:
-        errors.print(f"[red]no agent addresses found in {source.name}[/red]")
+        errors.print(f"[red]no agent addresses found in {safe(source.name)}[/red]")
         raise SystemExit(EXIT_ERROR)
 
     assets = [
@@ -3353,7 +3418,7 @@ def main(argv: list[str] | None = None) -> None:
             ):
                 _quiet_pipe_exit()
             # a path the OS refuses is the user's to fix, not a crash
-            errors.print(f"[red]{error}[/red]")
+            errors.print(f"[red]{safe(error)}[/red]")
             raise SystemExit(EXIT_ERROR)
     except AlertFileError as error:
         # the message already names the file and the line, which is the whole

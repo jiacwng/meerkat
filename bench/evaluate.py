@@ -7,8 +7,12 @@ under meerkat/ may import this module.
 Public API:
     load_scenarios / load_inventories       -> read the benchmark environments
     prepare_sessions(...)                   -> one session table per environment
+    prepare_fold(session_tables, test)      -> one leave-one-out split
+    score_fold(fold, ...)                   -> that split's sessions, scored
     build_bundle(session_tables, ...)       -> the shipped model
     evaluate_scenarios(...)                 -> the published results table
+    sign_tests(per_fold, ...)               -> paired sign test against a ranker
+    parse_budgets(text)                     -> "5,10,25" or "1-25" to budgets
 """
 
 from __future__ import annotations
@@ -201,8 +205,7 @@ def _out_of_fold_reranker_scores(
 
 # Averaged only over days that hold a positive family, since a day with none has
 # no ideal ranking to divide by. That makes the result valid for comparing rankers
-# on the same data and invalid across configurations, which cover different days:
-# two detectors average over 1 day of russellmitchell where three average over 3.
+# on the same data and invalid across configurations, which cover different days.
 def _ndcg(queue: pd.DataFrame, families: pd.DataFrame, k: int) -> float:
     scores = []
     for day, day_queue in queue.groupby("day", sort=False, observed=True):
@@ -286,8 +289,8 @@ def _brier(probability: np.ndarray, target: pd.Series) -> float:
     return float(np.mean((probability - target.astype(float).to_numpy()) ** 2))
 
 
-# the four baselines the results table compares against, recovered from the
-# archived experiment that produced it. Only the ordering signal changes.
+# the four baselines the results table compares against. Only the ordering
+# signal changes.
 def _ranker_signals(families, learned, severity, rng):
     return {
         "family re-ranker": learned,
