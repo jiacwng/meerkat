@@ -36,8 +36,8 @@ ZENODO_URL = "https://zenodo.org/records/8263181"
 # divide by 10**6 and not by 2**20 or the two disagree by seven percent
 BYTES_PER_MB = 1_000_000
 
-# the detector ceilings from bench/README.md. Losing the miner is not a dent in
-# the coverage, it is a third of the attack windows, so the warning says so
+# the detector ceilings from bench/README.md. Losing the miner drops a third of
+# the attack windows, so the warning says so
 WINDOWS_ALL_DETECTORS = 60
 WINDOWS_WITHOUT_AMINER = 41
 AMINER_ONLY_WINDOWS = WINDOWS_ALL_DETECTORS - WINDOWS_WITHOUT_AMINER

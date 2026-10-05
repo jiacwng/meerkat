@@ -66,7 +66,7 @@ class TriageBundle:
 
 
 # A client has one environment, so the reranker and calibrator cannot be refitted:
-# both are defined out-of-fold ACROSS environments. Only the forest and its feature
+# both are defined out-of-fold across environments. Only the forest and its feature
 # schema are replaced, and the rest of the shipped bundle travels unchanged.
 
 def score_sessions(

@@ -283,6 +283,43 @@ class EntityAttributionTests(unittest.TestCase):
 
         self.assertEqual(fields.entity_id, "aminer-collector-1")
 
+    def test_embedded_json_of_the_wrong_shape_is_ignored(self):
+        assets = company_inventory(("web01", "10.0.0.7", ("server",)))
+        for raw in (
+            "[1, 2]",
+            '{"system": "busy"}',
+            '{"system": {"cpu": [0.5]}}',
+            '{"system": {"cpu": {"total": "high", "nice": {"pct": "x"}}}}',
+            '{"system": {"cpu": {"total": {"pct": "high"}}}}',
+        ):
+            fields = normalize.extract_aminer_fields(
+                aminer_record("10.0.0.7", raw), assets
+            )
+            self.assertNotEqual(fields.cpu_total_pct, fields.cpu_total_pct, raw)
+
+    def test_raw_lines_or_timestamps_that_are_not_a_list_are_skipped(self):
+        for key in ("RawLogData", "Timestamps"):
+            for value in ("Jan 19 02:45:26 web01 sshd[1]: x", 5, {"a": 1}):
+                record = aminer_record("10.0.0.7", "x")
+                record["LogData"][key] = value
+                self.assertIsNone(
+                    normalize.read_family_record(record, AMINER_FAMILY), (key, value)
+                )
+
+    def test_log_resources_of_the_wrong_type_are_ignored(self):
+        record = aminer_record("10.0.0.7", "x")
+        record["LogData"]["LogResources"] = {"/var/log/auth.log": 1}
+        self.assertEqual(normalize.aminer_log_resources(record), [])
+
+    def test_log_resources_as_one_string_is_one_resource(self):
+        record = aminer_record("10.0.0.7", "Jan 19 02:45:26 web01 sshd[1]: x")
+        record["LogData"]["LogResources"] = "/var/log/auth.log"
+        assets = company_inventory(("web01", "10.0.0.7", ("server",)))
+
+        fields = normalize.extract_aminer_fields(record, assets)
+
+        self.assertEqual(fields.log_resource, "/var/log/auth.log")
+
 
 class ReaderRegistryTests(unittest.TestCase):
     def test_an_unknown_detector_is_named_rather_than_read_as_aminer(self):

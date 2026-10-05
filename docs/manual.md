@@ -491,7 +491,7 @@ refusal exits with code 3 and says why; nothing is saved. A saved retrain
 prints what was refit, rescaled and kept, and the bundle's provenance sidecar
 records every setting.
 
-    meerkat retrain --incidents FILE --inventory FILE [--input DIR]
+    meerkat retrain --incidents FILE [--input DIR] [--inventory FILE]
                     [--environment NAME] [--out FILE] [--holdout-days N]
                     [--budget K] [--model FILE] [--reviewed-periods FILE]
                     [--refit-ranking-weights] [--prior-k K] [--min-positives N]
@@ -501,7 +501,7 @@ records every setting.
 | option | description |
 | --- | --- |
 | `--incidents FILE` | CSV of `start,end,host,verdict`, required; format in [Inputs](#inputs) |
-| `--inventory FILE` | required; incidents name hosts through it |
+| `--environment`, `--input`, `--inventory` | the shared openers; incidents name hosts through the inventory |
 | `--out FILE` | where the new bundle is written |
 | `--holdout-days N` | days held out for the comparison, default 7 |
 | `--budget K` | budget the comparison scores at, default 10 |

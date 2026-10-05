@@ -7,7 +7,7 @@
 # Measured on AIT: labels are 93.9% pure at bag level against 75.5% at session
 # level.
 #
-# k/n IS A BAG-SIZE DISCOUNT, NOT A PROBABILITY, and the distinction is measured
+# k/n is a bag-size discount rather than a probability, and the distinction is measured
 # rather than stylistic. The true witness rate is 0.755 pooled with a median of
 # 1.000, so most bags are entirely positive; using that measured rate as the weight
 # scores 41.33 at K=5, the same as no weighting at all. What k/n actually does is

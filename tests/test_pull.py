@@ -1,6 +1,9 @@
 # meerkat pull: file-mode and config failure modes exercised through the CLI,
 # so no live indexer is needed
 
+import argparse
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -8,6 +11,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from meerkat import cli
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -56,6 +62,12 @@ class PullFileModeTests(unittest.TestCase):
         self.assertNotIn("Traceback (most recent call last)", flat(result))
         self.assertIn("epoch seconds", flat(result))
 
+    def test_the_last_representable_day_fails_cleanly(self):
+        result = run_pull(self.base("--day", "9999-12-31"))
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("Traceback (most recent call last)", flat(result))
+        self.assertIn("--day", flat(result))
+
     def test_to_before_from_fails(self):
         result = run_pull(self.base("--from", "2022-01-22", "--to", "2022-01-21"))
         self.assertEqual(result.returncode, 1)
@@ -96,6 +108,23 @@ class PullConfigTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertNotIn("Traceback (most recent call last)", flat(result))
         self.assertIn("port is not a number", flat(result))
+
+    def _config_with(self, section):
+        args = argparse.Namespace(host="idx.example", user=None, insecure=False)
+        with (
+            mock.patch.object(cli, "_load_config", return_value=({"pull": section}, "")),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            return cli._indexer_config(args)
+
+    def test_verify_tls_takes_a_boolean(self):
+        self.assertFalse(self._config_with({"verify_tls": False}).verify_tls)
+        self.assertTrue(self._config_with({"verify_tls": True}).verify_tls)
+
+    def test_verify_tls_as_a_string_is_refused(self):
+        with self.assertRaises(SystemExit) as caught:
+            self._config_with({"verify_tls": "false"})
+        self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
 
 
 if __name__ == "__main__":

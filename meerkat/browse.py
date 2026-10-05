@@ -103,7 +103,7 @@ def browse_loop(run, input_line=input) -> None:
                 try:
                     family = run.family_by_handle(canon)
                 except KeyError as error:
-                    cli.errors.print(f"[red]{error.args[0]}[/red]")
+                    cli.errors.print(f"[red]{cli.safe(error.args[0])}[/red]")
                     continue
                 session_handle = None
                 cli.render_family(run, family, cli.current_reviews(run.directory))
@@ -115,7 +115,7 @@ def browse_loop(run, input_line=input) -> None:
                 try:
                     session = run.session_by_handle(family, canon)
                 except KeyError as error:
-                    cli.errors.print(f"[red]{error.args[0]}[/red]")
+                    cli.errors.print(f"[red]{cli.safe(error.args[0])}[/red]")
                     continue
                 session_handle = canon
                 alerts = run.session_alerts(session)
@@ -131,7 +131,7 @@ def browse_loop(run, input_line=input) -> None:
                 position = int(canon[1:]) if canon[1:].isdigit() else 0
                 if not 1 <= position <= len(alerts):
                     cli.errors.print(
-                        f"[red]no alert {word}[/red]  "
+                        f"[red]no alert {cli.safe(word)}[/red]  "
                         f"{session_handle} holds A1..A{len(alerts)}"
                     )
                     continue
@@ -142,7 +142,7 @@ def browse_loop(run, input_line=input) -> None:
                 continue
 
             cli.errors.print(
-                f"[red]unknown input {word!r}[/red]  handles, review, b, or q"
+                f"[red]unknown input {cli.safe(repr(word))}[/red]  handles, review, b, or q"
             )
     finally:
         cli.hints_enabled = True

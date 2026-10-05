@@ -274,6 +274,8 @@ def aminer_log_resources(record: dict) -> list[str]:
         resources = [single] if single else []
     if isinstance(resources, str):
         resources = [resources]
+    if not isinstance(resources, list):
+        return []
     return [str(resource) for resource in resources]
 
 
@@ -301,6 +303,19 @@ def aminer_host_candidates(record: dict) -> set[str]:
             candidates.add(match.group(1))
 
     return candidates
+
+
+def _metricbeat_cpu_pct(embedded: object, key: str) -> float:
+    value = embedded
+    for step in ("system", "cpu", key, "pct"):
+        if not isinstance(value, dict):
+            return float("nan")
+        value = value.get(step)
+    # metricbeat writes these as a 0-1 fraction despite the pct name
+    try:
+        return float(value) * 100
+    except (TypeError, ValueError):
+        return float("nan")
 
 
 def extract_aminer_fields(
@@ -366,14 +381,8 @@ def extract_aminer_fields(
             embedded = json.loads(raw)
         except (json.JSONDecodeError, RecursionError):
             embedded = {}
-        cpu = embedded.get("system", {}).get("cpu", {})
-        total = cpu.get("total", {}).get("pct")
-        nice = cpu.get("nice", {}).get("pct")
-        # metricbeat writes these as a 0-1 fraction despite the pct name
-        if total is not None:
-            cpu_total_pct = float(total) * 100
-        if nice is not None:
-            cpu_nice_pct = float(nice) * 100
+        cpu_total_pct = _metricbeat_cpu_pct(embedded, "total")
+        cpu_nice_pct = _metricbeat_cpu_pct(embedded, "nice")
 
     source_user = ""
     target_user = ""
@@ -421,9 +430,7 @@ def extract_aminer_fields(
         affected_log_frequencies=";".join(
             str(value) for value in analysis.get("AffectedLogAtomFrequencies") or []
         ),
-        log_resource=";".join(
-            str(resource) for resource in log_data.get("LogResources") or []
-        ),
+        log_resource=";".join(aminer_log_resources(record)),
         log_lines_count=optional_float(log_data.get("LogLinesCount")),
         critical_value=optional_float(analysis.get("CriticalValue")),
         probability_threshold=optional_float(
@@ -734,8 +741,10 @@ def read_family_record(record: dict, family: str) -> tuple[dict, str] | None:
             return None
         if "AnalysisComponentName" not in analysis:
             return None
-        if not log_data.get("RawLogData") or not log_data.get("Timestamps"):
-            return None
+        for key in ("RawLogData", "Timestamps"):
+            value = log_data.get(key)
+            if not isinstance(value, list) or not value:
+                return None
         return record, "aminer"
     if family == SURICATA_FAMILY:
         wrapped = as_wrapped_suricata(record)
