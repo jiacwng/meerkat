@@ -9,7 +9,7 @@
 <h1 align="center">meerkat</h1>
 
 <p align="center">
-  <strong>ML-assisted alert triage for multi-detector SOC data.</strong>
+  <strong>End-of-day alert triage for Wazuh.</strong>
 </p>
 
 <p align="center">
@@ -30,14 +30,19 @@
 
 ## Overview
 
-Wazuh, Suricata and a log anomaly detector each raise their own alerts, tens
-of thousands a day, on severity scales that do not compare, and none ranks
-the others. Meerkat scores the day's alerts and builds a review queue sized
-to the time a team has.
+Meerkat reads a finished day of Wazuh alerts and builds a short review queue
+for the next morning. Live monitoring handles urgent alerts as they fire.
+Meerkat is the second pass over the whole day. It finds what a live shift
+misses: one rule firing quietly on a machine for hours, or a host moving
+through several ATT&CK tactics in one day.
 
-Commercial stacks group alerts into incidents before ranking them (Microsoft
-Sentinel, AIP's GraphWeaver). An open-source detector stack has no such layer,
-which leaves the question:
+Wazuh raises tens of thousands of alerts a day, on severity levels that do not
+compare across rules. Suricata alerts arrive inside the Wazuh feed. AMiner, a
+log anomaly detector, is an optional second source.
+
+Commercial stacks group alerts into incidents before ranking them, as
+Microsoft Sentinel and Defender XDR do. Wazuh has no such layer, which leaves
+the question:
 
 > **What should one item in the review queue be, so that limited review
 > reaches as much of the attack as possible?**
@@ -99,7 +104,8 @@ Review queue (top 10 per day, 2022-01-21)  |  F1 = top priority
 ```bash
 meerkat inventory        # asset inventory from your alerts, once
 meerkat check            # what triage will see
-meerkat triage           # score a batch into a run
+meerkat pull --day 2026-10-06 --input alerts/2026-10-06  # each morning, yesterday
+meerkat triage --input alerts/2026-10-06                 # score the day into a run
 meerkat browse           # work the queue, record decisions
 meerkat export decisions # the review pass as a grid
 meerkat retrain --incidents tickets.csv  # refit on your own history
@@ -121,7 +127,8 @@ eighth.
 
 Before any ranking, the grouping does most of the reduction: an average
 company-day of 56,899 alerts becomes 78 review items, and the item count stays
-between 59 and 86 while daily volume ranges from 9,012 to 109,497.
+between 59 and 86 while the average day per network ranges from 9,012 to
+109,497 alerts.
 
 One queue item is a family: every alert of one rule, on one machine, over one
 day. The key keeps the item uniform, so one judgement usually settles it, and
@@ -140,19 +147,25 @@ At ten items a day, Meerkat reaches 58; the detectors' own severity ordering
 reaches 33, at a similar reading cost. Full tables and every baseline:
 [bench/README.md](bench/README.md).
 
+The busiest day in the test data, 453,697 alerts, triages in 72 seconds with
+1.1 GB of memory on a machine with 12 cores and 7 GB of memory.
+
 The [technical report](docs/report/meerkat.pdf) covers the method and the
 limits of the evaluation.
 
 ## Limitations
 
-- The headline results come from one simulated testbed whose networks share an attack script; a second testbed (CAM-LDS) cross-checks the transfer of the ranking weights only. Neither establishes how the tool performs in production.
-- An attack that trips the same rule as the surrounding noise, at the same
-  severity and mixed in time with it, leaves nothing to separate.
-- Ranking is by likelihood alone. Criticality is shown and filtered on but
-  never changes the order, so a critical server and a spare workstation
-  showing identical activity score the same.
-- Triage runs in batches, one complete day at a time. A real SOC works in
-  shifts on a live stream, and meerkat does not fit that schedule.
+- The results come from one simulated testbed whose networks share an attack
+  script. A second testbed (CAM-LDS) checks the transfer of the ranking weights
+  only. Neither shows how the tool performs in production.
+- A new site starts with the model trained on that testbed. Training on its
+  own alerts needs a record of past incidents.
+- An attack that fires the same rule as everyday noise, at the same severity
+  and the same hours, gives meerkat nothing to tell them apart. It ranks with
+  the noise.
+- Ranking is by likelihood alone. Criticality and ATT&CK tactics are shown and
+  filtered on but never change the order. The shipped ATT&CK mapping was built
+  from the test data, so a score that used it could not be tested fairly.
 - Wazuh, Suricata and AMiner are supported. Another detector needs an adapter.
 - Retraining is only as good as the incident records a company can supply, and
   the shipped ranking weights stay unless `--refit-ranking-weights` beats them
@@ -161,8 +174,8 @@ limits of the evaluation.
 
 ## Reference
 
-- [Manual](docs/manual.md) — install, inputs, commands, the model
-- [Benchmark](bench/README.md) — reproduce the results table
+- [Manual](docs/manual.md): install, inputs, commands, the model
+- [Benchmark](bench/README.md): reproduce the results table
 
 Cite the AIT Alert Data Set if you publish these numbers; `CITATION.cff` has
 the entries. MIT licensed, see [LICENSE](LICENSE); [NOTICE](NOTICE) carries
