@@ -17,7 +17,7 @@ from core.inventory import load_inventory
 from core.roles import CANONICAL_ROLES, LEGACY_ROLE_ALIASES, canonicalize
 
 
-class AttackStoryTests(unittest.TestCase):
+class AttackModuleTests(unittest.TestCase):
     def test_module_import_does_not_depend_on_working_directory(self):
         # the module reads its JSON mappings at import, so the path resolves
         # from the module file rather than wherever the shell happens to be
@@ -35,54 +35,6 @@ class AttackStoryTests(unittest.TestCase):
             )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-
-    def test_story_represents_zero_one_and_multiple_tactic_hosts(self):
-        # the story is per host and ordered by time, so the t=3 alert's two
-        # tactics both land before t=5 and an unmapped host stays empty
-        alerts = pd.DataFrame(
-            {
-                "host": ["unmapped", "first", "progress", "progress"],
-                "timestamp": [1.0, 2.0, 5.0, 3.0],
-                "tactics": [
-                    (),
-                    ("Execution",),
-                    ("Execution",),
-                    ("Reconnaissance", "Discovery"),
-                ],
-            }
-        )
-
-        story = attack_mapping.attack_story(alerts)
-
-        self.assertEqual(story["unmapped"], [])
-        self.assertEqual(story["first"], [(2.0, "Execution")])
-        self.assertEqual(
-            story["progress"],
-            [
-                (3.0, "Reconnaissance"),
-                (3.0, "Discovery"),
-                (5.0, "Execution"),
-            ],
-        )
-
-    def test_alert_context_does_not_include_future_tactics(self):
-        # the panel shows what led up to an alert, so a tactic seen after its
-        # timestamp would read as evidence nobody had at the time
-        alerts = pd.DataFrame(
-            {
-                "host": ["server-a", "server-a", "server-b"],
-                "timestamp": [1.0, 3.0, 1.5],
-                "tactics": [
-                    ("Reconnaissance",),
-                    ("Credential Access",),
-                    ("Execution",),
-                ],
-            }
-        )
-
-        context = attack_mapping.alert_context(alerts, "server-a", 2.0)
-
-        self.assertEqual(context, [(1.0, "Reconnaissance")])
 
     def test_coverage_counts_every_tactic_on_a_multi_tactic_alert(self):
         # one alert can map to two tactics and both count, and a tactic

@@ -567,6 +567,7 @@ def one_family_run():
     alerts = pd.DataFrame([{
         "timestamp": 0.0,
         "host": BREAKS_MARKUP,
+        "entity_id": f"10.0.0.1 {BREAKS_MARKUP}",
         "name": FORGES_A_LINK,
         "rule_id": FORGES_A_LINK,
         "detector_source": "wazuh",

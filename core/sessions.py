@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from core.features import standardize_severity
-from core.inventory import Inventory
+from core.inventory import UNSET, Inventory
 
 SECONDS_PER_DAY = 86400.0
 SESSION_GAP_S = 600.0
@@ -70,6 +70,11 @@ def _split_values(values: pd.Series) -> frozenset[str]:
 def _asset_roles(entity_id: str, inventory: Inventory) -> tuple[str, ...]:
     asset = inventory.assets_by_ip.get(entity_id)
     return asset.groups if asset else ()
+
+
+def _asset_criticality(entity_id: str, inventory: Inventory) -> str:
+    asset = inventory.assets_by_ip.get(entity_id)
+    return asset.criticality if asset else UNSET
 
 
 def session_detectors(pair_counts: pd.Series) -> pd.Series:
@@ -128,6 +133,10 @@ def build_sessions(
         _asset_roles(str(entity), inventory)
         for entity in work["entity_id"]
     ]
+    work["_asset_criticality"] = [
+        _asset_criticality(str(entity), inventory)
+        for entity in work["entity_id"]
+    ]
     work["_pair"] = list(zip(
         work["detector_source"].astype(str), work["rule_id"].astype(str)
     ))
@@ -157,6 +166,7 @@ def build_sessions(
         technique_id_set=("native_technique_ids", _split_values),
         rule_group_set=("rule_groups", _split_values),
         asset_roles=("_asset_roles", "first"),
+        criticality=("_asset_criticality", "first"),
         alert_rows=("_alert_row", list),
         pair_counts=("_pair", _pair_counts),
     ).reset_index()
@@ -232,6 +242,7 @@ def build_families(scored_sessions: pd.DataFrame) -> pd.DataFrame:
         labelled_alert_count=("labelled_alert_count", "sum"),
         alert_rows=("alert_rows", _flatten),
         asset_roles=("asset_roles", "first"),
+        criticality=("criticality", "first"),
         detectors_on_entity=("detectors_on_entity", "first"),
         groups_on_entity=("groups_on_entity", "first"),
         log_alerts_on_entity=("log_alerts_on_entity", "first"),

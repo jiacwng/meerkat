@@ -2,8 +2,8 @@
 
 Public API:
     map_alert(detector, rule_id, native_ids) -> AlertMapping
-    attack_story(df)                        -> per-host tactic timeline
-    alert_context(df, host, timestamp)      -> one alert's known tactic history
+    with_local_mappings(path)               -> shipped mapping, local file on top
+    host_chain(timestamps, tactics)         -> one host-day's ATT&CK chain
     tactic_coverage(tactics)                -> counts across all tactics
 """
 
@@ -43,8 +43,22 @@ ATTACK_VERSION = ATTACK_RELEASE.split(".")[0]   # navigator layers take the majo
 
 
 def load_detection_mappings(path: Traversable | Path) -> dict[str, dict[str, list[str]]]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    mappings = {k: v for k, v in raw.items() if not k.startswith("_")}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{path.name} is not valid JSON: {error.msg}") from error
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path.name} must map a detector to its rules")
+    mappings = {k: v for k, v in raw.items() if not str(k).startswith("_")}
+    for detector, rules in mappings.items():
+        if not isinstance(rules, dict) or not all(
+            isinstance(ids, list) and all(isinstance(i, str) for i in ids)
+            for ids in rules.values()
+        ):
+            raise ValueError(
+                f"{path.name}: {detector} must map each rule id to a list of "
+                "technique ids"
+            )
 
     known = ATTACK_LOOKUP["techniques"]
     unknown = set()
@@ -57,12 +71,22 @@ def load_detection_mappings(path: Traversable | Path) -> dict[str, dict[str, lis
     # configured IDs must exist, detector IDs may be newer than our lookup
     if unknown:
         raise ValueError(
-            f"unknown configured ATT&CK techniques: {sorted(unknown)}"
+            f"{path.name}: unknown ATT&CK techniques {sorted(unknown)}"
         )
     return mappings
 
 
 DETECTION_MAPPINGS = load_detection_mappings(DATA_DIR / "detection_mappings.json")
+
+
+def with_local_mappings(path: Path | None) -> dict[str, dict[str, list[str]]]:
+    # rule by rule: a local entry replaces the shipped one, every other rule stays
+    if path is None:
+        return DETECTION_MAPPINGS
+    merged = {detector: dict(rules) for detector, rules in DETECTION_MAPPINGS.items()}
+    for detector, rules in load_detection_mappings(path).items():
+        merged.setdefault(detector, {}).update(rules)
+    return merged
 
 
 def technique_name(technique_id: str) -> str:
@@ -95,8 +119,13 @@ def tactics_for_techniques(technique_ids: str) -> tuple[str, ...]:
     return tuple(ordered)
 
 
-def map_alert(detector_source: str, rule_id: str, native_technique_ids: str) -> AlertMapping:
-    configured = DETECTION_MAPPINGS.get(detector_source, {}).get(rule_id)
+def map_alert(
+    detector_source: str,
+    rule_id: str,
+    native_technique_ids: str,
+    mappings: dict[str, dict[str, list[str]]] = DETECTION_MAPPINGS,
+) -> AlertMapping:
+    configured = mappings.get(detector_source, {}).get(rule_id)
 
     if configured is not None:
         if configured:
@@ -112,34 +141,44 @@ def map_alert(detector_source: str, rule_id: str, native_technique_ids: str) -> 
     return AlertMapping("", (), "")
 
 
-def attack_story(df: pd.DataFrame) -> dict[str, list[tuple[float, str]]]:
-    story: dict[str, list[tuple[float, str]]] = {}
+@dataclass
+class HostChain:
+    steps: list[tuple[str, float]]   # tactic and the time the chain first reached it
+    off_chain: tuple[str, ...]       # tactics seen that day but not on the chain
 
-    for host, host_alerts in df.groupby("host", sort=False):
-        rows_with_tactics = host_alerts[host_alerts["tactics"].map(bool)]
-        expanded = rows_with_tactics.explode("tactics")
-        first_seen = expanded.groupby("tactics")["timestamp"].min()
-
-        timeline = []
-        for tactic, timestamp in first_seen.items():
-            timeline.append((float(timestamp), str(tactic)))
-
-        # two tactics can land on the same instant, and matrix order gives that
-        # tie one answer instead of whatever order the groupby happened to emit
-        timeline.sort(key=lambda step: (step[0], TACTIC_ORDER.index(step[1])))
-        story[host] = timeline
-
-    return story
+    @property
+    def length(self) -> int:
+        return len(self.steps)
 
 
-def alert_context(
-    df: pd.DataFrame,
-    host: str,
-    timestamp: float,
-) -> list[tuple[float, str]]:
-    # only alerts up to this timestamp, a live analyst cannot see later ones
-    known_rows = df[(df["host"] == host) & (df["timestamp"] <= timestamp)]
-    return attack_story(known_rows).get(host, [])
+# After RapSheet (Hassan et al., IEEE S&P 2020): the longest time-ordered run of
+# alerts whose tactics never go back in matrix order. One alert gives at most one
+# tactic, and the length counts distinct tactics, so it is a longest increasing
+# subsequence over tactic positions, at most 15 states per alert.
+def host_chain(timestamps, tactics) -> HostChain:
+    position = {tactic: index for index, tactic in enumerate(TACTIC_ORDER)}
+    best: list[list[tuple[str, float]]] = [[] for _ in TACTIC_ORDER]
+    seen: set[str] = set()
+    for timestamp, alert_tactics in sorted(
+        zip(timestamps, tactics), key=lambda pair: pair[0]
+    ):
+        known = [tactic for tactic in alert_tactics if tactic in position]
+        seen.update(known)
+        # extend from the state before this alert, so one alert cannot chain
+        # two of its own tactics
+        before = [list(chain) for chain in best]
+        for tactic in known:
+            index = position[tactic]
+            longest = max(before[:index], key=len, default=[])
+            if len(longest) + 1 > len(best[index]):
+                best[index] = longest + [(tactic, float(timestamp))]
+    chain = max(best, key=len)
+    on_chain = {tactic for tactic, _ in chain}
+    off_chain = tuple(
+        tactic for tactic in TACTIC_ORDER if tactic in seen and tactic not in on_chain
+    )
+    return HostChain(chain, off_chain)
+
 
 def tactic_coverage(tactics: pd.Series) -> dict[str, int]:
     # empty tuples become NaN when exploded, hence the dropna

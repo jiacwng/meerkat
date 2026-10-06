@@ -33,6 +33,7 @@ def make_alerts() -> pd.DataFrame:
         {
             "timestamp": 100.0, "detector_source": "wazuh",
             "name": "Web server 400 error", "host": "intranet-server",
+            "entity_id": "10.0.0.5",
             "source_file": "acme_wazuh.json", "source_position": 10,
             "rule_id": "31101", "severity": 5.0, "alert_category": "",
             "http_status": 400.0, "http_method": "GET", "web_request": "/a",
@@ -41,6 +42,7 @@ def make_alerts() -> pd.DataFrame:
         {
             "timestamp": 160.0, "detector_source": "wazuh",
             "name": "Web server 400 error", "host": "intranet-server",
+            "entity_id": "10.0.0.5",
             "source_file": "acme_wazuh.json", "source_position": 11,
             "rule_id": "31101", "severity": 5.0, "alert_category": "",
             "http_status": 404.0, "http_method": "GET", "web_request": "/b",
@@ -49,6 +51,7 @@ def make_alerts() -> pd.DataFrame:
         {
             "timestamp": 900.0, "detector_source": "wazuh",
             "name": "Web server 400 error", "host": "intranet-server",
+            "entity_id": "10.0.0.5",
             "source_file": "acme_wazuh.json", "source_position": 40,
             "rule_id": "31101", "severity": 5.0, "alert_category": "",
             "http_status": 400.0, "http_method": "GET", "web_request": "/c",
@@ -57,6 +60,7 @@ def make_alerts() -> pd.DataFrame:
         {
             "timestamp": 500.0, "detector_source": "suricata",
             "name": "ET SCAN probe", "host": "intranet-server",
+            "entity_id": "10.0.0.5",
             "source_file": "acme_suricata.json", "source_position": 3,
             "rule_id": "2001", "severity": 2.0, "alert_category": "recon",
             "http_status": float("nan"), "http_method": "", "web_request": "",
@@ -156,6 +160,54 @@ class HandleTests(unittest.TestCase):
         top = cli.decorate_families(families, alerts, budget=1).iloc[0]
         self.assertEqual(top["host_label"], "10.0.0.5")
         self.assertEqual(top["title"], "")
+
+
+class NarrowQueueTests(unittest.TestCase):
+    def render(self, width: int) -> str:
+        from rich.console import Console
+
+        decorated = cli.decorate_families(make_families(), make_alerts(), budget=2)
+        with mock.patch.object(cli, "console", Console(width=width)):
+            with cli.console.capture() as capture:
+                cli.render_queue(decorated.assign(chain=1), {}, "Review queue")
+        return capture.get()
+
+    def test_a_wide_terminal_shows_every_column(self):
+        text = self.render(240)
+        for name in ("handle", "why", "chain", "esc%", "review"):
+            self.assertIn(name, text)
+
+    def test_a_narrow_terminal_drops_the_optional_columns_and_keeps_the_handle(self):
+        text = self.render(120)
+        self.assertIn("handle", text)
+        self.assertIn("F1", text)
+        for name in ("why", "chain", "esc%"):
+            self.assertNotIn(name, text)
+
+
+class ClosedPipeTests(unittest.TestCase):
+    def test_a_reader_that_stops_early_is_an_ordinary_exit(self):
+        import subprocess
+        import sys
+
+        runs = Path(tempfile.mkdtemp())
+        alerts = make_alerts().assign(mapping_source="rule")
+        decorated = cli.decorate_families(make_families(), alerts, budget=2)
+        cli.save_run(runs, "acme-1", {"company": "acme", "budget": 2},
+                     decorated, make_sessions(), alerts)
+        for command in (["queue"], ["queue", "--json"], ["attack", "--json"]):
+            with self.subTest(command=command):
+                process = subprocess.Popen(
+                    [sys.executable, "-m", "meerkat.cli", *command,
+                     "--runs-dir", str(runs)],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    cwd=Path(__file__).resolve().parents[1],
+                )
+                process.stdout.readline()
+                process.stdout.close()
+                stderr = process.stderr.read().decode()
+                self.assertEqual(process.wait(), 0, stderr)
+                self.assertNotIn("Exception", stderr)
 
 
 class RunRoundTripTests(unittest.TestCase):
@@ -642,7 +694,7 @@ class PanelTests(unittest.TestCase):
             text = self._capture(
                 lambda: cli.render_family(run, run.family_by_handle("F001"), {})
             )
-            self.assertIn("Related ATT&CK observations", text)
+            self.assertIn("ATT&CK chain on this host", text)
             self.assertIn("Reconnaissance", text)
             self.assertIn("Related families on this host", text)
 
@@ -1978,6 +2030,7 @@ def alerts(**overrides) -> pd.DataFrame:
     row = {
         "timestamp": 100.0, "detector_source": "wazuh",
         "name": "Web server 400 error", "host": "intranet-server",
+            "entity_id": "10.0.0.5",
         "source_file": "acme_wazuh.json", "source_position": 10,
         "rule_id": "31101", "severity": 5.0, "alert_category": "",
         "http_status": 400.0, "http_method": "GET", "web_request": "/a",

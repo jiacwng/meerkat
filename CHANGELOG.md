@@ -8,6 +8,31 @@
   Wazuh indexer over HTTPS or from a local `alerts.json`. The window is one UTC
   day, or an explicit range in ISO 8601 or epoch seconds. Credentials come from
   the environment or `meerkat.toml`.
+- An asset can carry a criticality: `critical`, `high`, `medium` or `low`. The
+  queue shows it, `inspect` shows it, and `queue --criticality TIER` filters on
+  it. It never changes the score. `check` warns about assets without one and
+  refuses an unknown value.
+- The queue has a `chain` column and `inspect` an ATT&CK chain panel: the
+  longest time-ordered run of a host's tactics that day that never goes back in
+  matrix order, after RapSheet (Hassan et al., IEEE S&P 2020). `queue --tactic
+  NAME` lists families whose alerts map to a tactic.
+- `inspect` lists the largest contributions to a family's score as shares, and
+  the queue's `why` column names the largest one after the session scores. A
+  run stores the contributions, and they add up to the score.
+- `meerkat attack` lists every rule in a run with its alert count, its mapping
+  source and its techniques, unmapped rules first. `--json` for scripts.
+- `check` reports the share of alerts with an ATT&CK tactic per detector and
+  the five busiest rules without one.
+- A local mapping file adds or corrects rules: `--attack-mappings FILE`,
+  `MEERKAT_ATTACK_MAPPINGS` or `attack_mappings` in `meerkat.toml`. A local
+  rule replaces the shipped one. `run.json` records the file and its sha256.
+- On a narrow terminal the queue drops `why`, `chain` and `esc%`, then `start`
+  and `crit`.
+
+### Breaking
+
+- `inspect` replaces "Related ATT&CK observations" with "ATT&CK chain on this
+  host", computed over the whole host and day.
 
 ### Security
 
@@ -34,6 +59,8 @@
   partial file.
 - A session review no longer replaces the family decision in the queue.
   Lines in `reviews.jsonl` without a `family_id` or a `decision` are skipped.
+- `meerkat queue | head` exits 0. It exited 1, and 120 after `--json`.
+- A run saved by another pandas version reports that, instead of a traceback.
 - An AMiner record no longer stops the ingest. Embedded JSON of an unexpected
   shape leaves the CPU fields empty. A record whose `RawLogData` or
   `Timestamps` is not a list is skipped. `LogResources` given as one string is
