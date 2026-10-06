@@ -71,6 +71,16 @@ class RunUnpicklerTests(unittest.TestCase):
         self.assertIn("blocked", str(caught.exception))
 
 
+class RunVersionTests(unittest.TestCase):
+    def test_a_frame_this_pandas_cannot_rebuild_is_a_clean_error(self):
+        path = Path(tempfile.mkdtemp()) / "families.pkl"
+        pd.DataFrame({"a": [1]}).to_pickle(path)
+        with patch.object(pd.DataFrame, "__setstate__", side_effect=TypeError("x")):
+            with self.assertRaises(ValueError) as caught:
+                _read_run_frame(path)
+        self.assertIn("another pandas version", str(caught.exception))
+
+
 class MarkupTests(unittest.TestCase):
     def test_a_blocked_name_with_markup_exits_cleanly(self):
         runs = Path(tempfile.mkdtemp())

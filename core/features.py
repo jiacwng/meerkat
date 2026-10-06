@@ -17,6 +17,10 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+# a run stores each family's re-ranker contributions as numeric columns under
+# this prefix; it lives here so the read commands find it without sklearn
+CONTRIBUTION_PREFIX = "contribution_"
+
 SESSION_NUMERIC_FEATURES = (
     "log_size",
     "duration_s",

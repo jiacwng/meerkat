@@ -2,14 +2,14 @@
 
 Public API:
     daily_queue(families, k) -> the k families an analyst reviews that day
-    enrich_alerts(frame)     -> alerts with ATT&CK mapping columns
+    enrich_alerts(frame, mappings) -> alerts with ATT&CK mapping columns
 """
 
 from __future__ import annotations
 
 import pandas as pd
 
-from core.attack_mapping import map_alert
+from core.attack_mapping import DETECTION_MAPPINGS, map_alert
 
 
 def queue_order(families: pd.DataFrame) -> pd.DataFrame:
@@ -39,13 +39,18 @@ def daily_queue(families: pd.DataFrame, k: int = 25) -> pd.DataFrame:
     )
 
 
-def enrich_alerts(frame: pd.DataFrame) -> pd.DataFrame:
-    mappings = [
-        map_alert(row.detector_source, row.rule_id, row.native_technique_ids)
+def enrich_alerts(
+    frame: pd.DataFrame,
+    mappings: dict[str, dict[str, list[str]]] = DETECTION_MAPPINGS,
+) -> pd.DataFrame:
+    mapped = [
+        map_alert(
+            row.detector_source, row.rule_id, row.native_technique_ids, mappings
+        )
         for row in frame.itertuples(index=False)
     ]
     enriched = frame.copy()
-    enriched["technique_ids"] = [mapping.technique_ids for mapping in mappings]
-    enriched["tactics"] = [mapping.tactics for mapping in mappings]
-    enriched["mapping_source"] = [mapping.source for mapping in mappings]
+    enriched["technique_ids"] = [mapping.technique_ids for mapping in mapped]
+    enriched["tactics"] = [mapping.tactics for mapping in mapped]
+    enriched["mapping_source"] = [mapping.source for mapping in mapped]
     return enriched

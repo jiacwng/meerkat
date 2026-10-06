@@ -29,6 +29,10 @@ AIT Austrian Institute of Technology.
   License Creative Commons Attribution 4.0 International (CC BY 4.0)
           https://creativecommons.org/licenses/by/4.0/
 
+The criticality tiers in data/raw/inventory/russellmitchell.json are ours, not
+part of the AIT dataset. Firewalls and DNS servers are critical, other servers
+high, employee machines medium, and external users and external mail low.
+
 The full data set holds alerts from eight simulated company networks. One of the
 eight, russellmitchell, is included here so that `meerkat demo` runs from a clone
 with no download. The other seven stay in the Zenodo record and are needed to

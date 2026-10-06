@@ -13,12 +13,18 @@ from pathlib import Path
 
 from core.roles import canonicalize
 
+# Splunk ES asset priority, with "unset" for its "unknown". The queue shows and
+# filters on it; nothing that scores reads it.
+CRITICALITY_LEVELS = ("critical", "high", "medium", "low")
+UNSET = "unset"
+
 
 @dataclass(frozen=True)
 class Asset:
     hostname: str
     ip_addresses: tuple[str, ...]
     groups: tuple[str, ...]
+    criticality: str = UNSET
 
 
 @dataclass(frozen=True)
@@ -28,6 +34,7 @@ class Inventory:
     ip_by_hostname: dict[str, str]
     # names outside CANONICAL_ROLES, reported rather than fatal
     unknown_roles: tuple[str, ...] = ()
+    unknown_criticalities: tuple[str, ...] = ()
 
     def __contains__(self, ip: str) -> bool:
         return ip in self.assets_by_ip
@@ -38,6 +45,26 @@ class Inventory:
             for asset in self.assets_by_ip.values()
             if not asset.groups
         }))
+
+    def assets_without_criticality(self) -> tuple[str, ...]:
+        return tuple(sorted({
+            asset.hostname
+            for asset in self.assets_by_ip.values()
+            if asset.criticality == UNSET
+        }))
+
+
+def _read_criticality(value: object) -> tuple[str, str | None]:
+    if value is None:
+        return UNSET, None
+    if not isinstance(value, str):
+        return UNSET, repr(value)
+    tier = value.strip().lower()
+    if tier in ("", UNSET):
+        return UNSET, None
+    if tier in CRITICALITY_LEVELS:
+        return tier, None
+    return UNSET, value
 
 
 def load_inventory(path: Path) -> Inventory:
@@ -56,6 +83,7 @@ def load_inventory(path: Path) -> Inventory:
     ip_by_hostname = {}
 
     unknown_roles: set[str] = set()
+    unknown_criticalities: set[str] = set()
     for item in config["assets"]:
         if not isinstance(item, dict):
             raise ValueError(
@@ -80,11 +108,15 @@ def load_inventory(path: Path) -> Inventory:
         # track of anything unplaced
         groups, unplaced = canonicalize(raw_groups)
         unknown_roles.update(unplaced)
+        criticality, unknown = _read_criticality(item.get("criticality"))
+        if unknown is not None:
+            unknown_criticalities.add(unknown)
 
         asset = Asset(
             hostname=str(item["hostname"]),
             ip_addresses=tuple(str(ip) for ip in item["ip_addresses"]),
             groups=groups,
+            criticality=criticality,
         )
         for ip in asset.ip_addresses:
             assets_by_ip[ip] = asset
@@ -100,6 +132,7 @@ def load_inventory(path: Path) -> Inventory:
         assets_by_ip=assets_by_ip,
         ip_by_hostname=ip_by_hostname,
         unknown_roles=tuple(sorted(unknown_roles)),
+        unknown_criticalities=tuple(sorted(unknown_criticalities)),
     )
 
 

@@ -19,6 +19,7 @@ import sys
 import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import cached_property
 from itertools import islice
 from pathlib import Path
 
@@ -29,9 +30,13 @@ from rich.markup import escape
 from rich.table import Table
 
 from core.attack_mapping import (
-    attack_story,
+    DETECTION_MAPPINGS,
+    TACTIC_ORDER,
+    HostChain,
     export_navigator_layer,
+    host_chain,
     technique_name,
+    with_local_mappings,
 )
 from core.drift import (
     PSI_MAJOR,
@@ -39,7 +44,7 @@ from core.drift import (
     compare_profile,
     unseen_rule_share,
 )
-from core.features import build_session_feature_matrix
+from core.features import CONTRIBUTION_PREFIX, build_session_feature_matrix
 from core.incidents import (
     assign_bag_priors,
     assign_reviewed,
@@ -48,7 +53,7 @@ from core.incidents import (
     load_reviewed_periods,
     unresolved_hosts,
 )
-from core.inventory import load_inventory
+from core.inventory import CRITICALITY_LEVELS, UNSET, load_inventory
 from core.normalize import (
     AMINER_FAMILY,
     SURICATA_FAMILY,
@@ -111,9 +116,18 @@ def safe(value: object) -> str:
     return escape(_CONTROL.sub("", str(value)))
 
 
-console = Console()
+class _Console(Console):
+    # rich exits 1 when the reader closes the pipe; `queue | head` is a normal exit
+    def on_broken_pipe(self) -> None:
+        import os
+        self.quiet = True
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        raise SystemExit(0)
+
+
+console = _Console()
 # errors go to stderr so `meerkat queue --json | jq` stays parseable when one fails
-errors = Console(stderr=True)
+errors = _Console(stderr=True)
 
 # 0 success, 2 argparse usage. A script has to tell a refused retrain, which is the
 # gate working, apart from a crash, so declining gets its own code.
@@ -248,6 +262,30 @@ class RunState:
     def session_alerts(self, session: pd.Series) -> pd.DataFrame:
         return self.alerts.iloc[list(session["alert_rows"])]
 
+    @cached_property
+    def host_chains(self) -> dict[tuple[str, int], HostChain]:
+        mapped = self.alerts[self.alerts["tactics"].map(bool)]
+        days = (mapped["timestamp"] // SECONDS_PER_DAY).astype(int)
+        hosts = mapped["entity_id"].astype(str)
+        return {
+            (host, int(day)): host_chain(group["timestamp"], group["tactics"])
+            for (host, day), group in mapped.groupby([hosts, days], sort=False)
+        }
+
+    def host_chain(self, family: pd.Series) -> HostChain:
+        key = (str(family["entity_id"]), int(family["day"]))
+        return self.host_chains.get(key, HostChain([], ()))
+
+    def with_chain(self, families: pd.DataFrame) -> pd.DataFrame:
+        lengths = [self.host_chain(family).length for _, family in families.iterrows()]
+        return families.assign(chain=lengths)
+
+    def family_tactics(self, family: pd.Series) -> set[str]:
+        found: set[str] = set()
+        for tactics in self.family_alerts(family)["tactics"]:
+            found.update(tactics)
+        return found
+
     def related_families(self, family: pd.Series) -> pd.DataFrame:
         # other families on the same host, closest in time first, so a
         # corroborating detector on the same machine is one glance away
@@ -307,6 +345,11 @@ def _read_run_frame(path: Path) -> pd.DataFrame:
             return _RunUnpickler(handle).load()
     except (pickle.UnpicklingError, EOFError, AttributeError, ImportError) as error:
         raise ValueError(f"{path.name} is not a readable run file: {error}") from error
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"{path.name} was saved by another pandas version and cannot be "
+            f"read by pandas {pd.__version__}; re-run triage"
+        ) from error
 
 
 def save_run(
@@ -615,42 +658,88 @@ def _render_panels(alert_slice: pd.DataFrame) -> None:
         console.print()
 
 
-def _render_attack_observations(alert_slice: pd.DataFrame) -> None:
-    # host is a category over every hostname in the company, so cast it to a
-    # plain string first or the grouping walks empty categories and breaks
-    plain = alert_slice.assign(host=alert_slice["host"].astype(str))
-    story = attack_story(plain)
-    steps = [step for host_steps in story.values() for step in host_steps]
-    console.print("[bold cyan]Related ATT&CK observations[/bold cyan]")
-    if not steps:
-        console.print("  [dim]no mapped technique on these alerts[/dim]\n")
+def _render_host_chain(run: RunState, family: pd.Series) -> None:
+    chain = run.host_chain(family)
+    console.print("[bold cyan]ATT&CK chain on this host[/bold cyan]")
+    if not chain.steps:
+        console.print("  [dim]no mapped tactic on this host that day[/dim]\n")
         return
-    for host, host_steps in story.items():
-        if not host_steps:
+    width = max(len(tactic) for tactic, _ in chain.steps)
+    for step, (tactic, timestamp) in enumerate(chain.steps, start=1):
+        console.print(f"  {step}. {tactic.ljust(width)}  {fmt_time(timestamp)[11:]}")
+    if chain.off_chain:
+        console.print(f"  also seen off the chain: {', '.join(chain.off_chain)}")
+    console.print(
+        "  [dim]tactics mapped per alert; the chain orders them by time only[/dim]\n"
+    )
+
+
+# one phrase per re-ranker input. The three child session scores share one, so
+# they merge into a single line and cannot fill every slot on their own.
+SESSION_EVIDENCE = "session evidence"
+FAMILY_FEATURE_PHRASES = {
+    "child_score_max": SESSION_EVIDENCE,
+    "child_score_mean": SESSION_EVIDENCE,
+    "child_score_std": SESSION_EVIDENCE,
+    "n_child_sessions": "number of sessions",
+    "family_span_s": "time span",
+    "alert_count": "alert count",
+    "detectors_on_entity": "detectors on this host that day",
+    "groups_on_entity": "sessions on this host that day",
+    "log_alerts_on_entity": "alert volume on this host that day",
+    "detectors_nearby_10m": "detectors within 10 minutes",
+    "alert_category_count": "distinct alert categories",
+    "technique_count": "distinct ATT&CK techniques",
+    "rule_group_count": "distinct rule groups",
+}
+TOP_CONTRIBUTIONS = 5
+
+
+def feature_phrase(name: str) -> str:
+    if name.startswith("role_"):
+        return f"asset role {name[len('role_'):]}"
+    # a bundle with another schema still renders, under the column's own name
+    return FAMILY_FEATURE_PHRASES.get(name, name)
+
+
+def family_contributions(family: pd.Series) -> list[tuple[str, float]]:
+    # a role the host lacks still pushes through the scaler's mean, which reads
+    # as a reason about a role it does not have, so those stay out
+    roles = set(family.get("asset_roles") or ())
+    merged: dict[str, float] = {}
+    for column, value in family.items():
+        if not str(column).startswith(CONTRIBUTION_PREFIX):
             continue
-        chain = "  ->  ".join(
-            f"{tactic} ({fmt_time(timestamp)[11:]})"
-            for timestamp, tactic in host_steps
-        )
-        console.print(f"  {safe(host)}: {chain}")
-    console.print("  [dim]tactics mapped independently[/dim]\n")
+        name = str(column)[len(CONTRIBUTION_PREFIX):]
+        if name.startswith("role_") and name[len("role_"):] not in roles:
+            continue
+        phrase = feature_phrase(name)
+        merged[phrase] = merged.get(phrase, 0.0) + float(value)
+    return sorted(merged.items(), key=lambda item: abs(item[1]), reverse=True)
+
+
+def top_raise(family: pd.Series) -> str:
+    for phrase, value in family_contributions(family):
+        if value > 0 and phrase != SESSION_EVIDENCE:
+            return phrase
+    return ""
 
 
 def _render_why(family: pd.Series) -> None:
-    signals = [f"best child session score {family['child_score_max']:.2f}"]
-    nearby = int(family["detectors_nearby_10m"])
-    if nearby > 1:
-        signals.append(
-            f"{nearby} detectors active on this host within 10 minutes"
+    console.print("[bold cyan]Ranking signals, largest contributions[/bold cyan]")
+    contributions = family_contributions(family)
+    total = sum(abs(value) for _, value in contributions)
+    if not total:
+        console.print("  [dim]this run holds no contributions; re-run triage[/dim]\n")
+        return
+    shown = contributions[:TOP_CONTRIBUTIONS]
+    width = max(len(phrase) for phrase, _ in shown)
+    for phrase, value in shown:
+        direction = "raises" if value > 0 else "lowers"
+        console.print(
+            f"  {direction}  {phrase.ljust(width)}  {abs(value) / total:4.0%}"
         )
-    if int(family["technique_count"]) > 0:
-        signals.append(
-            f"maps to {int(family['technique_count'])} ATT&CK technique(s)"
-        )
-    console.print("[bold cyan]Ranking signals[/bold cyan]")
-    for signal in signals:
-        console.print(f"  - {signal}")
-    console.print()
+    console.print("  [dim]share of the total push on this family's score[/dim]\n")
 
 
 # fewer reviewed families than this in a band and no rate is shown: three
@@ -718,42 +807,90 @@ def bands_for(runs_dir: Path) -> dict[float, tuple[int, int]]:
     return _BANDS_CACHE[runs_dir]
 
 
+QUEUE_COLUMNS = (
+    ("handle", {"no_wrap": True, "min_width": 6}),
+    ("date", {"no_wrap": True}),
+    ("start", {"no_wrap": True}),
+    ("host", {"no_wrap": True, "max_width": 18, "overflow": "ellipsis"}),
+    ("crit", {"no_wrap": True}),
+    ("detector", {"no_wrap": True}),
+    ("finding", {"no_wrap": True, "max_width": 40, "overflow": "ellipsis"}),
+    ("why", {"no_wrap": True, "max_width": 28, "overflow": "ellipsis"}),
+    ("alerts", {"justify": "right", "no_wrap": True}),
+    ("chain", {"justify": "right", "no_wrap": True}),
+    ("score", {"justify": "right", "no_wrap": True, "min_width": 5}),
+    ("esc%", {"justify": "right", "no_wrap": True, "min_width": 7}),
+    ("review", {"no_wrap": True, "min_width": 6}),
+)
+# a terminal too narrow for every column drops these first, then the next set;
+# each stays one `inspect` away
+QUEUE_DROPPED_WHEN_NARROW = (
+    (),
+    ("why", "chain", "esc%"),
+    ("why", "chain", "esc%", "start", "crit"),
+)
+
+
+def _queue_table(title, rows, hidden) -> Table:
+    table = Table(title=f"{title}  |  F1 = top priority",
+                  title_justify="left", header_style="bold")
+    shown = [name not in hidden for name, _ in QUEUE_COLUMNS]
+    for (name, options), keep in zip(QUEUE_COLUMNS, shown):
+        if keep:
+            table.add_column(name, **options)
+    for cells in rows:
+        table.add_row(*(cell for cell, keep in zip(cells, shown) if keep))
+    return table
+
+
 def render_queue(
     families: pd.DataFrame,
     reviews: dict[str, dict],
     title: str,
     bands: dict[float, tuple[int, int]] | None = None,
 ) -> None:
-    table = Table(title=f"{title}  |  F1 = top priority",
-                  title_justify="left", header_style="bold")
-    table.add_column("handle", no_wrap=True, min_width=4)
-    table.add_column("date", no_wrap=True)
-    table.add_column("start", no_wrap=True)
-    table.add_column("host", no_wrap=True, max_width=18, overflow="ellipsis")
-    table.add_column("detector", no_wrap=True)
-    table.add_column("finding", no_wrap=True, max_width=40, overflow="ellipsis")
-    table.add_column("alerts", justify="right", no_wrap=True)
-    table.add_column("score", justify="right", no_wrap=True, min_width=5)
-    table.add_column("esc%", justify="right", no_wrap=True, min_width=7)
-    table.add_column("review", no_wrap=True, min_width=6)
+    from rich.measure import Measurement
+
     if not len(families):
         console.print(f"[dim]{title}: no families match[/dim]")
         return
+    rows = []
     for _, family in families.iterrows():
         review = reviews.get(family["family_id"], {})
-        table.add_row(
+        rows.append([
             family["handle"],
             fmt_date(family["day"]),
             fmt_time(family["start"])[11:16],
             safe(family["host_label"]),
+            _criticality_label(family),
             detector_label(family["detector_source"]),
             safe(family["title"] or family["rule_id"])[:40],
+            top_raise(family),
             str(int(family["alert_count"])),
+            str(int(family.get("chain", 0)) or ""),
             f"{family['ranking_score']:.2f}",
             esc_label(family["ranking_score"], bands),
             review.get("decision", ""),
-        )
+        ])
+    for hidden in QUEUE_DROPPED_WHEN_NARROW:
+        table = _queue_table(title, rows, hidden)
+        unbounded = console.options.update_width(10_000)
+        natural = Measurement.get(console, unbounded, table).maximum
+        if natural <= console.width:
+            break
     console.print(table)
+
+
+def _criticality(families: pd.DataFrame) -> pd.Series:
+    # a run saved before 1.2 has no column, which reads as every asset unset
+    if "criticality" not in families.columns:
+        return pd.Series(UNSET, index=families.index)
+    return families["criticality"].astype(str)
+
+
+def _criticality_label(family: pd.Series) -> str:
+    value = str(family.get("criticality", UNSET))
+    return "" if value == UNSET else value
 
 
 def family_heading(family: pd.Series) -> str:
@@ -777,6 +914,8 @@ def render_family(
     if family["asset_roles"]:
         # canonicalize() keeps only CANONICAL_ROLES, so these are ours
         console.print(f"  asset         : {', '.join(family['asset_roles'])}")
+    if _criticality_label(family):
+        console.print(f"  criticality   : {family['criticality']}")
     console.print(f"  rule          : {safe(family['rule_id'])}")
     console.print(
         f"  window        : {fmt_time(family['start'])}"
@@ -831,7 +970,7 @@ def render_family(
     if len(run.session_handles(family)) == 1:
         _render_panels(alert_slice)
 
-    _render_attack_observations(alert_slice)
+    _render_host_chain(run, family)
     _render_related(run, family)
 
 
@@ -1195,6 +1334,7 @@ def _score_company(
     event_csv_dir: Path | None,
     wazuh_file: Path | None = None,
     aminer_file: Path | None = None,
+    attack_mappings: dict = DETECTION_MAPPINGS,
 ):
     from core.scenario_eval import add_window_ids, score_sessions
 
@@ -1236,7 +1376,7 @@ def _score_company(
     # table share one row order and line up by position
     marked = add_window_ids(frame, windows)
     sessions = build_sessions(marked, company, inventory)
-    alerts = enrich_alerts(marked)
+    alerts = enrich_alerts(marked, attack_mappings)
     scored_sessions, families = score_sessions(bundle, sessions)
     return scored_sessions, families, alerts
 
@@ -1244,6 +1384,15 @@ def _score_company(
 # --------------------------------------------------------------------------
 # triage
 # --------------------------------------------------------------------------
+
+def _file_record(path: Path | None) -> dict | None:
+    if path is None:
+        return None
+    return {
+        "file": str(path),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
 
 def cmd_triage(args) -> None:
     _require_bundle(args.model)
@@ -1256,6 +1405,10 @@ def cmd_triage(args) -> None:
         errors.print(f"[red]{safe(error)}[/red]")
         raise SystemExit(EXIT_ERROR)
     bundle = _load_bundle(args.model)
+    mappings = _load_or_exit(
+        with_local_mappings, getattr(args, "attack_mappings", None),
+        "the local ATT&CK mapping",
+    )
     if not any(family == AMINER_FAMILY for _, family in alert_files):
         console.print(
             f"[yellow]no {_aminer_name(args, company)}[/yellow]  scoring wazuh "
@@ -1267,6 +1420,7 @@ def cmd_triage(args) -> None:
         bundle, args.input, company, args.inventory,
         getattr(args, "labels", None), getattr(args, "event_csv_dir", None),
         wazuh_file=args.wazuh_file, aminer_file=args.aminer_file,
+        attack_mappings=mappings,
     )
     families = decorate_families(families, alerts, args.budget)
 
@@ -1280,6 +1434,7 @@ def cmd_triage(args) -> None:
         "families": int(len(families)),
         "sessions": int(len(scored_sessions)),
         "alerts": int(len(alerts)),
+        "attack_mappings": _file_record(getattr(args, "attack_mappings", None)),
     }
     directory = save_run(
         args.runs_dir, run_id, meta, families, scored_sessions, alerts
@@ -1296,12 +1451,15 @@ def cmd_triage(args) -> None:
 # --------------------------------------------------------------------------
 
 def _select_families(
-    run, show_all, host, detector, rule, review_state, day=None
+    run, show_all, host, detector, rule, review_state, day=None,
+    criticality=None, tactic=None,
 ):
     # a filter narrows the whole run, not only the day's top-K, so "show me
     # everything on this host" reaches families below the queue line too. --day
     # is a different thing: it picks one day and keeps that day's top-K.
-    full_scope = show_all or any([host, detector, rule, review_state])
+    full_scope = show_all or any(
+        [host, detector, rule, review_state, criticality, tactic]
+    )
     families = run.families if full_scope else run.families[run.families["in_queue"]]
     if day:
         dates = families["day"].map(fmt_date)
@@ -1325,6 +1483,11 @@ def _select_families(
         families = families[
             families["rule_id"].astype(str).str.contains(rule, case=False, regex=False)
         ]
+    if criticality:
+        families = families[_criticality(families).eq(criticality)]
+    if tactic:
+        mapped = [tactic in run.family_tactics(family) for _, family in families.iterrows()]
+        families = families[pd.Series(mapped, index=families.index, dtype=bool)]
     if review_state:
         reviews = current_reviews(run.directory)
         keep = {
@@ -1337,21 +1500,22 @@ def _select_families(
 
 
 def _print_queue(
-    run, show_all, host, detector, rule, review_state, day=None
+    run, show_all, host, detector, rule, review_state, day=None,
+    criticality=None, tactic=None,
 ) -> None:
     _announce_run(run)
     families = _select_families(
-        run, show_all, host, detector, rule, review_state, day
+        run, show_all, host, detector, rule, review_state, day, criticality, tactic,
     )
     reviews = current_reviews(run.directory)
-    if show_all or any([host, detector, rule, review_state]):
+    if show_all or any([host, detector, rule, review_state, criticality, tactic]):
         scope = "all scored families"
     else:
         scope = f"top {run.meta['budget']} per day"
     if day:
         scope += f", {day}"
     render_queue(
-        families, reviews, f"Review queue ({scope})",
+        run.with_chain(families), reviews, f"Review queue ({scope})",
         bands_for(run.directory.parent),
     )
 
@@ -1359,7 +1523,7 @@ def _print_queue(
 QUEUE_JSON_FIELDS = (
     "handle", "day", "host_label", "entity_id", "detector_source", "rule_id",
     "title", "alert_count", "n_child_sessions", "queue_rank", "in_queue",
-    "ranking_score", "start", "end",
+    "ranking_score", "criticality", "start", "end",
 )
 
 
@@ -1378,12 +1542,22 @@ def queue_records(run, families) -> list[dict]:
         record = {
             field: family[field] for field in QUEUE_JSON_FIELDS if field in family
         }
+        record["chain"] = run.host_chain(family).length
         record["family_id"] = family["family_id"]
         record["run_id"] = run.run_id
         review = reviews.get(family["family_id"])
         record["review"] = review["decision"] if review else None
         records.append(record)
     return records
+
+
+def _tactic_name(text: str) -> str:
+    for tactic in TACTIC_ORDER:
+        if tactic.casefold() == text.strip().casefold():
+            return tactic
+    raise argparse.ArgumentTypeError(
+        f"not an ATT&CK tactic; use one of: {', '.join(TACTIC_ORDER)}"
+    )
 
 
 def cmd_queue(args) -> None:
@@ -1396,7 +1570,8 @@ def cmd_queue(args) -> None:
     if args.json:
         families = _select_families(
             run, args.all, args.host, args.detector, args.rule,
-            args.review_state, args.day,
+            args.review_state, args.day, getattr(args, "criticality", None),
+            getattr(args, "tactic", None),
         )
         print(json.dumps(queue_records(run, families), indent=2, default=str))
         return
@@ -1404,7 +1579,7 @@ def cmd_queue(args) -> None:
     # fragments, and the terminal's own scrollback already holds long output
     _print_queue(
         run, args.all, args.host, args.detector, args.rule, args.review_state,
-        args.day,
+        args.day, getattr(args, "criticality", None), getattr(args, "tactic", None),
     )
     top = run.families[run.families["in_queue"]]
     if len(top):
@@ -1412,6 +1587,73 @@ def cmd_queue(args) -> None:
             f"next: `meerkat inspect {top.iloc[0]['handle']}` opens the top "
             "family"
         )
+
+
+MAPPING_SOURCE_LABELS = {
+    "rule": "reviewed", "native": "native", "suppressed": "suppressed", "": "unmapped",
+}
+
+
+def attack_rules(run: RunState) -> list[dict]:
+    alerts = run.alerts
+    rows = []
+    for (detector, rule_id), part in alerts.groupby(
+        [alerts["detector_source"].astype(str), alerts["rule_id"].astype(str)],
+        sort=False,
+    ):
+        sources = {MAPPING_SOURCE_LABELS[str(s)] for s in part["mapping_source"]}
+        techniques = sorted({
+            technique
+            for joined in part["technique_ids"].astype(str)
+            for technique in joined.split(";")
+            if technique
+        })
+        rows.append({
+            "detector": detector,
+            "rule_id": rule_id,
+            "alerts": len(part),
+            # one rule has one source, except native tags that only some
+            # alerts of it carry
+            "source": "native" if "native" in sources else sources.pop(),
+            "techniques": [
+                {"id": technique, "name": technique_name(technique)}
+                for technique in techniques
+            ],
+        })
+    rows.sort(key=lambda row: (row["source"] != "unmapped", -row["alerts"]))
+    return rows
+
+
+def cmd_attack(args) -> None:
+    run = _load_run(args)
+    rows = attack_rules(run)
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return
+    _announce_run(run)
+    table = Table(title="ATT&CK mapping by rule  |  unmapped first",
+                  title_justify="left", header_style="bold")
+    table.add_column("detector", no_wrap=True)
+    table.add_column("rule", max_width=40, overflow="ellipsis")
+    table.add_column("alerts", justify="right")
+    table.add_column("mapping", no_wrap=True)
+    table.add_column("techniques")
+    for row in rows:
+        table.add_row(
+            detector_label(row["detector"]),
+            safe(row["rule_id"]),
+            str(row["alerts"]),
+            row["source"],
+            ", ".join(
+                f"{technique['id']} {technique['name']}"
+                for technique in row["techniques"]
+            ),
+        )
+    console.print(table)
+    _hint(
+        "add or correct a rule with a local mapping file: --attack-mappings FILE "
+        "on triage"
+    )
 
 
 def cmd_runs(args) -> None:
@@ -2018,6 +2260,28 @@ CHECK_SAMPLE = 5_000
 RULE_CARDINALITY_WARN = 0.5
 
 
+UNMAPPED_SHOWN = 5
+
+
+def _unmapped_rules(frame: pd.DataFrame) -> list[dict]:
+    # a suppressed rule was reviewed and maps to nothing on purpose
+    plain = frame[
+        ~frame["tactics"].map(bool) & frame["mapping_source"].ne("suppressed")
+    ]
+    counts = (
+        plain.groupby(
+            [plain["detector_source"].astype(str), plain["rule_id"].astype(str)]
+        )
+        .size()
+        .sort_values(ascending=False, kind="stable")
+        .head(UNMAPPED_SHOWN)
+    )
+    return [
+        {"detector": detector, "rule_id": rule_id, "alerts": int(count)}
+        for (detector, rule_id), count in counts.items()
+    ]
+
+
 def cmd_check(args) -> None:
     company = _open_company(args)
     try:
@@ -2050,6 +2314,10 @@ def cmd_check(args) -> None:
             )
 
     inventory = _load_or_exit(load_inventory, args.inventory, "the inventory")
+    mappings = _load_or_exit(
+        with_local_mappings, getattr(args, "attack_mappings", None),
+        "the local ATT&CK mapping",
+    )
     # one generator drains the first file before reaching the second, so a flat
     # sample of a company with 4,056 miner and 32,302 host alerts reports the miner
     # alone. Take a share from each file instead.
@@ -2066,7 +2334,7 @@ def cmd_check(args) -> None:
         errors.print("[red]no alerts parsed[/red]  the files resolved but held no rows")
         raise SystemExit(EXIT_ERROR)
 
-    frame = pd.DataFrame(rows)
+    frame = enrich_alerts(pd.DataFrame(rows), mappings)
     table = Table(title=f"check ({len(frame)} alerts sampled)",
                   title_justify="left", header_style="bold")
     table.add_column("detector")
@@ -2074,14 +2342,17 @@ def cmd_check(args) -> None:
     table.add_column("hosts", justify="right")
     table.add_column("in inventory", justify="right")
     table.add_column("distinct rules", justify="right")
+    table.add_column("ATT&CK mapped", justify="right")
     report["sampled"] = len(frame)
     for detector, part in frame.groupby("detector_source", sort=True):
         matched = int(part["entity_in_inventory"].astype(bool).sum())
+        mapped = int(part["tactics"].map(bool).sum())
         report.setdefault("detectors", []).append({
             "detector": str(detector), "alerts": len(part),
             "hosts": int(part["entity_id"].nunique()),
             "in_inventory": matched,
             "distinct_rules": int(part["rule_id"].nunique()),
+            "attack_mapped": mapped,
         })
         table.add_row(
             detector_label(str(detector)),
@@ -2089,6 +2360,7 @@ def cmd_check(args) -> None:
             str(part["entity_id"].nunique()),
             f"{matched}/{len(part)}",
             str(part["rule_id"].nunique()),
+            f"{mapped / len(part):.0%}",
         )
     if not args.json:
         console.print(table)
@@ -2097,6 +2369,21 @@ def cmd_check(args) -> None:
     report["window"] = [float(start), float(end)]
     if not args.json:
         console.print(f"  covering {fmt_time(start)} to {fmt_time(end)}")
+
+    unmapped = _unmapped_rules(frame)
+    report["unmapped_rules"] = unmapped
+    if unmapped and not args.json:
+        # a warning only: the chain and the tactic filter read the mapping, the
+        # score does not
+        console.print(
+            "[yellow]busiest rules with no ATT&CK tactic[/yellow]  "
+            "`meerkat attack` lists every rule; a local mapping file adds them"
+        )
+        for entry in unmapped:
+            console.print(
+                f"  {detector_label(entry['detector'])} {safe(entry['rule_id'])}"
+                f"  {entry['alerts']} alerts"
+            )
 
     problems = 0
     # entity_id is what the inventory is keyed on, so name the entity
@@ -2134,6 +2421,23 @@ def cmd_check(args) -> None:
             "these contribute nothing to a model trained elsewhere"
         )
         problems += 1
+    if inventory.unknown_criticalities:
+        report["problems"].append("unknown_criticality")
+        errors.print(
+            f"[yellow]unrecognised criticality[/yellow] "
+            f"{', '.join(safe(c) for c in inventory.unknown_criticalities)}  "
+            f"use {', '.join(CRITICALITY_LEVELS)}, or leave it blank"
+        )
+        problems += 1
+    uncritical = inventory.assets_without_criticality()
+    report["assets_without_criticality"] = len(uncritical)
+    if uncritical:
+        # criticality never reaches the score, so a missing tier is a warning
+        errors.print(
+            f"[yellow]{len(uncritical)} inventory assets have no criticality"
+            "[/yellow]  "
+            "the queue shows them blank and `--criticality` skips them"
+        )
 
     # rarity and the session key both assume rule_id names a KIND of alert. A
     # detector numbering each anomaly individually degrades the model with no
@@ -2549,7 +2853,7 @@ def cmd_export_html(args) -> None:
                 console.print(table)
             if len(unreviewed):
                 render_queue(
-                    pd.DataFrame(unreviewed), reviews,
+                    run.with_chain(pd.DataFrame(unreviewed)), reviews,
                     f"Unreviewed ({len(unreviewed)} of {len(queued)})",
                     bands_for(run.directory.parent),
                 )
@@ -2601,7 +2905,7 @@ def cmd_demo(args) -> None:
         model=args.model, input=args.raw_dir, company=DEMO_COMPANY,
         inventory=DEMO_INVENTORY_DIR / f"{DEMO_COMPANY}.json",
         labels=labels, event_csv_dir=event_csv,
-        wazuh_file=None, aminer_file=None,
+        wazuh_file=None, aminer_file=None, attack_mappings=None,
         budget=args.budget, runs_dir=args.runs_dir,
     ))
     console.print(
@@ -2675,6 +2979,7 @@ _CONFIGURABLE = (
     ("company", "MEERKAT_ENVIRONMENT", "environment"),
     ("input", "MEERKAT_INPUT", "input"),
     ("inventory", "MEERKAT_INVENTORY", "inventory"),
+    ("attack_mappings", "MEERKAT_ATTACK_MAPPINGS", "attack_mappings"),
     ("model", "MEERKAT_MODEL", "model"),
     ("runs_dir", "MEERKAT_RUNS_DIR", "runs_dir"),
 )
@@ -2830,6 +3135,13 @@ def _add_alert_files(parser) -> None:
     parser.add_argument("--aminer-file", type=Path, default=None,
                         help="aminer alert JSON, if it is not "
                              "<input>/<company>_aminer.json")
+
+
+def _add_attack_mappings(parser) -> None:
+    parser.add_argument("--attack-mappings", type=Path, default=_UNSET,
+                        metavar="FILE",
+                        help="local rule to ATT&CK mapping, merged over the "
+                             "shipped one rule by rule")
 
 
 def _add_run_selector(parser) -> None:
@@ -3031,6 +3343,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="asset inventory JSON; defaults to where "
                              "`meerkat inventory` writes it")
     _add_alert_files(triage)
+    _add_attack_mappings(triage)
     triage.add_argument("--budget", type=_positive, default=10)
     triage.add_argument("--model", type=Path, default=_UNSET)
     triage.add_argument("--runs-dir", type=Path, default=_UNSET)
@@ -3072,6 +3385,10 @@ def build_parser() -> argparse.ArgumentParser:
     queue.add_argument("--host", help="filter by host or entity")
     queue.add_argument("--detector", help="filter by detector source")
     queue.add_argument("--rule", help="filter by rule id substring")
+    queue.add_argument("--criticality", choices=CRITICALITY_LEVELS,
+                       help="filter by the asset's criticality tier")
+    queue.add_argument("--tactic", type=_tactic_name, metavar="NAME",
+                       help="families whose alerts map to this ATT&CK tactic")
     queue.add_argument("--review-state", choices=REVIEW_DECISIONS)
     queue.add_argument("--day", metavar="YYYY-MM-DD", help="one day's queue")
     queue.add_argument("--budget", type=_positive, default=None,
@@ -3081,6 +3398,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="emit the queue as JSON instead of a table")
     _add_run_selector(queue)
     queue.set_defaults(func=cmd_queue)
+
+    attack = sub.add_parser(
+        "attack", help="every rule in a run with its ATT&CK mapping, unmapped first"
+    )
+    _add_run_selector(attack)
+    attack.add_argument("--json", action="store_true",
+                        help="emit the rules as JSON instead of a table")
+    attack.set_defaults(func=cmd_attack)
 
     runs = sub.add_parser("runs", help="list saved runs")
     runs.add_argument("--runs-dir", type=Path, default=_UNSET)
@@ -3237,6 +3562,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="run label; defaults to the input directory's name")
     check.add_argument("--input", type=Path, default=_UNSET)
     check.add_argument("--inventory", type=Path, default=_UNSET)
+    _add_attack_mappings(check)
     check.add_argument("--sample", type=_positive, default=CHECK_SAMPLE,
                        help="how many alerts to read")
     check.add_argument("--json", action="store_true",
@@ -3362,6 +3688,7 @@ def cmd_inventory(args) -> None:
             "hostname": names[address],
             "ip_addresses": [address],
             "roles": [],
+            "criticality": "",
         }
         for address in sorted(names)
     ]
@@ -3379,6 +3706,10 @@ def cmd_inventory(args) -> None:
         "feature; assets left without one are scored without it"
     )
     console.print("roles available: " + ", ".join(CANONICAL_ROLES))
+    console.print(
+        "criticality is blank  set " + ", ".join(CRITICALITY_LEVELS)
+        + " to show and filter by it; it never changes the score"
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -3393,14 +3724,17 @@ def main(argv: list[str] | None = None) -> None:
     import contextlib
 
     def _quiet_pipe_exit() -> None:
-        with contextlib.suppress(OSError):
-            sys.stdout.flush()
+        # the interpreter flushes stdout again on exit and fails on the closed
+        # pipe, so point the descriptor at devnull first (the Python docs recipe)
+        import os
+        with contextlib.suppress(OSError, ValueError):
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         raise SystemExit(0)
 
     if args.no_color:
         # the module globals are what every renderer prints through
-        globals()["console"] = Console(no_color=True)
-        globals()["errors"] = Console(stderr=True, no_color=True)
+        globals()["console"] = _Console(no_color=True)
+        globals()["errors"] = _Console(stderr=True, no_color=True)
     # bare `meerkat` orients instead of erroring, and needs a runs dir to look in
     if args.command is None:
         args.runs_dir = _UNSET
@@ -3411,6 +3745,7 @@ def main(argv: list[str] | None = None) -> None:
             return
         try:
             args.func(args)
+            sys.stdout.flush()
         except (BrokenPipeError, OSError) as error:
             import errno
             if isinstance(error, BrokenPipeError) or error.errno in (
