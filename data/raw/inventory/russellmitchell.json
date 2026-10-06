@@ -10,7 +10,8 @@
         "employee",
         "internet",
         "remote_employee"
-      ]
+      ],
+      "criticality": "medium"
     },
     {
       "hostname": "remote-employee-2",
@@ -21,7 +22,8 @@
         "employee",
         "internet",
         "remote_employee"
-      ]
+      ],
+      "criticality": "medium"
     },
     {
       "hostname": "remote-employee-0",
@@ -32,7 +34,8 @@
         "employee",
         "internet",
         "remote_employee"
-      ]
+      ],
+      "criticality": "medium"
     },
     {
       "hostname": "cloud-share",
@@ -43,7 +46,8 @@
         "dmz",
         "proxied",
         "servers"
-      ]
+      ],
+      "criticality": "high"
     },
     {
       "hostname": "webserver",
@@ -54,7 +58,8 @@
         "dmz",
         "dnat",
         "servers"
-      ]
+      ],
+      "criticality": "high"
     },
     {
       "hostname": "morris-mail",
@@ -65,7 +70,8 @@
         "ext_mail",
         "internet",
         "mailserver"
-      ]
+      ],
+      "criticality": "low"
     },
     {
       "hostname": "davey-mail",
@@ -76,7 +82,8 @@
         "ext_mail",
         "internet",
         "mailserver"
-      ]
+      ],
+      "criticality": "low"
     },
     {
       "hostname": "vpn",
@@ -87,7 +94,8 @@
         "dmz",
         "dnat",
         "servers"
-      ]
+      ],
+      "criticality": "high"
     },
     {
       "hostname": "intranet-server",
@@ -98,7 +106,8 @@
         "beatservers",
         "intranet",
         "servers"
-      ]
+      ],
+      "criticality": "high"
     },
     {
       "hostname": "internal-employee-1",
@@ -109,7 +118,8 @@
         "employee",
         "internal_employee",
         "intranet"
-      ]
+      ],
+      "criticality": "medium"
     },
     {
       "hostname": "internal-employee-3",
@@ -120,7 +130,8 @@
         "employee",
         "internal_employee",
         "intranet"
-      ]
+      ],
+      "criticality": "medium"
     },
     {
       "hostname": "ext-user-1",
@@ -130,7 +141,8 @@
       "groups": [
         "ext_user",
         "internet"
-      ]
+      ],
+      "criticality": "low"
     },
     {
       "hostname": "ext-user-0",
@@ -140,7 +152,8 @@
       "groups": [
         "ext_user",
         "internet"
-      ]
+      ],
+      "criticality": "low"
     },
     {
       "hostname": "ext-user-2",
@@ -150,7 +163,8 @@
       "groups": [
         "ext_user",
         "internet"
-      ]
+      ],
+      "criticality": "low"
     },
     {
       "hostname": "internal-share",
@@ -162,7 +176,8 @@
         "intranet",
         "servers",
         "share"
-      ]
+      ],
+      "criticality": "high"
     },
     {
       "hostname": "monitoring",
@@ -172,7 +187,8 @@
       "groups": [
         "intranet",
         "servers"
-      ]
+      ],
+      "criticality": "high"
     },
     {
       "hostname": "internal-employee-2",
@@ -183,7 +199,8 @@
         "employee",
         "internal_employee",
         "intranet"
-      ]
+      ],
+      "criticality": "medium"
     },
     {
       "hostname": "mail",
@@ -196,7 +213,8 @@
         "mailserver",
         "proxied",
         "servers"
-      ]
+      ],
+      "criticality": "high"
     },
     {
       "hostname": "internal-employee-0",
@@ -207,7 +225,8 @@
         "employee",
         "internal_employee",
         "intranet"
-      ]
+      ],
+      "criticality": "medium"
     },
     {
       "hostname": "inet-dns",
@@ -217,7 +236,8 @@
       "groups": [
         "dnsservers",
         "internet"
-      ]
+      ],
+      "criticality": "critical"
     },
     {
       "hostname": "inet-firewall",
@@ -230,7 +250,8 @@
         "dnsservers",
         "firewall",
         "servers"
-      ]
+      ],
+      "criticality": "critical"
     }
   ]
 }

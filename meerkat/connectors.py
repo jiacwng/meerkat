@@ -1,8 +1,12 @@
+# fetch a window of Wazuh alerts from the indexer or a saved alerts file
+
 from __future__ import annotations
 
 import base64
 import json
+import os
 import ssl
+import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -14,6 +18,17 @@ from core.normalize import get_timestamp, read_alert_record
 
 class ConnectorError(Exception):
     pass
+
+
+MAX_RESPONSE_BYTES = 256 * 1024 * 1024
+MAX_RECORDS = 2_000_000
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    # the indexer is a fixed host, so a redirect is refused. Following one resends
+    # the Authorization header to the redirect target.
+    def redirect_request(self, *args, **kwargs):
+        return None
 
 
 @dataclass
@@ -74,10 +89,25 @@ def read_window_file(path: Path, window: Window) -> list[dict]:
 
 
 def write_records(path: Path, records: list[dict]) -> None:
-    with path.open("w", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(record))
-            handle.write("\n")
+    # a pull cut short must not leave a half file that triage reads as the day
+    descriptor, partial = tempfile.mkstemp(dir=path.parent, suffix=".partial")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record))
+                handle.write("\n")
+        os.replace(partial, path)
+    except BaseException:
+        os.unlink(partial)
+        raise
+
+
+def _http_send(request, context, timeout) -> bytes:
+    opener = urllib.request.build_opener(
+        _NoRedirect(), urllib.request.HTTPSHandler(context=context)
+    )
+    with opener.open(request, timeout=timeout) as response:
+        return response.read(MAX_RESPONSE_BYTES + 1)
 
 
 def _send(config: IndexerConfig, method: str, path: str, body: dict | None) -> dict:
@@ -95,10 +125,7 @@ def _send(config: IndexerConfig, method: str, path: str, body: dict | None) -> d
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     try:
-        with urllib.request.urlopen(
-            request, context=context, timeout=config.timeout
-        ) as response:
-            payload = response.read()
+        payload = _http_send(request, context, config.timeout)
     except urllib.error.HTTPError as error:
         if error.code == 401:
             raise ConnectorError("the indexer rejected the credentials") from error
@@ -108,6 +135,10 @@ def _send(config: IndexerConfig, method: str, path: str, body: dict | None) -> d
         raise ConnectorError(
             f"cannot reach the indexer at {config.host}:{config.port}: {reason}"
         ) from error
+    if len(payload) > MAX_RESPONSE_BYTES:
+        raise ConnectorError(
+            f"the indexer response exceeds {MAX_RESPONSE_BYTES // (1024 * 1024)} MB"
+        )
     if not payload:
         return {}
     try:
@@ -167,6 +198,10 @@ def query_window(config: IndexerConfig, window: Window) -> list[dict]:
                 raise ConnectorError(
                     "the indexer returned a hit without _source or sort"
                 ) from error
+            if len(records) > MAX_RECORDS:
+                raise ConnectorError(
+                    f"the window holds more than {MAX_RECORDS} alerts; narrow it"
+                )
             pit_id = result.get("pit_id", pit_id)
     finally:
         if pit_id:

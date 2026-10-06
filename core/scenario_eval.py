@@ -28,6 +28,7 @@ from core.classifier import (
 )
 from core.drift import TrainingProfile, build_profile
 from core.features import (
+    CONTRIBUTION_PREFIX,
     SessionFeatureSchema,
     build_session_feature_matrix,
     fit_session_feature_schema,
@@ -66,7 +67,7 @@ class TriageBundle:
 
 
 # A client has one environment, so the reranker and calibrator cannot be refitted:
-# both are defined out-of-fold ACROSS environments. Only the forest and its feature
+# both are defined out-of-fold across environments. Only the forest and its feature
 # schema are replaced, and the rest of the shipped bundle travels unchanged.
 
 def score_sessions(
@@ -80,6 +81,8 @@ def score_sessions(
     )
     families = build_families(scored)
     families["ranking_score"] = bundle.reranker.predict(families)
+    pushes, _ = bundle.reranker.contributions(families)
+    families = families.join(pushes.add_prefix(CONTRIBUTION_PREFIX))
     families["evidence_probability"] = bundle.calibrator.predict(
         families["ranking_score"].to_numpy()
     )

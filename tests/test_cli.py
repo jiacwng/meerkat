@@ -33,6 +33,7 @@ def make_alerts() -> pd.DataFrame:
         {
             "timestamp": 100.0, "detector_source": "wazuh",
             "name": "Web server 400 error", "host": "intranet-server",
+            "entity_id": "10.0.0.5",
             "source_file": "acme_wazuh.json", "source_position": 10,
             "rule_id": "31101", "severity": 5.0, "alert_category": "",
             "http_status": 400.0, "http_method": "GET", "web_request": "/a",
@@ -41,6 +42,7 @@ def make_alerts() -> pd.DataFrame:
         {
             "timestamp": 160.0, "detector_source": "wazuh",
             "name": "Web server 400 error", "host": "intranet-server",
+            "entity_id": "10.0.0.5",
             "source_file": "acme_wazuh.json", "source_position": 11,
             "rule_id": "31101", "severity": 5.0, "alert_category": "",
             "http_status": 404.0, "http_method": "GET", "web_request": "/b",
@@ -49,6 +51,7 @@ def make_alerts() -> pd.DataFrame:
         {
             "timestamp": 900.0, "detector_source": "wazuh",
             "name": "Web server 400 error", "host": "intranet-server",
+            "entity_id": "10.0.0.5",
             "source_file": "acme_wazuh.json", "source_position": 40,
             "rule_id": "31101", "severity": 5.0, "alert_category": "",
             "http_status": 400.0, "http_method": "GET", "web_request": "/c",
@@ -57,6 +60,7 @@ def make_alerts() -> pd.DataFrame:
         {
             "timestamp": 500.0, "detector_source": "suricata",
             "name": "ET SCAN probe", "host": "intranet-server",
+            "entity_id": "10.0.0.5",
             "source_file": "acme_suricata.json", "source_position": 3,
             "rule_id": "2001", "severity": 2.0, "alert_category": "recon",
             "http_status": float("nan"), "http_method": "", "web_request": "",
@@ -158,6 +162,54 @@ class HandleTests(unittest.TestCase):
         self.assertEqual(top["title"], "")
 
 
+class NarrowQueueTests(unittest.TestCase):
+    def render(self, width: int) -> str:
+        from rich.console import Console
+
+        decorated = cli.decorate_families(make_families(), make_alerts(), budget=2)
+        with mock.patch.object(cli, "console", Console(width=width)):
+            with cli.console.capture() as capture:
+                cli.render_queue(decorated.assign(chain=1), {}, "Review queue")
+        return capture.get()
+
+    def test_a_wide_terminal_shows_every_column(self):
+        text = self.render(240)
+        for name in ("handle", "why", "chain", "esc%", "review"):
+            self.assertIn(name, text)
+
+    def test_a_narrow_terminal_drops_the_optional_columns_and_keeps_the_handle(self):
+        text = self.render(120)
+        self.assertIn("handle", text)
+        self.assertIn("F1", text)
+        for name in ("why", "chain", "esc%"):
+            self.assertNotIn(name, text)
+
+
+class ClosedPipeTests(unittest.TestCase):
+    def test_a_reader_that_stops_early_is_an_ordinary_exit(self):
+        import subprocess
+        import sys
+
+        runs = Path(tempfile.mkdtemp())
+        alerts = make_alerts().assign(mapping_source="rule")
+        decorated = cli.decorate_families(make_families(), alerts, budget=2)
+        cli.save_run(runs, "acme-1", {"company": "acme", "budget": 2},
+                     decorated, make_sessions(), alerts)
+        for command in (["queue"], ["queue", "--json"], ["attack", "--json"]):
+            with self.subTest(command=command):
+                process = subprocess.Popen(
+                    [sys.executable, "-m", "meerkat.cli", *command,
+                     "--runs-dir", str(runs)],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    cwd=Path(__file__).resolve().parents[1],
+                )
+                process.stdout.readline()
+                process.stdout.close()
+                stderr = process.stderr.read().decode()
+                self.assertEqual(process.wait(), 0, stderr)
+                self.assertNotIn("Exception", stderr)
+
+
 class RunRoundTripTests(unittest.TestCase):
     def _save(self, runs_dir: Path, run_id: str) -> None:
         decorated = cli.decorate_families(make_families(), make_alerts(), budget=1)
@@ -234,6 +286,68 @@ class ReviewTests(unittest.TestCase):
             current = cli.current_reviews(directory)
             self.assertEqual(current["fid"]["decision"], "benign")
 
+    def test_a_line_without_a_family_id_or_decision_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            cli.append_review(directory, "acme-1", "fid", "F1", "benign", "")
+            with (directory / "reviews.jsonl").open("a", encoding="utf-8") as file:
+                file.write(json.dumps({"decision": "escalate"}) + "\n")
+                file.write(json.dumps({"family_id": "fid"}) + "\n")
+            self.assertEqual(len(cli.review_history(directory)), 1)
+            self.assertEqual(
+                cli.current_reviews(directory)["fid"]["decision"], "benign"
+            )
+
+    def test_a_session_review_does_not_replace_the_family_decision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            cli.append_review(directory, "acme-1", "fid", "F1", "benign", "")
+            cli.append_review(
+                directory, "acme-1", "fid", "F1", "escalate", "",
+                session_key="k2", session_handle="S2",
+            )
+            current = cli.current_reviews(directory)
+            self.assertEqual(current["fid"]["decision"], "benign")
+            self.assertIsNone(current["fid"]["session_handle"])
+
+    def test_review_records_the_named_analyst(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            decorated = cli.decorate_families(
+                make_families(), make_alerts(), budget=2
+            )
+            cli.save_run(
+                runs, "acme-1", {"company": "acme", "budget": 2},
+                decorated, make_sessions(), make_alerts(),
+            )
+            args = argparse.Namespace(
+                handle="F2", decision="benign", session=None, note=None,
+                analyst="alice", run="acme-1", runs_dir=runs,
+            )
+            cli.cmd_review(args)
+            history = cli.review_history(runs / "acme-1")
+            self.assertEqual(history[-1]["analyst"], "alice")
+
+    def test_a_handle_with_markup_is_printed_not_parsed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            decorated = cli.decorate_families(
+                make_families(), make_alerts(), budget=2
+            )
+            cli.save_run(
+                runs, "acme-1", {"company": "acme", "budget": 2},
+                decorated, make_sessions(), make_alerts(),
+            )
+            for handle, session in (("[/x]", None), ("F1", "[/x]")):
+                args = argparse.Namespace(
+                    handle=handle, decision="benign", session=session, note=None,
+                    analyst=None, run="acme-1", runs_dir=runs,
+                )
+                with contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as caught:
+                        cli.cmd_review(args)
+                self.assertEqual(caught.exception.code, EXIT_ERROR)
+
 
 class DecisionExportTests(unittest.TestCase):
     def test_decisions_propagate_family_wide_unless_a_session_overrides(self):
@@ -266,6 +380,30 @@ class DecisionExportTests(unittest.TestCase):
             self.assertEqual(by_session["S1"]["decided_by"], "session")
             self.assertEqual(by_session["S2"]["decision"], "benign")
             self.assertEqual(by_session["S2"]["decided_by"], "family")
+
+    def test_review_session_all_records_a_family_wide_decision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            decorated = cli.decorate_families(
+                make_families(), make_alerts(), budget=2
+            )
+            cli.save_run(
+                runs, "acme-1", {"company": "acme", "budget": 2},
+                decorated, make_sessions(), make_alerts(),
+            )
+            args = argparse.Namespace(
+                handle="F1", decision="escalate", session="all", note=None,
+                analyst=None, run="acme-1", runs_dir=runs,
+            )
+            cli.cmd_review(args)
+            run = cli.load_run(runs, "acme-1")
+            f1 = [
+                row for row in cli.decision_rows(run, run.families)
+                if row["family"] == "F1"
+            ]
+            self.assertTrue(f1)
+            self.assertTrue(all(row["decision"] == "escalate" for row in f1))
+            self.assertTrue(all(row["decided_by"] == "family" for row in f1))
 
     def test_a_later_family_decision_covers_everything_again(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -556,7 +694,7 @@ class PanelTests(unittest.TestCase):
             text = self._capture(
                 lambda: cli.render_family(run, run.family_by_handle("F001"), {})
             )
-            self.assertIn("Related ATT&CK observations", text)
+            self.assertIn("ATT&CK chain on this host", text)
             self.assertIn("Reconnaissance", text)
             self.assertIn("Related families on this host", text)
 
@@ -1516,6 +1654,25 @@ class SharedOpeningTests(unittest.TestCase):
         self.assertEqual(cli._open_company(args), directory.name)
         self.assertEqual(args.inventory, inventory)
 
+    def test_retrain_finds_the_inventory_like_the_other_commands(self):
+        args = build_parser().parse_args(["retrain", "--incidents", "i.csv"])
+        self.assertIs(args.inventory, cli._UNSET)
+        args.inventory = None
+        args.company = None
+        directory = temporary_directory()
+        incidents = directory / "incidents.csv"
+        incidents.write_text("start,end,host,verdict\n", encoding="utf-8")
+        args.incidents = incidents
+        args.input = directory
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit):
+                cli.cmd_retrain(args)
+        self.assertIn(
+            str(directory / "inventory" / f"{directory.name}.json"),
+            " ".join(stderr.getvalue().split()).replace(" ", ""),
+        )
+
 
 class DemoBundleCheckTests(unittest.TestCase):
     def test_demo_leaves_the_bundle_check_to_triage(self):
@@ -1873,6 +2030,7 @@ def alerts(**overrides) -> pd.DataFrame:
     row = {
         "timestamp": 100.0, "detector_source": "wazuh",
         "name": "Web server 400 error", "host": "intranet-server",
+            "entity_id": "10.0.0.5",
         "source_file": "acme_wazuh.json", "source_position": 10,
         "rule_id": "31101", "severity": 5.0, "alert_category": "",
         "http_status": 400.0, "http_method": "GET", "web_request": "/a",

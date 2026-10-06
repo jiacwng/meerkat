@@ -85,12 +85,16 @@ as a feature:
   "company": "alerts",
   "assets": [
     { "hostname": "mail", "ip_addresses": ["172.19.130.4"],
-      "roles": ["mail_server", "internet_facing"] }
+      "roles": ["mail_server", "internet_facing"], "criticality": "high" }
   ]
 }
 ```
 
 `meerkat inventory --list-roles` prints the vocabulary, which follows OCSF names. Assets with no role are scored without it. An alert spans several lines in the export, so the line counts the tool reports are larger than the alert counts.
+
+`criticality` is optional: `critical`, `high`, `medium` or `low`, the asset
+priority values of Splunk Enterprise Security. Blank or `unset` means not set.
+It is shown and filtered on and never reaches the score.
 
 ### Incident records, for retraining
 
@@ -122,8 +126,25 @@ start. Keep the whole archive for later retrains, and trim old data only when
 
 `meerkat.toml` in the working directory and `MEERKAT_*` variables fill flags
 that were not passed. Flags override variables, and variables override the file. The keys
-are `environment`, `input`, `inventory`, `model` and `runs_dir`. `demo`
-ignores both.
+are `environment`, `input`, `inventory`, `attack_mappings`, `model` and
+`runs_dir`. `demo` ignores both.
+
+### A local ATT&CK mapping
+
+meerkat ships a reviewed mapping from detector rules to ATT&CK techniques. A
+local file in the same shape adds rules or corrects them, and a local rule
+replaces the shipped one:
+
+```json
+{ "wazuh": { "5710": ["T1110"], "31101": [] } }
+```
+
+An empty list marks a rule as reviewed with no technique. Pass the file with
+`--attack-mappings FILE` on `triage` and `check`, or set
+`MEERKAT_ATTACK_MAPPINGS` or `attack_mappings`. An unknown technique id is
+refused with the file named. `run.json` records the file and its sha256. The
+mapping feeds the chain, the tactic filter and `meerkat attack`, and never
+the score.
 
 ## Commands
 
@@ -156,6 +177,10 @@ repository clone with Git LFS fetched.
     meerkat demo
 
 The demo takes no options and ignores `meerkat.toml` and `MEERKAT_*` variables.
+
+The demo inventory tiers are ours, not part of the AIT dataset. Firewalls and
+DNS servers are critical, other servers high, employee machines medium, and
+external users and external mail low.
 
 ---
 
@@ -247,18 +272,22 @@ external_user, external_mail
 ### meerkat check
 
 Report what triage will see before running it: per-detector counts, inventory
-match rate, role coverage and rule cardinality, from a bounded sample. Exits
-non-zero when assets have no roles, a role name is outside the vocabulary,
-rule ids look numbered per alert, or the alerts do not parse. Alerts on
-machines outside the inventory are a warning; the run still passes.
+match rate, role coverage, rule cardinality and the share of alerts with an
+ATT&CK tactic, from a bounded sample. Exits non-zero when assets have no roles,
+a role or criticality is outside the vocabulary, rule ids look numbered per
+alert, or the alerts do not parse. Alerts on machines outside the inventory,
+assets without a criticality and the busiest rules without a tactic are
+warnings; the run still passes.
 
     meerkat check [--environment NAME] [--input DIR] [--inventory FILE]
-                  [--sample N] [--json] [--wazuh-file FILE] [--aminer-file FILE]
+                  [--attack-mappings FILE] [--sample N] [--json]
+                  [--wazuh-file FILE] [--aminer-file FILE]
 
 | option | description |
 | --- | --- |
 | `--sample N` | how many alerts to read, default 5000 |
 | `--json` | the report as JSON; warnings stay on stderr |
+| `--attack-mappings FILE` | a local ATT&CK mapping, see [Inputs](#inputs) |
 | `--environment`, `--input`, `--inventory` | the shared openers |
 | `--wazuh-file FILE`, `--aminer-file FILE` | read only the named file |
 
@@ -269,14 +298,20 @@ reading up to 5000 alerts from data/raw
   found log anomaly         russellmitchell_aminer.json  3.4 MB
   found wazuh and suricata  russellmitchell_wazuh.json  45.3 MB
 check (5000 alerts sampled)
-┏━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
-┃ detector ┃ alerts ┃ hosts ┃ in inventory ┃ distinct rules ┃
-┡━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
-│ AMiner   │   2500 │    10 │    2500/2500 │             34 │
-│ Suricata │    942 │     6 │      942/942 │              3 │
-│ Wazuh    │   1558 │     9 │    1558/1558 │              9 │
-└──────────┴────────┴───────┴──────────────┴────────────────┘
+┏━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ detector ┃ alerts ┃ hosts ┃ in inventory ┃ distinct rules ┃ ATT&CK mapped ┃
+┡━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ AMiner   │   2500 │    10 │    2500/2500 │             34 │           82% │
+│ Suricata │    942 │     6 │      942/942 │              3 │            0% │
+│ Wazuh    │   1558 │     9 │    1558/1558 │              9 │            0% │
+└──────────┴────────┴───────┴──────────────┴────────────────┴───────────────┘
   covering 2022-01-21 00:00:01 to 2022-01-24 03:58:05
+busiest rules with no ATT&CK tactic  `meerkat attack` lists every rule; a local mapping file adds them
+  Suricata 2230003  426 alerts
+  Suricata 2230010  426 alerts
+  AMiner AMiner: New event type.  326 alerts
+  Wazuh 52507  96 alerts
+  Suricata 2013504  90 alerts
 ready to triage
 ```
 
@@ -290,13 +325,14 @@ a timestamp and are never overwritten.
 
     meerkat triage [--environment NAME] [--input DIR] [--inventory FILE]
                    [--budget K] [--model FILE] [--runs-dir DIR]
-                   [--wazuh-file FILE] [--aminer-file FILE]
+                   [--attack-mappings FILE] [--wazuh-file FILE] [--aminer-file FILE]
 
 | option | description |
 | --- | --- |
 | `--budget K` | families reviewed per day, default 10 |
 | `--model FILE` | model bundle, default `models/meerkat_bundle.skops` |
 | `--runs-dir DIR` | where runs are saved, default `runs/` |
+| `--attack-mappings FILE` | a local ATT&CK mapping, see [Inputs](#inputs) |
 | `--environment`, `--input`, `--inventory` | the shared openers |
 | `--wazuh-file FILE`, `--aminer-file FILE` | read only the named file |
 
@@ -305,11 +341,15 @@ a timestamp and are never overwritten.
 ### meerkat queue
 
 Print the ranked queue of a saved run and exit. `score` sets the order.
-`esc%` fills in as you review: how often you escalated your past reviewed
-families at the same score, with the count; a fresh environment shows the
-score alone.
+`crit` is the asset's criticality. `why` names the largest contribution to
+the score after the session scores. `chain` is the length of the host's
+ATT&CK chain that day, described under `inspect`. `esc%` fills in as you
+review: how often you escalated your past reviewed families at the same
+score, with the count; a fresh environment shows the score alone. On a narrow
+terminal the queue drops `why`, `chain` and `esc%`, then `start` and `crit`.
 
     meerkat queue [--all] [--host HOST] [--detector NAME] [--rule TEXT]
+                  [--criticality TIER] [--tactic NAME]
                   [--review-state STATE] [--day YYYY-MM-DD] [--budget K]
                   [--json] [--run RUN] [--runs-dir DIR]
 
@@ -319,6 +359,8 @@ score alone.
 | `--host HOST` | filter by host or entity |
 | `--detector NAME` | filter by detector source |
 | `--rule TEXT` | filter by rule id substring |
+| `--criticality TIER` | families on assets at that tier: `critical`, `high`, `medium` or `low` |
+| `--tactic NAME` | families whose alerts map to that ATT&CK tactic; any case |
 | `--review-state STATE` | families whose decision matches: `escalate`, `benign` or `false-positive` |
 | `--day YYYY-MM-DD` | one day's queue |
 | `--budget K` | re-cut the saved run at a different K; no rescoring |
@@ -327,29 +369,48 @@ score alone.
 Recorded output:
 
 ```text
-run russellmitchell-20260724-230029  |  company russellmitchell  |  budget 10  |  326 families
+run russellmitchell-20261005-234757-963  |  company russellmitchell  |  budget 10  |  326 families
 Review queue (top 10 per day, 2022-01-21)  |  F1 = top priority
-┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━┓
-┃ handle ┃ date       ┃ start ┃ host          ┃ detector ┃ finding                                  ┃ alerts ┃ score ┃    esc% ┃ review ┃
-┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━━╇━━━━━━━━┩
-│ F1     │ 2022-01-21 │ 06:33 │ inet-firewall │ AMiner   │ AMiner: Unusual occurrence frequencies o │      6 │  1.00 │         │        │
-│ F2     │ 2022-01-21 │ 11:27 │ inet-firewall │ AMiner   │ AMiner: New service_start parameter comb │      1 │  0.98 │         │        │
-│ F3     │ 2022-01-21 │ 11:27 │ inet-firewall │ AMiner   │ AMiner: New service_stop parameter combi │      1 │  0.98 │         │        │
-│ F4     │ 2022-01-21 │ 00:00 │ inet-firewall │ AMiner   │ AMiner: New ip address in DNS logs.      │     16 │  0.72 │         │        │
-│ F5     │ 2022-01-21 │ 16:10 │ inet-firewall │ Suricata │ SURICATA HTTP gzip decompression failed  │      1 │  0.29 │         │        │
-│ F6     │ 2022-01-21 │ 00:02 │ inet-firewall │ AMiner   │ AMiner: New event type.                  │      2 │  0.24 │         │        │
-│ F7     │ 2022-01-21 │ 06:37 │ webserver     │ Suricata │ SURICATA TLS invalid record/traffic      │    105 │  0.19 │         │        │
-│ F8     │ 2022-01-21 │ 05:24 │ inet-firewall │ Suricata │ SURICATA TLS invalid record/traffic      │    674 │  0.17 │         │        │
-│ F9     │ 2022-01-21 │ 05:24 │ inet-firewall │ Suricata │ SURICATA TLS invalid handshake message   │    674 │  0.17 │         │        │
-│ F10    │ 2022-01-21 │ 06:37 │ webserver     │ Suricata │ SURICATA TLS invalid handshake message   │    105 │  0.17 │         │        │
-└────────┴────────────┴───────┴───────────────┴──────────┴──────────────────────────────────────────┴────────┴───────┴─────────┴────────┘
+┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━┓
+┃ handle ┃ date       ┃ start ┃ host            ┃ crit     ┃ detector ┃ finding                                  ┃ why                         ┃ alerts ┃ chain ┃ score ┃    esc% ┃ review ┃
+┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━━━╇━━━━━━━━┩
+│ F1     │ 2022-01-21 │ 06:33 │ inet-firewall   │ critical │ AMiner   │ AMiner: Unusual occurrence frequencies o │ asset role firewall         │      6 │     2 │  1.00 │         │        │
+│ F2     │ 2022-01-21 │ 11:27 │ inet-firewall   │ critical │ AMiner   │ AMiner: New service_start parameter comb │ asset role firewall         │      1 │     2 │  0.97 │         │        │
+│ F3     │ 2022-01-21 │ 11:27 │ inet-firewall   │ critical │ AMiner   │ AMiner: New service_stop parameter combi │ asset role firewall         │      1 │     2 │  0.97 │         │        │
+│ F4     │ 2022-01-21 │ 00:00 │ inet-firewall   │ critical │ AMiner   │ AMiner: New ip address in DNS logs.      │ asset role firewall         │     16 │     2 │  0.74 │         │        │
+│ F5     │ 2022-01-21 │ 16:10 │ inet-firewall   │ critical │ Suricata │ SURICATA HTTP gzip decompression failed  │ asset role firewall         │      1 │       │  0.26 │         │        │
+│ F6     │ 2022-01-21 │ 00:02 │ inet-firewall   │ critical │ AMiner   │ AMiner: New event type.                  │ asset role firewall         │      2 │     2 │  0.22 │         │        │
+│ F7     │ 2022-01-21 │ 16:06 │ inet-firewall   │ critical │ Suricata │ SURICATA HTTP unable to match response t │ asset role firewall         │      8 │       │  0.17 │         │        │
+│ F8     │ 2022-01-21 │ 06:37 │ webserver       │ high     │ Suricata │ SURICATA TLS invalid record/traffic      │ detectors within 10 minutes │    105 │     1 │  0.17 │         │        │
+│ F9     │ 2022-01-21 │ 06:33 │ intranet-server │ high     │ Suricata │ ET POLICY GNU/Linux APT User-Agent Outbo │ detectors within 10 minutes │      7 │     2 │  0.16 │         │        │
+│ F10    │ 2022-01-21 │ 06:37 │ webserver       │ high     │ Suricata │ SURICATA TLS invalid handshake message   │ detectors within 10 minutes │    105 │     1 │  0.16 │         │        │
+└────────┴────────────┴───────┴─────────────────┴──────────┴──────────┴──────────────────────────────────────────┴─────────────────────────────┴────────┴───────┴───────┴─────────┴────────┘
 ```
+
+---
+
+### meerkat attack
+
+List every rule in a saved run with its alert count, its ATT&CK mapping
+source and its techniques, unmapped rules first and busiest first. The source
+is `reviewed` (the shipped or local mapping), `native` (the detector's own
+tag), `suppressed` (reviewed, maps to nothing) or `unmapped`. A local mapping
+file fills the gaps.
+
+    meerkat attack [--json] [--run RUN] [--runs-dir DIR]
+
+| option | description |
+| --- | --- |
+| `--json` | the rules as JSON |
 
 ---
 
 ### meerkat inspect
 
-Open one family, one session inside it, or one alert.
+Open one family, one session inside it, or one alert. A family shows its
+largest contributions to the score as shares, and the ATT&CK chain of its host
+that day: the longest time-ordered run of the host's tactics that never goes
+back in matrix order, after RapSheet (Hassan et al., IEEE S&P 2020).
 
     meerkat inspect HANDLE [SESSION] [ALERT] [--where FIELD=VALUE]
                     [--exclude FIELD=VALUE] [--distinct FIELD] [--alerts N]
@@ -374,69 +435,62 @@ Long output pages on a terminal that has a pager. A wrong field name prints
 the fields that exist. Recorded output:
 
 ```text
-run russellmitchell-20260724-230029  |  company russellmitchell  |  budget 10  |  326 families
+run russellmitchell-20261005-234757-963  |  company russellmitchell  |  budget 10  |  326 families
 
-F212  intranet-server / Suricata / ET SCAN Possible Nmap User-Agent Observed
+F212  intranet-server / AMiner / AMiner: New characters in Apache Access request.
 
 Overview
   entity        : 10.143.2.4
-  asset         : beatservers, intranet, servers
-  rule          : 2024364
-  window        : 2022-01-24 03:57:01  ->  2022-01-24 03:57:01  (0s)
+  asset         : server, internal, monitoring_agent
+  criticality   : high
+  rule          : AMiner: New characters in Apache Access request.
+  window        : 2022-01-24 03:57:26  ->  2022-01-24 03:58:08  (42s)
   ranking score : 1.000
-  volume        : 6 alerts, 1 session
-  outcome       : 6 requests, none succeeded (404)
+  volume        : 29 alerts, 1 session, 14.5x the median for this rule in this run
 
-Ranking signals
-  - best child session score 0.98
-  - 3 detectors active on this host within 10 minutes
+Ranking signals, largest contributions
+  raises  session evidence                     69%
+  raises  detectors within 10 minutes           7%
+  raises  alert volume on this host that day    4%
+  raises  asset role internal                   4%
+  raises  asset role monitoring_agent           4%
+  share of the total push on this family's score
 
 Sessions  |  S1 = strongest
 ┏━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━┳━━━━━━━┓
 ┃ handle ┃ start               ┃ span ┃ alerts ┃ score ┃
 ┡━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━╇━━━━━━━┩
-│ S1     │ 2022-01-24 03:57:01 │ 0s   │      6 │  0.98 │
+│ S1     │ 2022-01-24 03:57:26 │ 42s  │     29 │  0.99 │
 └────────┴─────────────────────┴──────┴────────┴───────┘
 drill into one with `meerkat inspect F212 S1`
 
 Finding / Detection
-      rule : 2024364
-  severity : 1
-  category : Web Application Attack
-
-Network
-        source ip : 172.19.131.174
-          dest ip : 10.143.2.4
-      source port : 38710, 38700, 38732
-        dest port : 80
-        transport : tcp
-        app proto : http
-  bytes to server : 910, 468, 449
-  bytes to client : 632, 566
+  rule : AMiner: New characters in Apache Access request.
 
 Network / HTTP
-     request : /sdk, /nmaplowercheck1642996621, /HNAP1
-      method : POST, GET
-      status : 404
-    hostname : intranet.smith.russellmitchell.com
-  user agent : Mozilla/5.0 (compatible; Nmap Scripting Engine; https://nmap.org/book/nse.html)
+  request : /@, /~adm, /~admin, /~administrator, /~amanda, /~apache  (+23 more; --distinct web_request)
 
 Provenance
-         detector : suricata
-      source file : russellmitchell_wazuh.json
-  source position : 25427, 25430, 25432, 25434, 25446, 25448
+         detector : aminer
+      source file : russellmitchell_aminer.json
+  source position : 631, 632, 633, 634, 635, 636  (+23 more; --distinct source_position)
 
-Related ATT&CK observations
-  intranet-server: Reconnaissance (03:57:01)
-  tactics mapped independently
+ATT&CK chain on this host
+  1. Reconnaissance        03:56:47
+  2. Initial Access        03:57:26
+  3. Persistence           03:57:26
+  4. Privilege Escalation  03:57:33
+  5. Stealth               04:37:40
+  also seen off the chain: Discovery, Impact
+  tactics mapped per alert; the chain orders them by time only
 
 Related families on this host
-  F218  Wazuh / Web server 400 error code.  score 1.00  other detector
-  F210  AMiner / AMiner: New event type.  score 1.00  other detector
-  F274  Wazuh / sshd: insecure connection attempt (scan).  score 0.05  other detector
-  F213  AMiner / AMiner: New characters in Apache Access request.  score 1.00  other detector
-  F214  AMiner / AMiner: New status code in Apache Access log.  score 1.00  other detector
-  F220  Wazuh / Multiple web server 400 error codes from same source ip.  score 1.00  other detector
+  F214  AMiner / AMiner: New status code in Apache Access log.  score 1.00
+  F221  Wazuh / Multiple web server 400 error codes from same source ip.  score 1.00  other detector
+  F223  Wazuh / Suspicious URL access.  score 1.00  other detector
+  F234  Wazuh / Common web attack.  score 1.00  other detector
+  F219  Wazuh / Apache: Attempt to access forbidden file or directory.  score 1.00  other detector
+  F213  Suricata / ET SCAN Possible Nmap User-Agent Observed  score 1.00  other detector
 ```
 
 ---
@@ -491,7 +545,7 @@ refusal exits with code 3 and says why; nothing is saved. A saved retrain
 prints what was refit, rescaled and kept, and the bundle's provenance sidecar
 records every setting.
 
-    meerkat retrain --incidents FILE --inventory FILE [--input DIR]
+    meerkat retrain --incidents FILE [--input DIR] [--inventory FILE]
                     [--environment NAME] [--out FILE] [--holdout-days N]
                     [--budget K] [--model FILE] [--reviewed-periods FILE]
                     [--refit-ranking-weights] [--prior-k K] [--min-positives N]
@@ -501,7 +555,7 @@ records every setting.
 | option | description |
 | --- | --- |
 | `--incidents FILE` | CSV of `start,end,host,verdict`, required; format in [Inputs](#inputs) |
-| `--inventory FILE` | required; incidents name hosts through it |
+| `--environment`, `--input`, `--inventory` | the shared openers; incidents name hosts through the inventory |
 | `--out FILE` | where the new bundle is written |
 | `--holdout-days N` | days held out for the comparison, default 7 |
 | `--budget K` | budget the comparison scores at, default 10 |
@@ -645,6 +699,11 @@ normalisation.
 
 **`esc%` needs history.** A fresh environment shows the score alone until
 reviews accumulate.
+
+**The chain follows the mapping.** The chain reflects the mapping's coverage as
+much as the attack. On the demo run the reviewed mapping gives a tactic to 85%
+of AMiner alerts, 34% of Wazuh alerts and 0.3% of Suricata alerts, and one
+host reaches a chain of five.
 
 **Evaluation is testbed data.** The published numbers come from the AIT Alert
 Data Set and a cross-check on CAM-LDS; no production SOC data was available.

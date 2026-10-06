@@ -92,6 +92,13 @@ class FileModeTests(unittest.TestCase):
         back = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(back, rows)
 
+    def test_a_failed_write_leaves_no_file(self):
+        out = self.dir / "out.json"
+        rows = [wazuh("2022-01-21T01:00:00+0000"), {"bad": object()}]
+        with self.assertRaises(TypeError):
+            connectors.write_records(out, rows)
+        self.assertEqual(list(self.dir.iterdir()), [])
+
 
 def hit(ts, ident, source=None):
     return {"_id": ident, "_source": source or wazuh(ts), "sort": [ts, ident]}
@@ -160,20 +167,6 @@ class IndexerPagingTests(unittest.TestCase):
         self.assertIn("_source", str(caught.exception))
 
 
-class FakeResponse:
-    def __init__(self, payload):
-        self.payload = payload
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def read(self):
-        return self.payload
-
-
 class TransportTests(unittest.TestCase):
     def setUp(self):
         self.config = connectors.IndexerConfig(host="idx.example")
@@ -181,42 +174,42 @@ class TransportTests(unittest.TestCase):
     def test_basic_auth_header_is_set(self):
         captured = {}
 
-        def fake_urlopen(request, context=None, timeout=None):
+        def fake_send(request, context, timeout):
             captured["auth"] = request.get_header("Authorization")
-            return FakeResponse(b'{"ok": true}')
+            return b'{"ok": true}'
 
         self.config.user = "admin"
         self.config.password = "secret"
-        with mock.patch.object(connectors.urllib.request, "urlopen", fake_urlopen):
+        with mock.patch.object(connectors, "_http_send", fake_send):
             connectors._send(self.config, "GET", "/", None)
         self.assertTrue(captured["auth"].startswith("Basic "))
 
     def test_token_header_is_used_verbatim(self):
         captured = {}
 
-        def fake_urlopen(request, context=None, timeout=None):
+        def fake_send(request, context, timeout):
             captured["auth"] = request.get_header("Authorization")
-            return FakeResponse(b"{}")
+            return b"{}"
 
         self.config.token = "Bearer abc"
-        with mock.patch.object(connectors.urllib.request, "urlopen", fake_urlopen):
+        with mock.patch.object(connectors, "_http_send", fake_send):
             connectors._send(self.config, "GET", "/", None)
         self.assertEqual(captured["auth"], "Bearer abc")
 
     def test_401_becomes_a_credentials_error(self):
-        def fake_urlopen(request, context=None, timeout=None):
+        def fake_send(request, context, timeout):
             raise urllib.error.HTTPError("u", 401, "Unauthorized", {}, None)
 
-        with mock.patch.object(connectors.urllib.request, "urlopen", fake_urlopen):
+        with mock.patch.object(connectors, "_http_send", fake_send):
             with self.assertRaises(connectors.ConnectorError) as caught:
                 connectors._send(self.config, "GET", "/", None)
         self.assertIn("credentials", str(caught.exception))
 
     def test_a_non_json_response_is_reported(self):
-        def fake_urlopen(request, context=None, timeout=None):
-            return FakeResponse(b"<html>not json</html>")
+        def fake_send(request, context, timeout):
+            return b"<html>not json</html>"
 
-        with mock.patch.object(connectors.urllib.request, "urlopen", fake_urlopen):
+        with mock.patch.object(connectors, "_http_send", fake_send):
             with self.assertRaises(connectors.ConnectorError) as caught:
                 connectors._send(self.config, "GET", "/", None)
         self.assertIn("not JSON", str(caught.exception))
@@ -224,32 +217,44 @@ class TransportTests(unittest.TestCase):
     def test_deeply_nested_response_is_reported(self):
         deep = b"[" * 100000 + b"]" * 100000
 
-        def fake_urlopen(request, context=None, timeout=None):
-            return FakeResponse(deep)
+        def fake_send(request, context, timeout):
+            return deep
 
-        with mock.patch.object(connectors.urllib.request, "urlopen", fake_urlopen):
+        with mock.patch.object(connectors, "_http_send", fake_send):
             with self.assertRaises(connectors.ConnectorError) as caught:
                 connectors._send(self.config, "GET", "/", None)
         self.assertIn("nested too deeply", str(caught.exception))
 
     def test_unreachable_host_becomes_a_reach_error(self):
-        def fake_urlopen(request, context=None, timeout=None):
+        def fake_send(request, context, timeout):
             raise urllib.error.URLError("name or service not known")
 
-        with mock.patch.object(connectors.urllib.request, "urlopen", fake_urlopen):
+        with mock.patch.object(connectors, "_http_send", fake_send):
             with self.assertRaises(connectors.ConnectorError) as caught:
                 connectors._send(self.config, "GET", "/", None)
         self.assertIn("cannot reach", str(caught.exception))
 
+    def test_an_oversized_response_is_refused(self):
+        def fake_send(request, context, timeout):
+            return b"x" * 20
+
+        with (
+            mock.patch.object(connectors, "MAX_RESPONSE_BYTES", 10),
+            mock.patch.object(connectors, "_http_send", fake_send),
+        ):
+            with self.assertRaises(connectors.ConnectorError) as caught:
+                connectors._send(self.config, "GET", "/", None)
+        self.assertIn("exceeds", str(caught.exception))
+
     def test_insecure_config_disables_verification(self):
         captured = {}
 
-        def fake_urlopen(request, context=None, timeout=None):
+        def fake_send(request, context, timeout):
             captured["context"] = context
-            return FakeResponse(b"{}")
+            return b"{}"
 
         self.config.verify_tls = False
-        with mock.patch.object(connectors.urllib.request, "urlopen", fake_urlopen):
+        with mock.patch.object(connectors, "_http_send", fake_send):
             connectors._send(self.config, "GET", "/", None)
         self.assertFalse(captured["context"].check_hostname)
         self.assertEqual(captured["context"].verify_mode, connectors.ssl.CERT_NONE)

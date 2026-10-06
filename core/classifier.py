@@ -7,6 +7,7 @@ Public API:
     fit_model(X, session_positive)            -> fitted forest
     predict_scores(model, X)                  -> raw ranking score per session
     fit_family_reranker(families)             -> FamilyReranker
+    FamilyReranker.contributions(families)    -> per-feature push on each score
     fit_calibrator(family_scores, positive)   -> EvidenceCalibrator
     explain_session(model, feature_row)       -> active important features
     save_model(model, path) / load_model(path)
@@ -67,6 +68,19 @@ class FamilyReranker:
     def predict(self, families: pd.DataFrame) -> np.ndarray:
         X = _family_feature_matrix(families, self.roles)
         return self.model.predict_proba(X)[:, 1]
+
+    # the pipeline is a scaler then a logistic regression, so the logit is the
+    # intercept plus coef * (value - mean) / scale per feature, and its sigmoid
+    # is the score predict returns
+    def contributions(self, families: pd.DataFrame) -> tuple[pd.DataFrame, float]:
+        X = _family_feature_matrix(families, self.roles)
+        scaler = self.model.named_steps["scale"]
+        logistic = self.model.named_steps["model"]
+        standardized = (X.to_numpy(dtype=float) - scaler.mean_) / scaler.scale_
+        pushes = pd.DataFrame(
+            standardized * logistic.coef_[0], index=families.index, columns=X.columns
+        )
+        return pushes, float(logistic.intercept_[0])
 
 
 def _family_feature_matrix(
