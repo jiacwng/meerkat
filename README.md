@@ -150,9 +150,6 @@ reaches 33, at a similar reading cost. Full tables and every baseline:
 The busiest day in the test data, 453,697 alerts, triages in 72 seconds with
 1.1 GB of memory on a machine with 12 cores and 7 GB of memory.
 
-The [technical report](docs/report/meerkat.pdf) covers the method and the
-limits of the evaluation.
-
 ## Limitations
 
 - The results come from one simulated testbed whose networks share an attack
