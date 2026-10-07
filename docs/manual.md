@@ -28,7 +28,7 @@ meerkat demo
 ```
 
 From the release files: the `.whl` is the built package, and
-`pip install meerkat-1.1.0-py3-none-any.whl` installs it. The `.tar.gz` is the
+`pip install meerkat-1.2.0-py3-none-any.whl` installs it. The `.tar.gz` is the
 same code as a source archive, and pip installs it the same way.
 `py3-none-any` in the wheel name says the file is pure Python and serves every
 operating system. A wheel install brings the CLI and the ATT&CK lookup,
