@@ -38,6 +38,14 @@ DECILES = tuple(round(0.1 * i, 2) for i in range(1, 10))
 # that matters most for a ranking built on rule identity
 UNSEEN_RULE_WARN = 0.20
 
+# every session on a host repeats the host's value, so a day holds about as many
+# observations as hosts, too few for PSI
+HOST_FEATURES = frozenset({"detectors_on_entity", "groups_on_entity", "log_alerts_on_entity"})
+
+
+def _compared(name: str) -> bool:
+    return not name.startswith("role_") and name not in HOST_FEATURES
+
 
 @dataclass
 class TrainingProfile:
@@ -96,12 +104,12 @@ def build_profile(
         feature_bins={
             name: _reference(X[name].to_numpy())
             for name in X.columns
-            if not name.startswith("role_")
+            if _compared(name)
         },
         feature_medians={
             name: float(np.nanmedian(X[name].to_numpy(dtype=float)))
             for name in X.columns
-            if not name.startswith("role_") and len(X)
+            if _compared(name) and len(X)
         },
         session_score_bins=_reference(np.asarray(session_scores)),
         family_score_bins=(
@@ -154,7 +162,7 @@ def compare_profile(
 ) -> list[FeatureDrift]:
     drifts = []
     for name, (edges, expected) in profile.feature_bins.items():
-        if name not in X:
+        if name not in X or not _compared(name):
             continue
         current = X[name].to_numpy(dtype=float)
         psi = population_stability_index(edges, expected, current)

@@ -65,6 +65,14 @@
   shape leaves the CPU fields empty. A record whose `RawLogData` or
   `Timestamps` is not a list is skipped. `LogResources` given as one string is
   one resource.
+- `drift` no longer compares `detectors_on_entity`, `groups_on_entity` and
+  `log_alerts_on_entity`. Each session on a host repeats the host's value, so
+  one day gave about ten observations. Compared with the same network's other
+  days, all 19 AIT days read as major drift. 7 still do, on features that repeat
+  for every session of a rule (`log_rarity`, `severity_mean`, `severity_max`,
+  `detector_aminer`). The model still reads the three host counts. `--json`
+  lists three fewer features.
+- `drift` warns when the alerts make fewer than 300 sessions.
 
 ## 1.1.0 - 2026-07-29
 

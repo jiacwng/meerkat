@@ -26,6 +26,7 @@ from bench.evaluate import (
 from core import classifier
 from core.classifier import FAMILY_NUMERIC_FEATURES
 from core.drift import (
+    HOST_FEATURES,
     PSI_MAJOR,
     PSI_STABLE,
     UNSEEN_RULE_WARN,
@@ -37,7 +38,11 @@ from core.drift import (
     unseen_rule_share,
     verdict_for,
 )
-from core.features import SCHEMA_INDEX_NAMES, SessionFeatureSchema
+from core.features import (
+    SCHEMA_INDEX_NAMES,
+    SESSION_NUMERIC_FEATURES,
+    SessionFeatureSchema,
+)
 from core.incidents import (
     assign_bag_priors,
     assign_reviewed,
@@ -366,6 +371,24 @@ class TestProfile(unittest.TestCase):
 
     def test_an_empty_profile_compares_to_nothing_rather_than_crashing(self):
         self.assertEqual(compare_profile(TrainingProfile(), matrix(50)), [])
+
+    def test_host_features_are_left_out_of_the_profile(self):
+        X = matrix(500).assign(groups_on_entity=np.repeat([81.0, 55.0, 45.0, 35.0, 24.0], 100))
+        profile = build_profile(X, np.zeros(500))
+        self.assertNotIn("groups_on_entity", profile.feature_bins)
+        self.assertNotIn("groups_on_entity", profile.feature_medians)
+
+    def test_the_host_features_are_session_features(self):
+        self.assertLessEqual(HOST_FEATURES, set(SESSION_NUMERIC_FEATURES))
+
+    def test_a_stored_profile_with_host_features_does_not_compare_them(self):
+        X = matrix(500).assign(groups_on_entity=np.arange(500, dtype=float))
+        profile = build_profile(X, np.zeros(500))
+        profile.feature_bins["groups_on_entity"] = _reference(X["groups_on_entity"].to_numpy())
+        one_day = X.assign(groups_on_entity=np.repeat([81.0, 45.0], 250))
+        names = {d.name for d in compare_profile(profile, one_day)}
+        self.assertNotIn("groups_on_entity", names)
+        self.assertIn("log_size", names)
 
 
 class TestUnseenRuleShare(unittest.TestCase):

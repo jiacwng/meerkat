@@ -2537,6 +2537,11 @@ def cmd_drift(args) -> None:
             f"[/yellow]  below about {DRIFT_MIN_TRAINING} the comparison is mostly "
             "noise: unmoved features read as major drift roughly half the time"
         )
+    if len(sessions) < DRIFT_MIN_TRAINING and not args.json:
+        console.print(
+            f"[yellow]these alerts make {len(sessions)} sessions[/yellow]  below about "
+            f"{DRIFT_MIN_TRAINING} the comparison is mostly noise; compare several days at once"
+        )
 
     drifts = compare_profile(profile, X)
     report["features"] = [
