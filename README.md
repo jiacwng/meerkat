@@ -16,7 +16,7 @@
   <a href="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml">
     <img src="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml/badge.svg" alt="CI status">
   </a>
-  <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 to 3.13">
+  <img src="https://img.shields.io/badge/python-3.12%20%7C%203.13-blue" alt="Python 3.12 and 3.13">
   <img src="https://img.shields.io/badge/license-MIT-informational" alt="MIT license">
 </p>
 
@@ -63,7 +63,7 @@ are the queue. The budget is yours to set.
 
 ## Quick start
 
-Python 3.11 or newer, and Git LFS for the bundled example alerts.
+Python 3.12 or newer, and Git LFS for the bundled example alerts.
 
 ```bash
 git clone https://github.com/jiacwng/meerkat.git
@@ -138,13 +138,13 @@ opened on demand while investigating.
 
 | Ranking method | steps reached (of 60) | items opened per day | alerts behind them, per day |
 |---|---:|---:|---:|
-| **Meerkat** | **58** | **10** | **5,775** |
+| **Meerkat** | **58** | **10** | **14,660** |
 | Detectors' own severity | 33 | 10 | 4,542 |
 
 A step is one phase of the scripted attack on one machine, reached when the
 queue holds an alert labelled to it. 60 of the 79 steps are findable at all.
 At ten items a day, Meerkat reaches 58; the detectors' own severity ordering
-reaches 33, at a similar reading cost. Full tables and every baseline:
+reaches 33. Full tables and every baseline:
 [bench/README.md](bench/README.md).
 
 The busiest day in the test data, 453,697 alerts, triages in 72 seconds with

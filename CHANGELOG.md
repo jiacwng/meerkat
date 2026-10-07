@@ -31,8 +31,8 @@
 
 ### Breaking
 
-- meerkat needs numpy 2.0, pandas 2.2.2 and scikit-learn 1.4.2 or later. A run
-  saved under numpy 1 no longer opens; re-run triage.
+- meerkat needs Python 3.12, numpy 2.0, pandas 2.2.2 and scikit-learn 1.4.2 or
+  later. A run saved under numpy 1 no longer opens; re-run triage.
 - `inspect` replaces "Related ATT&CK observations" with "ATT&CK chain on this
   host", computed over the whole host and day.
 

@@ -18,7 +18,7 @@ def frame_digest(raw_dir: Path, labels: Path, scenario: str, inventory: Path) ->
     frame = normalize_scenario(raw_dir, labels, scenario, inventory)
     frame = frame.sort_values(list(frame.columns), kind="stable").reset_index(drop=True)
     # frozensets and categoricals serialise in hash order, so compare as text
-    flat = frame.astype(str).to_csv(index=False).encode()
+    flat = frame.map(str).to_csv(index=False).encode()
     return hashlib.sha256(flat).hexdigest()[:16]
 
 
