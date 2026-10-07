@@ -22,6 +22,7 @@ alerts and the benchmark. Git LFS stores the large files.
 git clone https://github.com/jiacwng/meerkat.git
 cd meerkat
 git lfs install && git lfs pull
+python3 -m venv .venv && source .venv/bin/activate
 python -m pip install -e .
 meerkat demo
 ```

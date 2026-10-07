@@ -69,6 +69,7 @@ Python 3.12 or newer, and Git LFS for the bundled example alerts.
 git clone https://github.com/jiacwng/meerkat.git
 cd meerkat
 git lfs install && git lfs pull
+python3 -m venv .venv && source .venv/bin/activate
 python -m pip install -e .
 meerkat demo
 ```

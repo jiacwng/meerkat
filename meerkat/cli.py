@@ -1150,8 +1150,10 @@ def _load_bundle(path: Path):
         except UntrustedBundleError as error:
             _fail(f"[red]{safe(str(error))}[/red]")
     mismatched = [
-        w for w in caught
+        w.message for w in caught
         if "InconsistentVersionWarning" in type(w.message).__name__
+        and w.message.original_sklearn_version.split(".")[:2]
+        != w.message.current_sklearn_version.split(".")[:2]
     ]
     if mismatched:
         import sklearn
