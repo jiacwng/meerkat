@@ -58,6 +58,7 @@
 
 ### Fixed
 
+- A scikit-learn bug-fix release no longer prints the model version note.
 - `review --session all` records a decision for the whole family.
 - `review --analyst NAME` records the name; it was ignored.
 - `retrain` finds the inventory like the other commands: `--inventory`, then
