@@ -9,6 +9,7 @@ import json
 import re
 import tempfile
 import unittest
+import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
@@ -16,6 +17,7 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
+from core import classifier
 from core.classifier import is_lfs_pointer, provenance_path
 from core.drift import PSI_MAJOR
 from meerkat import cli
@@ -1240,6 +1242,32 @@ class BundleGateCliTests(unittest.TestCase):
         ):
             cli._load_bundle(path)
         self.assertIn("changedafteritwaswritten", squashed(reported.getvalue()))
+
+    def test_only_a_minor_version_change_prints_the_scikit_learn_note(self):
+        from sklearn.exceptions import InconsistentVersionWarning
+
+        path = tiny_bundle(temporary_directory() / "bundle.skops")
+        real_load = classifier.load_model
+        for trained, noted in (("1.9.0", False), ("1.8.0", True)):
+            def load(model_path, trained=trained):
+                warnings.warn(InconsistentVersionWarning(
+                    estimator_name="RandomForestClassifier",
+                    current_sklearn_version="1.9.1",
+                    original_sklearn_version=trained,
+                ))
+                return real_load(model_path)
+
+            printed = io.StringIO()
+            with (
+                mock.patch("core.classifier.load_model", load),
+                contextlib.redirect_stdout(printed),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                cli._load_bundle(path)
+            with self.subTest(trained=trained):
+                self.assertEqual(
+                    "differentscikit-learn" in squashed(printed.getvalue()), noted
+                )
 
 
 class TestRuleCardinality(unittest.TestCase):
