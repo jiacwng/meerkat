@@ -578,6 +578,14 @@ share of rules the model never saw, and inventory coverage. PSI below 0.10 is
 stable, above 0.25 is a major shift; a major shift exits with code 4. It does
 not report whether the ranking got worse, which needs labelled outcomes.
 
+The three host counts, `detectors_on_entity`, `groups_on_entity` and
+`log_alerts_on_entity`, are left out of the comparison. Every session on a host
+repeats them, so one day holds too few values to compare. The model still reads
+them. Features that repeat for every session of a rule, such as `log_rarity`
+and `severity_mean`, have the same problem in a milder form and can still raise
+a false alarm. Below about 300 sessions on either side the comparison is mostly
+noise, and `drift` says so.
+
     meerkat drift [--environment NAME] [--input DIR] [--inventory FILE]
                   [--model FILE] [--top N] [--all] [--json]
                   [--wazuh-file FILE] [--aminer-file FILE]
@@ -598,16 +606,13 @@ and scores normally; retrain with `meerkat retrain` to silence this.
   rules the model never saw: 0.0% of alerts
   sessions on hosts outside the inventory: 0.0%  (training had 0.4%)
 feature drift, worst first
-┏━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━┓
-┃ feature              ┃   PSI ┃ verdict  ┃ training median ┃     now ┃
-┡━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━┩
-│ log_alerts_on_entity │ 1.897 │ major    │           7.364 │   6.894 │
-│ groups_on_entity     │ 0.351 │ major    │          45.000 │  53.000 │
-│ log_rarity           │ 0.160 │ moderate │          -8.940 │ -11.519 │
-└──────────────────────┴───────┴──────────┴─────────────────┴─────────┘
+┏━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━┓
+┃ feature    ┃   PSI ┃ verdict  ┃ training median ┃     now ┃
+┡━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━┩
+│ log_rarity │ 0.160 │ moderate │          -8.940 │ -11.519 │
+└────────────┴───────┴──────────┴─────────────────┴─────────┘
   top-decile family score: 0.998 now, 0.900 at training
-2 feature(s) past PSI 0.25  this reports that the input moved. It does not measure whether the
-ranking is still right, which needs confirmed outcomes.
+no major drift  worst PSI 0.160
 ```
 
 ---

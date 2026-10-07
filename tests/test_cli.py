@@ -1476,6 +1476,23 @@ class RealExitCodeTests(unittest.TestCase):
         self.assertIn("rules the model never saw", report)
         self.assertIn("the model has no rarity signal for these", report)
 
+    def test_a_small_day_is_reported_as_too_small_to_compare(self):
+        directory = client_directory()
+        printed = io.StringIO()
+        with (
+            contextlib.redirect_stdout(printed),
+            contextlib.redirect_stderr(io.StringIO()),
+            contextlib.suppress(SystemExit),
+        ):
+            cli.cmd_drift(argparse.Namespace(
+                model=SHIPPED_BUNDLE, input=directory, company="acme",
+                inventory=directory / "inventory" / "acme.json",
+                wazuh_file=None, aminer_file=None, top=5, json=False, all=False,
+            ))
+        report = " ".join(printed.getvalue().split())
+        self.assertIn(f"below about {cli.DRIFT_MIN_TRAINING} the comparison is mostly noise", report)
+        self.assertIn("compare several days at once", report)
+
 
 class RankingWeightContestTests(unittest.TestCase):
     # the adopt path cannot be reached on single-campaign data, so it is
