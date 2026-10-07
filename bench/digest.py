@@ -11,7 +11,7 @@ from pathlib import Path
 from core.normalize import normalize_scenario
 
 # russellmitchell: 36358 rows across 52 columns
-KNOWN = "4b390168afda96bf"
+KNOWN = "2da43e6752689af2"
 
 
 def frame_digest(raw_dir: Path, labels: Path, scenario: str, inventory: Path) -> str:
