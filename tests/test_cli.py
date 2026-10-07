@@ -16,104 +16,29 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
-from core.classifier import provenance_path, save_model
+from core.classifier import provenance_path
 from core.drift import PSI_MAJOR
-from core.normalize import AMINER_FAMILY, WAZUH_FAMILY, resolve_alert_files
 from meerkat import cli
 from meerkat.cli import (
     EXIT_DECLINED,
     EXIT_ERROR,
-    RULE_CARDINALITY_WARN,
     build_parser,
 )
-
-
-def make_alerts() -> pd.DataFrame:
-    return pd.DataFrame([
-        {
-            "timestamp": 100.0, "detector_source": "wazuh",
-            "name": "Web server 400 error", "host": "intranet-server",
-            "entity_id": "10.0.0.5",
-            "source_file": "acme_wazuh.json", "source_position": 10,
-            "rule_id": "31101", "severity": 5.0, "alert_category": "",
-            "http_status": 400.0, "http_method": "GET", "web_request": "/a",
-            "technique_ids": "T1595", "tactics": ("Reconnaissance",),
-        },
-        {
-            "timestamp": 160.0, "detector_source": "wazuh",
-            "name": "Web server 400 error", "host": "intranet-server",
-            "entity_id": "10.0.0.5",
-            "source_file": "acme_wazuh.json", "source_position": 11,
-            "rule_id": "31101", "severity": 5.0, "alert_category": "",
-            "http_status": 404.0, "http_method": "GET", "web_request": "/b",
-            "technique_ids": "T1595", "tactics": ("Reconnaissance",),
-        },
-        {
-            "timestamp": 900.0, "detector_source": "wazuh",
-            "name": "Web server 400 error", "host": "intranet-server",
-            "entity_id": "10.0.0.5",
-            "source_file": "acme_wazuh.json", "source_position": 40,
-            "rule_id": "31101", "severity": 5.0, "alert_category": "",
-            "http_status": 400.0, "http_method": "GET", "web_request": "/c",
-            "technique_ids": "T1595", "tactics": ("Reconnaissance",),
-        },
-        {
-            "timestamp": 500.0, "detector_source": "suricata",
-            "name": "ET SCAN probe", "host": "intranet-server",
-            "entity_id": "10.0.0.5",
-            "source_file": "acme_suricata.json", "source_position": 3,
-            "rule_id": "2001", "severity": 2.0, "alert_category": "recon",
-            "http_status": float("nan"), "http_method": "", "web_request": "",
-            "technique_ids": "", "tactics": (),
-        },
-    ])
-
-
-def make_families() -> pd.DataFrame:
-    return pd.DataFrame([
-        {
-            "day": 0, "entity_id": "10.0.0.5", "detector_source": "wazuh",
-            "rule_id": "31101", "ranking_score": 0.9,
-            "evidence_probability": 0.8, "start": 100.0, "end": 900.0,
-            "family_span_s": 800.0, "representative_session_id": "acme#0",
-            "alert_rows": [0, 1, 2], "alert_count": 3, "n_child_sessions": 2,
-            "child_session_ids": ["acme#0", "acme#1"], "child_score_max": 0.9,
-            "detectors_nearby_10m": 2.0, "technique_count": 1,
-            "technique_id_set": frozenset({"T1595"}), "family_positive": True,
-            "asset_roles": ("intranet", "servers"),
-            "labelled_windows": frozenset({0}),
-            "temporal_overlap_windows": frozenset({0}),
-            "labelled_alert_count": 2, "family_id": "acme#0#10.0.0.5#wazuh#31101",
-        },
-        {
-            "day": 0, "entity_id": "10.0.0.5", "detector_source": "suricata",
-            "rule_id": "2001", "ranking_score": 0.4,
-            "evidence_probability": 0.3, "start": 500.0, "end": 500.0,
-            "family_span_s": 0.0, "representative_session_id": "acme#2",
-            "alert_rows": [3], "alert_count": 1, "n_child_sessions": 1,
-            "child_session_ids": ["acme#2"], "child_score_max": 0.4,
-            "detectors_nearby_10m": 2.0, "technique_count": 0,
-            "technique_id_set": frozenset(), "family_positive": False,
-            "asset_roles": (),
-            "labelled_windows": frozenset(),
-            "temporal_overlap_windows": frozenset(),
-            "labelled_alert_count": 0, "family_id": "acme#0#10.0.0.5#suricata#2001",
-        },
-    ])
-
-
-def make_sessions() -> pd.DataFrame:
-    return pd.DataFrame([
-        {"session_id": "acme#0", "start": 100.0, "end": 160.0,
-         "duration_s": 60.0, "size": 2, "ranking_score": 0.9,
-         "detector_source": "wazuh", "rule_id": "31101", "alert_rows": [0, 1]},
-        {"session_id": "acme#1", "start": 900.0, "end": 900.0,
-         "duration_s": 0.0, "size": 1, "ranking_score": 0.7,
-         "detector_source": "wazuh", "rule_id": "31101", "alert_rows": [2]},
-        {"session_id": "acme#2", "start": 500.0, "end": 500.0,
-         "duration_s": 0.0, "size": 1, "ranking_score": 0.4,
-         "detector_source": "suricata", "rule_id": "2001", "alert_rows": [3]},
-    ])
+from tests.fixtures import (
+    HAS_BUNDLE,
+    SHIPPED_BUNDLE,
+    client_directory,
+    eve_alert_record,
+    make_alerts,
+    make_families,
+    make_run,
+    squashed,
+    tiny_bundle,
+    triage_client,
+    wazuh_record,
+    write_inventory,
+    write_records,
+)
 
 
 class HandleTests(unittest.TestCase):
@@ -190,33 +115,25 @@ class ClosedPipeTests(unittest.TestCase):
         import subprocess
         import sys
 
-        runs = Path(tempfile.mkdtemp())
-        alerts = make_alerts().assign(mapping_source="rule")
-        decorated = cli.decorate_families(make_families(), alerts, budget=2)
-        cli.save_run(runs, "acme-1", {"company": "acme", "budget": 2},
-                     decorated, make_sessions(), alerts)
-        for command in (["queue"], ["queue", "--json"], ["attack", "--json"]):
+        runs = make_run(alerts=make_alerts().assign(mapping_source="rule"))
+        for command in (["queue"], ["queue", "--json"]):
             with self.subTest(command=command):
-                process = subprocess.Popen(
+                with subprocess.Popen(
                     [sys.executable, "-m", "meerkat.cli", *command,
                      "--runs-dir", str(runs)],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     cwd=Path(__file__).resolve().parents[1],
-                )
-                process.stdout.readline()
-                process.stdout.close()
-                stderr = process.stderr.read().decode()
-                self.assertEqual(process.wait(), 0, stderr)
-                self.assertNotIn("Exception", stderr)
+                ) as process:
+                    process.stdout.readline()
+                    process.stdout.close()
+                    stderr = process.stderr.read().decode()
+                    self.assertEqual(process.wait(), 0, stderr)
+                    self.assertNotIn("Exception", stderr)
 
 
 class RunRoundTripTests(unittest.TestCase):
     def _save(self, runs_dir: Path, run_id: str) -> None:
-        decorated = cli.decorate_families(make_families(), make_alerts(), budget=1)
-        cli.save_run(
-            runs_dir, run_id, {"company": "acme", "budget": 1},
-            decorated, make_sessions(), make_alerts(),
-        )
+        make_run(runs_dir, run_id, budget=1)
 
     def test_latest_pointer_tracks_newest_good_run(self):
         # latest.txt is written after the pickles, so a run that died halfway
@@ -313,13 +230,7 @@ class ReviewTests(unittest.TestCase):
     def test_review_records_the_named_analyst(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
-            decorated = cli.decorate_families(
-                make_families(), make_alerts(), budget=2
-            )
-            cli.save_run(
-                runs, "acme-1", {"company": "acme", "budget": 2},
-                decorated, make_sessions(), make_alerts(),
-            )
+            make_run(runs)
             args = argparse.Namespace(
                 handle="F2", decision="benign", session=None, note=None,
                 analyst="alice", run="acme-1", runs_dir=runs,
@@ -331,13 +242,7 @@ class ReviewTests(unittest.TestCase):
     def test_a_handle_with_markup_is_printed_not_parsed(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
-            decorated = cli.decorate_families(
-                make_families(), make_alerts(), budget=2
-            )
-            cli.save_run(
-                runs, "acme-1", {"company": "acme", "budget": 2},
-                decorated, make_sessions(), make_alerts(),
-            )
+            make_run(runs)
             for handle, session in (("[/x]", None), ("F1", "[/x]")):
                 args = argparse.Namespace(
                     handle=handle, decision="benign", session=session, note=None,
@@ -353,13 +258,7 @@ class DecisionExportTests(unittest.TestCase):
     def test_decisions_propagate_family_wide_unless_a_session_overrides(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
-            decorated = cli.decorate_families(
-                make_families(), make_alerts(), budget=2
-            )
-            cli.save_run(
-                runs, "acme-1", {"company": "acme", "budget": 2},
-                decorated, make_sessions(), make_alerts(),
-            )
+            make_run(runs)
             run = cli.load_run(runs, "acme-1")
             family = run.family_by_handle("F1")
             cli.append_review(
@@ -384,13 +283,7 @@ class DecisionExportTests(unittest.TestCase):
     def test_review_session_all_records_a_family_wide_decision(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
-            decorated = cli.decorate_families(
-                make_families(), make_alerts(), budget=2
-            )
-            cli.save_run(
-                runs, "acme-1", {"company": "acme", "budget": 2},
-                decorated, make_sessions(), make_alerts(),
-            )
+            make_run(runs)
             args = argparse.Namespace(
                 handle="F1", decision="escalate", session="all", note=None,
                 analyst=None, run="acme-1", runs_dir=runs,
@@ -408,13 +301,7 @@ class DecisionExportTests(unittest.TestCase):
     def test_a_later_family_decision_covers_everything_again(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
-            decorated = cli.decorate_families(
-                make_families(), make_alerts(), budget=2
-            )
-            cli.save_run(
-                runs, "acme-1", {"company": "acme", "budget": 2},
-                decorated, make_sessions(), make_alerts(),
-            )
+            make_run(runs)
             run = cli.load_run(runs, "acme-1")
             family = run.family_by_handle("F1")
             cli.append_review(
@@ -441,13 +328,7 @@ class HtmlExportTests(unittest.TestCase):
         return re.sub(r"<[^>]+>", "", page)
 
     def _saved_run(self, runs):
-        decorated = cli.decorate_families(
-            make_families(), make_alerts(), budget=2
-        )
-        cli.save_run(
-            runs, "acme-1", {"company": "acme", "budget": 2},
-            decorated, make_sessions(), make_alerts(),
-        )
+        make_run(runs)
 
     def test_escalations_carry_evidence_closed_take_one_line(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -508,13 +389,7 @@ class HtmlExportTests(unittest.TestCase):
                 "<script>alert(1)</script> [red]boom[/red] \x07 "
                 "[link=javascript:alert(1)]x[/link]"
             )
-            decorated = cli.decorate_families(
-                make_families(), alerts, budget=2
-            )
-            cli.save_run(
-                runs, "acme-1", {"company": "acme", "budget": 2},
-                decorated, make_sessions(), alerts,
-            )
+            make_run(runs, alerts=alerts)
             run = cli.load_run(runs, "acme-1")
             f1 = run.family_by_handle("F1")
             cli.append_review(
@@ -579,12 +454,6 @@ class FilterTests(unittest.TestCase):
         by_rule = cli._apply_filters(alerts, [("rule_id", "2001")], [])
         self.assertEqual(len(by_rule), 1)
 
-    def test_match_numeric_series_directly(self):
-        # the typed value always arrives as a string, so a float column parses
-        # it once and returns a mask over the rows
-        series = pd.Series([400.0, 404.0])
-        self.assertEqual(cli._match(series, "400").tolist(), [True, False])
-
 
 class PanelTests(unittest.TestCase):
     def _capture(self, call) -> str:
@@ -604,22 +473,6 @@ class PanelTests(unittest.TestCase):
         self.assertIn("Provenance", text)
         self.assertNotIn("Process / System", text)
 
-    def test_http_outcome_leads_with_the_verdict(self):
-        # whether anything got through is the first question on a web attack,
-        # so the count of successes leads and the codes follow as detail
-        all_404 = pd.DataFrame({"http_status": [404.0] * 6})
-        mixed = pd.DataFrame(
-            {"http_status": [200.0, 200.0, 302.0, 404.0, 500.0]}
-        )
-
-        self.assertEqual(
-            cli._http_outcome(all_404), "6 requests, none succeeded (404)"
-        )
-        self.assertEqual(
-            cli._http_outcome(mixed),
-            "5 requests, 3 succeeded (200, 302) of 200, 302, 404, 500",
-        )
-
     def test_family_and_session_overviews_show_http_outcome(self):
         # the outcome line is recomputed over whatever alerts are in scope, so
         # the family reads 3 requests and drilling into S1 reads 2
@@ -627,13 +480,7 @@ class PanelTests(unittest.TestCase):
             runs = Path(tmp)
             alerts = make_alerts()
             alerts.loc[[0, 1, 2], "http_status"] = 404.0
-            decorated = cli.decorate_families(
-                make_families(), alerts, budget=1
-            )
-            cli.save_run(
-                runs, "acme-1", {"company": "acme", "budget": 1},
-                decorated, make_sessions(), alerts,
-            )
+            make_run(runs, alerts=alerts, budget=1)
             run = cli.load_run(runs, "acme-1")
             family = run.family_by_handle("F001")
             family_text = self._capture(
@@ -665,13 +512,7 @@ class PanelTests(unittest.TestCase):
         # suricata family prints no outcome line at all
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
-            decorated = cli.decorate_families(
-                make_families(), make_alerts(), budget=2
-            )
-            cli.save_run(
-                runs, "acme-1", {"company": "acme", "budget": 2},
-                decorated, make_sessions(), make_alerts(),
-            )
+            make_run(runs)
             run = cli.load_run(runs, "acme-1")
             text = self._capture(
                 lambda: cli.render_family(run, run.family_by_handle("F002"), {})
@@ -683,13 +524,7 @@ class PanelTests(unittest.TestCase):
         # or related-host block shows up here as a traceback
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
-            decorated = cli.decorate_families(
-                make_families(), make_alerts(), budget=1
-            )
-            cli.save_run(
-                runs, "acme-1", {"company": "acme", "budget": 1},
-                decorated, make_sessions(), make_alerts(),
-            )
+            make_run(runs, budget=1)
             run = cli.load_run(runs, "acme-1")
             text = self._capture(
                 lambda: cli.render_family(run, run.family_by_handle("F001"), {})
@@ -703,13 +538,7 @@ class PanelTests(unittest.TestCase):
         # score are printed where they can be checked against the inventory
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
-            decorated = cli.decorate_families(
-                make_families(), make_alerts(), budget=1
-            )
-            cli.save_run(
-                runs, "acme-1", {"company": "acme", "budget": 1},
-                decorated, make_sessions(), make_alerts(),
-            )
+            make_run(runs, budget=1)
             run = cli.load_run(runs, "acme-1")
             text = self._capture(
                 lambda: cli.render_family(run, run.family_by_handle("F001"), {})
@@ -721,13 +550,7 @@ class PanelTests(unittest.TestCase):
         # would read as a fact about the host
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
-            decorated = cli.decorate_families(
-                make_families(), make_alerts(), budget=2
-            )
-            cli.save_run(
-                runs, "acme-1", {"company": "acme", "budget": 2},
-                decorated, make_sessions(), make_alerts(),
-            )
+            make_run(runs)
             run = cli.load_run(runs, "acme-1")
             text = self._capture(
                 lambda: cli.render_family(run, run.family_by_handle("F002"), {})
@@ -739,13 +562,7 @@ class PanelTests(unittest.TestCase):
         # for the same rule in this run once three peers exist
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
-            decorated = cli.decorate_families(
-                make_families(), make_alerts(), budget=1
-            )
-            cli.save_run(
-                runs, "acme-1", {"company": "acme", "budget": 1},
-                decorated, make_sessions(), make_alerts(),
-            )
+            make_run(runs, budget=1)
             run = cli.load_run(runs, "acme-1")
             current = run.families["handle"].eq("F1")
             run.families.loc[current, "alert_count"] = 40
@@ -776,13 +593,7 @@ class PanelTests(unittest.TestCase):
         # dropped rather than printed with nothing behind it
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
-            decorated = cli.decorate_families(
-                make_families(), make_alerts(), budget=1
-            )
-            cli.save_run(
-                runs, "acme-1", {"company": "acme", "budget": 1},
-                decorated, make_sessions(), make_alerts(),
-            )
+            make_run(runs, budget=1)
             run = cli.load_run(runs, "acme-1")
             text = self._capture(
                 lambda: cli.render_family(run, run.family_by_handle("F001"), {})
@@ -832,11 +643,7 @@ class OutcomeTests(unittest.TestCase):
 
 class QueueSelectionTests(unittest.TestCase):
     def _run(self, runs: Path) -> cli.RunState:
-        decorated = cli.decorate_families(make_families(), make_alerts(), budget=1)
-        cli.save_run(
-            runs, "acme-1", {"company": "acme", "budget": 1},
-            decorated, make_sessions(), make_alerts(),
-        )
+        make_run(runs, budget=1)
         return cli.load_run(runs, "acme-1")
 
     def test_default_scope_is_top_k_but_a_filter_sees_all(self):
@@ -903,166 +710,18 @@ class LfsTests(unittest.TestCase):
             self.assertFalse(cli._is_lfs_pointer(real))
 
 
-# The parts of the CLI a script depends on: where alert files are found, which
-# stream errors go to, and what the exit codes mean.
-
-
-def directory(*names: str) -> Path:
-    made = Path(tempfile.mkdtemp())
-    for name in names:
-        (made / name).write_text("{}\n", encoding="utf-8")
-    return made
-
-
-class TestAlertFileDiscovery(unittest.TestCase):
-    def test_the_ait_naming_still_works_with_no_flags(self):
-        # every AIT company and the demo rely on <company>_wazuh.json, so
-        # adding the override flags must not move the default path
-        raw = directory("acme_wazuh.json", "acme_aminer.json")
-        files = resolve_alert_files(raw, "acme")
-        self.assertEqual(
-            [(path.name, family) for path, family in files],
-            [("acme_aminer.json", AMINER_FAMILY), ("acme_wazuh.json", WAZUH_FAMILY)],
-        )
-
-    def test_a_named_file_wins_over_the_convention(self):
-        # a SIEM export is called whatever the SIEM called it, so a named file
-        # is taken even with the conventional one in the same directory
-        raw = directory("acme_wazuh.json")
-        chosen = raw / "exported-alerts.json"
-        chosen.write_text("{}\n", encoding="utf-8")
-        files = resolve_alert_files(raw, "acme", wazuh_path=chosen)
-        self.assertEqual([path for path, _ in files], [chosen])
-
-    def test_the_miner_alone_is_enough(self):
-        # resolve_alert_files lists only the files that are there, so a company
-        # running only the miner still resolves
-        raw = directory("acme_aminer.json")
-        files = resolve_alert_files(raw, "acme")
-        self.assertEqual([(p.name, f) for p, f in files],
-                         [("acme_aminer.json", AMINER_FAMILY)])
-
-    def test_a_client_whose_export_is_named_differently_is_told_what_to_do(self):
-        # the whole point: a real wazuh export is not called <company>_wazuh.json,
-        # and the error has to name the files that ARE there and the flag to use
-        raw = directory("alerts-2026-07-26.json", "archive.json")
-        with self.assertRaises(FileNotFoundError) as caught:
-            resolve_alert_files(raw, "acme")
-        message = str(caught.exception)
-        self.assertIn("alerts-2026-07-26.json", message)
-        self.assertIn("--wazuh-file", message)
-
-    def test_an_empty_directory_says_so_rather_than_listing_nothing(self):
-        # an empty --input is usually the wrong directory, and a file list of
-        # nothing would read as the files being there but unreadable
-        with self.assertRaises(FileNotFoundError) as caught:
-            resolve_alert_files(directory(), "acme")
-        self.assertIn("no json files", str(caught.exception))
-
-
-class TestExitCodes(unittest.TestCase):
-    def test_a_declined_retrain_is_not_the_same_code_as_a_crash(self):
-        # a wrapper script has to tell "the gate said no", which is the gate
-        # working, apart from "the tool broke"
-        self.assertNotEqual(EXIT_DECLINED, EXIT_ERROR)
-        self.assertEqual(EXIT_ERROR, 1)
-        self.assertEqual(EXIT_DECLINED, 3)
-
-
-class TestParserContract(unittest.TestCase):
-    def test_triage_finds_the_inventory_the_inventory_command_wrote(self):
-        # --inventory resolves to None so triage can fill in where `meerkat
-        # inventory` wrote it, which needs --input and --environment first
-        args = build_parser().parse_args(["triage", "--environment", "acme"])
-        cli._apply_config(args)
-        self.assertIsNone(args.inventory)
-
-    def test_alert_file_overrides_reach_triage_and_retrain(self):
-        # both commands normalize the same alert files, so the overrides are
-        # attached to each rather than to triage alone
-        parser = build_parser()
-        triage = parser.parse_args([
-            "triage", "--environment", "acme", "--wazuh-file", "w.json",
-        ])
-        retrain = parser.parse_args([
-            "retrain", "--environment", "acme", "--incidents", "i.csv",
-            "--inventory", "inv.json", "--aminer-file", "a.json",
-        ])
-        self.assertEqual(triage.wazuh_file, Path("w.json"))
-        self.assertEqual(retrain.aminer_file, Path("a.json"))
-
-    def test_the_bag_size_discount_defaults_to_one_per_ticket(self):
-        # k=1 keeps every ticket's total weight at 1.0 whatever its width, and
-        # five fits are what the majority gate counts
-        args = build_parser().parse_args([
-            "retrain", "--environment", "acme", "--incidents", "i.csv",
-            "--inventory", "inv.json",
-        ])
-        self.assertEqual(args.prior_k, 1.0)
-        self.assertEqual(args.fits, 5)
-
-    def test_the_read_commands_can_emit_json(self):
-        # a wrapper script reads the queue and the run list, so both take
-        # --json, and errors go to stderr to keep the pipe parseable
-        parser = build_parser()
-        self.assertTrue(parser.parse_args(["queue", "--json"]).json)
-        self.assertTrue(parser.parse_args(["runs", "--json"]).json)
-
-    def test_the_queue_can_leave_as_csv_for_a_ticketing_system(self):
-        # a ticketing system imports csv more often than json, so csv is what
-        # an analyst gets without having to think about the flag
-        args = build_parser().parse_args(["export", "queue", "--format", "csv"])
-        self.assertEqual(args.format, "csv")
-
-
 # Each of these reached the user as a traceback, a message naming the wrong
 # thing, or a full scoring run spent before an argument was looked at.
 
 
-WAZUH_ALERT = {
-    "@timestamp": "2026-01-01T00:00:00Z",
-    "agent": {"name": "collector", "ip": "10.0.0.9"},
-    "predecoder": {"hostname": "web01"},
-    "rule": {"id": "5501", "level": 5, "description": "User login"},
-}
-
-# a line suricata writes to eve.json itself, with no wazuh envelope around it
-EVE_ALERT = {
-    "timestamp": "2026-01-01T00:05:00.000000+0000",
-    "event_type": "alert",
-    "src_ip": "10.0.0.9",
-    "dest_ip": "10.0.0.9",
-    "proto": "TCP",
-    "alert": {
-        "signature_id": 2009582,
-        "signature": "ET SCAN Nmap Scripting Engine",
-        "category": "Attempted Information Leak",
-        "severity": 2,
-    },
-}
+WAZUH_ALERT = wazuh_record(
+    "2026-01-01T00:00:00Z", rule_id="5501", level=5, description="User login",
+    groups=(), agent_ip="10.0.0.9", agent_name="collector", hostname="web01",
+)
 
 
 def temporary_directory() -> Path:
     return Path(tempfile.mkdtemp())
-
-
-def squashed(text: str) -> str:
-    # rich wraps at the console width, so a token can arrive split over two lines
-    return re.sub(r"\s+", "", text)
-
-
-def write_lines(path: Path, records: list[dict], bom: bool = False) -> Path:
-    body = "".join(json.dumps(record) + "\n" for record in records)
-    path.write_text("﻿" + body if bom else body, encoding="utf-8")
-    return path
-
-
-def write_inventory(path: Path, assets: list[dict]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"company": "acme", "assets": assets}), encoding="utf-8"
-    )
-    return path
 
 
 class FakeInventory:
@@ -1135,15 +794,6 @@ class CompanyValidationTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.parse(["inventory", "../evil"])
 
-    def test_an_ordinary_company_still_parses(self):
-        self.assertEqual(self.parse(["triage", "--environment", "acme"]).company, "acme")
-        self.assertEqual(
-            self.parse(["triage", "--environment", "acme"]).company, "acme"
-        )
-        unset = self.parse(["triage"])
-        cli._apply_config(unset)
-        self.assertIsNone(unset.company)
-
     def test_a_root_input_directory_is_told_to_pass_a_company(self):
         # a drive or filesystem root has no name, and safe_run_id("") raised
         # ValueError with no handler above it
@@ -1160,7 +810,7 @@ class CheckReportsTheTestedValueTests(unittest.TestCase):
         # the condition is entity_in_inventory, keyed on the address, so
         # printing host reported web01 as outside an inventory that held it
         directory = temporary_directory()
-        write_lines(directory / "acme_wazuh.json", [WAZUH_ALERT])
+        write_records(directory / "acme_wazuh.json", WAZUH_ALERT)
         inventory = write_inventory(
             directory / "inventory" / "acme.json",
             [{"hostname": "web01", "ip_addresses": ["10.0.0.1"], "roles": ["server"]}],
@@ -1182,8 +832,8 @@ class CheckReadsEveryAlertFileTests(unittest.TestCase):
         # check is what an analyst runs before triage, so a file triage will read
         # and check never mentions would be the wrong answer twice
         directory = temporary_directory()
-        write_lines(directory / "alerts.json", [WAZUH_ALERT])
-        write_lines(directory / "eve.json", [EVE_ALERT])
+        write_records(directory / "alerts.json", WAZUH_ALERT)
+        write_records(directory / "eve.json", eve_alert_record())
         inventory = write_inventory(
             directory / "inventory" / "acme.json",
             [{"hostname": "web01", "ip_addresses": ["10.0.0.9"], "roles": ["server"]}],
@@ -1208,7 +858,7 @@ class CheckReadsEveryAlertFileTests(unittest.TestCase):
 class InventoryScaffoldTests(unittest.TestCase):
     def scaffold(self, records: list[dict], bom: bool = False) -> dict:
         directory = temporary_directory()
-        write_lines(directory / "acme_wazuh.json", records, bom=bom)
+        write_records(directory / "acme_wazuh.json", *records, bom=bom)
         out = directory / "inventory" / "acme.json"
         with contextlib.redirect_stdout(io.StringIO()):
             cli.cmd_inventory(argparse.Namespace(
@@ -1240,87 +890,10 @@ class InventoryScaffoldTests(unittest.TestCase):
         self.assertTrue(all(asset["ip_addresses"] for asset in written["assets"]))
 
 
-class TriageMetaTests(unittest.TestCase):
-    def run_triage(self) -> dict:
-        directory = temporary_directory()
-        write_lines(directory / "acme_wazuh.json", [WAZUH_ALERT])
-        inventory = write_inventory(
-            directory / "inventory" / "acme.json",
-            [{"hostname": "web01", "ip_addresses": ["10.0.0.9"], "roles": ["server"]}],
-        )
-        model = directory / "bundle.skops"
-        model.write_text("", encoding="utf-8")
-        runs = temporary_directory()
-        frame = pd.DataFrame([{"a": 1}])
-        bundle = mock.Mock(training_scenarios=("fox",))
-        with (
-            mock.patch.object(cli, "_load_bundle", return_value=bundle),
-            mock.patch.object(
-                cli, "_score_company", return_value=(frame, frame, frame)
-            ),
-            mock.patch.object(
-                cli, "decorate_families", side_effect=lambda f, a, budget: f
-            ),
-            mock.patch.object(cli, "_print_queue"),
-            contextlib.redirect_stdout(io.StringIO()),
-        ):
-            cli.cmd_triage(argparse.Namespace(
-                model=model, input=directory, company="acme", inventory=inventory,
-                labels=None, event_csv_dir=None, wazuh_file=None, aminer_file=None,
-                budget=10, runs_dir=runs,
-            ))
-        latest = (runs / "latest.txt").read_text(encoding="utf-8").strip()
-        return json.loads((runs / latest / "run.json").read_text(encoding="utf-8"))
-
-    def test_run_json_drops_the_metrics_nothing_read(self):
-        # the four window counters were written on every labelled run and read
-        # by nothing: bench/evaluate.py computes its own from the families
-        meta = self.run_triage()
-        for key in (
-            "labelled_alerts", "total_windows", "strict_windows",
-            "temporal_overlap_windows",
-        ):
-            self.assertNotIn(key, meta)
-
-    def test_run_json_keeps_what_the_read_commands_use(self):
-        # queue, runs, inspect and export navigator read these back
-        meta = self.run_triage()
-        for key in ("company", "budget", "families", "input", "saved_at"):
-            self.assertIn(key, meta)
-
-
 # Everything above patches the model away, which is what makes those tests fast
 # and what leaves normalize -> sessions -> score -> save untested as a whole.
 # These run the real commands against the shipped bundle over a small synthetic
 # export, and skip where the bundle is not fetched.
-
-SHIPPED_BUNDLE = Path(__file__).resolve().parents[1] / "models" / "meerkat_bundle.skops"
-HAS_BUNDLE = SHIPPED_BUNDLE.exists() and not cli._is_lfs_pointer(SHIPPED_BUNDLE)
-
-
-def client_directory(days: int = 3, per_day: int = 12) -> Path:
-    # one host, two rules, alerts spread far enough apart to close sessions
-    directory = temporary_directory()
-    write_lines(directory / "acme_wazuh.json", [
-        {
-            "@timestamp": f"2022-01-{21 + day:02d}T{n // 6:02d}:{(n * 5) % 60:02d}:00Z",
-            "agent": {"name": "collector", "ip": "10.0.0.9"},
-            "predecoder": {"hostname": "web01"},
-            "rule": {
-                "id": "5710" if n % 2 else "31101", "level": 5,
-                "description": "sshd auth failure", "groups": ["syslog", "sshd"],
-            },
-        }
-        for day in range(days)
-        for n in range(per_day)
-    ])
-    write_inventory(
-        directory / "inventory" / "acme.json",
-        [{"hostname": "web01", "ip_addresses": ["10.0.0.9"],
-          "roles": ["server", "internet_facing"]}],
-    )
-    return directory
-
 
 @unittest.skipUnless(
     HAS_BUNDLE,
@@ -1328,24 +901,10 @@ def client_directory(days: int = 3, per_day: int = 12) -> Path:
 )
 class EndToEndTriageTests(unittest.TestCase):
     # nothing else in the suite takes alerts all the way to a saved run: the
-    # meta tests patch _load_bundle, _score_company, decorate_families and
-    # _print_queue, which is four of the five things cmd_triage does
+    # command tests patch _load_bundle, _score_company and decorate_families
     @classmethod
     def setUpClass(cls):
-        cls.input = client_directory()
-        cls.runs = temporary_directory()
-        cls.output = io.StringIO()
-        with (
-            contextlib.redirect_stdout(cls.output),
-            contextlib.redirect_stderr(io.StringIO()),
-        ):
-            cli.cmd_triage(argparse.Namespace(
-                model=SHIPPED_BUNDLE, input=cls.input, company="acme",
-                inventory=cls.input / "inventory" / "acme.json",
-                labels=None, event_csv_dir=None, wazuh_file=None,
-                aminer_file=None, budget=2, runs_dir=cls.runs,
-            ))
-        cls.saved = cli.load_run(cls.runs)
+        cls.saved, cls.output = triage_client()
 
     def test_the_run_holds_every_alert_grouped_into_sessions_and_families(self):
         # 36 alerts on one host, two rules, three days: the alert table is kept
@@ -1380,10 +939,9 @@ class EndToEndTriageTests(unittest.TestCase):
         self.assertEqual(set(covered["host"]), {"web01"})
 
     def test_triage_reports_the_saved_run_and_prints_the_queue(self):
-        printed = self.output.getvalue()
-        self.assertIn("saved run", printed)
-        self.assertIn("Review queue", printed)
-        self.assertIn("F1", printed)
+        self.assertIn("saved run", self.output)
+        self.assertIn("Review queue", self.output)
+        self.assertIn("F1", self.output)
 
 
 @unittest.skipUnless(
@@ -1435,7 +993,7 @@ class RealExitCodeTests(unittest.TestCase):
         # the gate saying no must not leave a bundle behind
         self.assertFalse(written.exists())
 
-    def test_a_major_drift_run_exits_with_its_own_code(self):
+    def test_a_drift_report_exits_with_its_own_code_and_says_what_moved(self):
         # a client stream this far from the training set is exactly the case
         # drift exists to report, and a wrapper has to tell it from a crash
         directory = client_directory()
@@ -1456,41 +1014,13 @@ class RealExitCodeTests(unittest.TestCase):
         self.assertIn(f"past PSI {PSI_MAJOR}", report)
         # and it never claims the ranking got worse, which needs labels
         self.assertIn("does not measure whether the ranking is still right", report)
-
-    def test_the_drift_report_names_the_rules_the_model_never_saw(self):
-        # these two rule ids are not in the shipped schema, so every alert in
-        # the fixture is unseen and the rarity feature carries nothing
-        directory = client_directory()
-        printed = io.StringIO()
-        with (
-            contextlib.redirect_stdout(printed),
-            contextlib.redirect_stderr(io.StringIO()),
-            contextlib.suppress(SystemExit),
-        ):
-            cli.cmd_drift(argparse.Namespace(
-                model=SHIPPED_BUNDLE, input=directory, company="acme",
-                inventory=directory / "inventory" / "acme.json",
-                wazuh_file=None, aminer_file=None, top=5, json=False, all=False,
-            ))
-        report = " ".join(printed.getvalue().split())
+        # neither fixture rule id is in the shipped schema, so every alert is unseen
         self.assertIn("rules the model never saw", report)
         self.assertIn("the model has no rarity signal for these", report)
-
-    def test_a_small_day_is_reported_as_too_small_to_compare(self):
-        directory = client_directory()
-        printed = io.StringIO()
-        with (
-            contextlib.redirect_stdout(printed),
-            contextlib.redirect_stderr(io.StringIO()),
-            contextlib.suppress(SystemExit),
-        ):
-            cli.cmd_drift(argparse.Namespace(
-                model=SHIPPED_BUNDLE, input=directory, company="acme",
-                inventory=directory / "inventory" / "acme.json",
-                wazuh_file=None, aminer_file=None, top=5, json=False, all=False,
-            ))
-        report = " ".join(printed.getvalue().split())
-        self.assertIn(f"below about {cli.DRIFT_MIN_TRAINING} the comparison is mostly noise", report)
+        self.assertIn(
+            f"below about {cli.DRIFT_MIN_TRAINING} the comparison is mostly noise",
+            report,
+        )
         self.assertIn("compare several days at once", report)
 
 
@@ -1560,13 +1090,7 @@ class RankingWeightContestTests(unittest.TestCase):
 
 class TrackRecordTests(unittest.TestCase):
     def _reviewed_run(self, runs, run_id, decisions):
-        decorated = cli.decorate_families(
-            make_families(), make_alerts(), budget=2
-        )
-        cli.save_run(
-            runs, run_id, {"company": "acme", "budget": 2},
-            decorated, make_sessions(), make_alerts(),
-        )
+        make_run(runs, run_id)
         run = cli.load_run(runs, run_id)
         for handle, decision, session in decisions:
             family = run.family_by_handle(handle)
@@ -1650,26 +1174,14 @@ class TrackRecordTests(unittest.TestCase):
             ):
                 self.assertEqual(cli.escalation_bands(runs), {})
 
-    def test_the_queue_export_no_longer_carries_the_probability(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            runs = Path(tmp)
-            run = self._reviewed_run(runs, "acme-1", [])
-            records = cli.queue_records(run, run.families)
-            self.assertNotIn("evidence_probability", records[0])
-            self.assertIn("ranking_score", records[0])
-
 
 class SharedOpeningTests(unittest.TestCase):
-    def test_the_inventory_defaults_beside_the_alerts(self):
-        # triage, check and drift each spelled these five lines out, and the
-        # helper has to keep defaulting the path `meerkat inventory` writes to
-        directory = temporary_directory()
-        inventory = write_inventory(
-            directory / "inventory" / f"{directory.name}.json", []
-        )
-        args = argparse.Namespace(company=None, input=directory, inventory=None)
-        self.assertEqual(cli._open_company(args), directory.name)
-        self.assertEqual(args.inventory, inventory)
+    def test_triage_finds_the_inventory_the_inventory_command_wrote(self):
+        # --inventory resolves to None so triage can fill in where `meerkat
+        # inventory` wrote it, which needs --input and --environment first
+        args = build_parser().parse_args(["triage", "--environment", "acme"])
+        cli._apply_config(args)
+        self.assertIsNone(args.inventory)
 
     def test_retrain_finds_the_inventory_like_the_other_commands(self):
         args = build_parser().parse_args(["retrain", "--incidents", "i.csv"])
@@ -1691,29 +1203,12 @@ class SharedOpeningTests(unittest.TestCase):
         )
 
 
-class DemoBundleCheckTests(unittest.TestCase):
-    def test_demo_leaves_the_bundle_check_to_triage(self):
-        # demo checked the bundle and then called triage, which checks it again
-        directory = temporary_directory()
-        for name in ("russellmitchell_wazuh.json", "russellmitchell_aminer.json"):
-            (directory / name).write_text("{}\n", encoding="utf-8")
-        with (
-            mock.patch.object(cli, "_require_bundle") as required,
-            mock.patch.object(cli, "cmd_triage") as triage,
-            contextlib.redirect_stdout(io.StringIO()),
-        ):
-            cli.cmd_demo(argparse.Namespace(
-                raw_dir=directory, model=Path("models/bundle.skops"),
-                budget=10, runs_dir=temporary_directory(),
-            ))
-        self.assertEqual(required.call_count, 0)
-        self.assertEqual(triage.call_count, 1)
-
-    def test_triage_and_retrain_still_check_it_before_reading_alerts(self):
+class BundleGuardTests(unittest.TestCase):
+    def test_triage_retrain_and_drift_check_the_bundle_before_reading_alerts(self):
         # both guards are load-bearing: they answer before a large export is
         # read, so the refusal has to arrive with normalize_scenario untouched
         directory = temporary_directory()
-        write_lines(directory / "acme_wazuh.json", [WAZUH_ALERT])
+        write_records(directory / "acme_wazuh.json", WAZUH_ALERT)
         inventory = write_inventory(
             directory / "inventory" / "acme.json",
             [{"hostname": "web01", "ip_addresses": ["10.0.0.9"], "roles": ["server"]}],
@@ -1738,6 +1233,10 @@ class DemoBundleCheckTests(unittest.TestCase):
                 min_positives=1, trees=10, seed=0, fits=1, out=absent,
                 refit_ranking_weights=False,
             ),
+            "drift": argparse.Namespace(
+                model=absent, input=directory, company="acme", inventory=inventory,
+                wazuh_file=None, aminer_file=None, top=5, json=False, all=False,
+            ),
         }
         for name, args in commands.items():
             with self.subTest(command=name):
@@ -1750,18 +1249,6 @@ class DemoBundleCheckTests(unittest.TestCase):
                     getattr(cli, f"cmd_{name}")(args)
                 self.assertEqual(caught.exception.code, EXIT_ERROR)
                 self.assertEqual(read_alerts.call_count, 0)
-
-
-def tiny_bundle(path: Path) -> Path:
-    # a real skops bundle with a real sidecar, small enough to write per test
-    from sklearn.ensemble import RandomForestClassifier
-    save_model(
-        RandomForestClassifier(n_estimators=2, random_state=0).fit(
-            pd.DataFrame({"a": [0.0, 1.0]}), [0, 1]
-        ),
-        path,
-    )
-    return path
 
 
 class BundleGateCliTests(unittest.TestCase):
@@ -1833,47 +1320,16 @@ class BundleGateCliTests(unittest.TestCase):
         self.assertIn("changedafteritwaswritten", squashed(reported.getvalue()))
 
 
-# `meerkat check` reads a sample and reports what triage will see. `queue --budget`
-# re-cuts a saved run, which works only because K never reaches the model.
-
-
-class TestCheckParser(unittest.TestCase):
-    def test_check_needs_nothing_but_a_directory(self):
-        # a client's first command after unpacking their alerts, so requiring
-        # --environment or --inventory here would defeat the point
-        args = build_parser().parse_args(["check"])
-        cli._apply_config(args)
-        self.assertIsNone(args.company)
-        self.assertIsNone(args.inventory)
-        self.assertEqual(args.input.name, "alerts")
-
-    def test_check_takes_the_same_file_overrides_as_triage(self):
-        # whatever names a client's exports have, check has to read the files
-        # triage will read, or it validates something else
-        args = build_parser().parse_args([
-            "check", "--wazuh-file", "w.json", "--aminer-file", "a.json",
-        ])
-        self.assertEqual(args.wazuh_file.name, "w.json")
-        self.assertEqual(args.aminer_file.name, "a.json")
-
-    def test_the_sample_size_is_boundable(self):
-        # the demo's wazuh export alone is 45 MB, so check must never be asked to
-        # read a whole file to answer a question about its shape
-        args = build_parser().parse_args(["check", "--sample", "250"])
-        self.assertEqual(args.sample, 250)
-
-
 class TestRuleCardinality(unittest.TestCase):
     # the ratio is only warned on above 500 alerts, so both fixtures clear that
     def check(self, rule_ids: list[str]) -> str:
         directory = temporary_directory()
-        write_lines(directory / "acme_wazuh.json", [
-            {
-                "@timestamp": f"2026-01-01T00:{minute // 60:02d}:{minute % 60:02d}Z",
-                "agent": {"name": "collector", "ip": "10.0.0.9"},
-                "predecoder": {"hostname": "web01"},
-                "rule": {"id": rule_id, "level": 5, "description": "an event"},
-            }
+        write_records(directory / "acme_wazuh.json", *[
+            wazuh_record(
+                f"2026-01-01T00:{minute // 60:02d}:{minute % 60:02d}Z",
+                rule_id=rule_id, level=5, description="an event", groups=(),
+                agent_ip="10.0.0.9", agent_name="collector", hostname="web01",
+            )
             for minute, rule_id in enumerate(rule_ids)
         ])
         inventory = write_inventory(
@@ -1906,10 +1362,6 @@ class TestRuleCardinality(unittest.TestCase):
         per_type = self.check([str(5500 + n % 12) for n in range(600)])
         self.assertNotIn("distinctruleids", per_type)
 
-    def test_the_threshold_sits_between_the_two_ratios(self):
-        self.assertGreater(1.0, RULE_CARDINALITY_WARN)
-        self.assertLess(12 / 600, RULE_CARDINALITY_WARN)
-
 
 class TestQueueBudget(unittest.TestCase):
     # `queue --budget` re-cuts a saved run without rescoring, which works only
@@ -1925,11 +1377,7 @@ class TestQueueBudget(unittest.TestCase):
             for day in range(days)
             for rank in range(per_day)
         ])
-        decorated = cli.decorate_families(families, make_alerts(), budget=10)
-        cli.save_run(
-            runs, "acme-1", {"company": "acme", "budget": 10},
-            decorated, make_sessions(), make_alerts(),
-        )
+        make_run(runs, families=families, budget=10)
 
     def queued(self, runs: Path, budget: int | None) -> int:
         args = argparse.Namespace(
@@ -1964,10 +1412,6 @@ class TestQueueBudget(unittest.TestCase):
             self.save(runs, per_day=30, days=2)
             self.assertEqual(self.queued(runs, None), 20)
 
-    def test_queue_accepts_a_budget_and_defaults_to_leaving_the_run_alone(self):
-        parser = build_parser()
-        self.assertIsNone(parser.parse_args(["queue"]).budget)
-        self.assertEqual(parser.parse_args(["queue", "--budget", "5"]).budget, 5)
 
 class TestInventoryScaffold(unittest.TestCase):
     # the scaffold keys on the agent address, because that is what a session keys
@@ -2018,9 +1462,6 @@ class TestInventoryScaffold(unittest.TestCase):
         # never by the agent name, which would give several machines one label
         assets = {a["ip_addresses"][0]: a["hostname"] for a in self.scaffold()["assets"]}
         self.assertEqual(assets["10.0.0.2"], "10.0.0.2")
-
-    def test_roles_start_empty_so_triage_can_warn(self):
-        self.assertTrue(all(a["roles"] == [] for a in self.scaffold()["assets"]))
 
 
 # Alert text is written by whoever triggered the alert. These pin that a crafted

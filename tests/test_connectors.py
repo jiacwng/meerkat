@@ -1,6 +1,7 @@
 # the Wazuh connector: file-mode window reads and the indexer client, with the
 # indexer's HTTP layer mocked so the suite needs no live Wazuh
 
+import functools
 import json
 import tempfile
 import unittest
@@ -10,15 +11,12 @@ from unittest import mock
 
 from core.normalize import AlertFileError
 from meerkat import connectors
+from tests.fixtures import wazuh_record
 
-
-def wazuh(ts, level=5, rule_id="1000", agent="host-a"):
-    return {
-        "timestamp": ts,
-        "rule": {"level": level, "id": rule_id, "description": "x"},
-        "agent": {"id": "001", "name": agent},
-        "data": {},
-    }
+wazuh = functools.partial(
+    wazuh_record, rule_id="1000", level=5, description="x",
+    agent_name="host-a", timestamp_key="timestamp",
+)
 
 
 def suricata(ts):

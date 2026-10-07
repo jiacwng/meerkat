@@ -2,9 +2,7 @@
 
 import contextlib
 import io
-import tempfile
 import unittest
-from pathlib import Path
 from unittest import mock
 
 import pandas as pd
@@ -12,7 +10,7 @@ from rich.console import Console
 
 from core.attack_mapping import host_chain
 from meerkat import cli
-from tests.test_cli import make_alerts, make_families, make_sessions
+from tests.fixtures import make_alerts, make_run
 
 RECON = "Reconnaissance"
 ACCESS = "Initial Access"
@@ -74,11 +72,7 @@ def _run(alert_tactics=None):
     alerts = make_alerts()
     if alert_tactics is not None:
         alerts["tactics"] = alert_tactics
-    decorated = cli.decorate_families(make_families(), alerts, budget=2)
-    runs = Path(tempfile.mkdtemp())
-    cli.save_run(runs, "acme-1", {"company": "acme", "budget": 2},
-                 decorated, make_sessions(), alerts)
-    return cli.load_run(runs, "acme-1")
+    return cli.load_run(make_run(alerts=alerts), "acme-1")
 
 
 # alerts 0-2 belong to F1 (wazuh), alert 3 to F2 (suricata), all on one host and day

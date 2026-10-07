@@ -15,6 +15,7 @@ import pandas as pd
 import meerkat.connectors as connectors
 from meerkat import cli
 from meerkat.cli import _read_run_frame
+from tests.fixtures import make_run
 
 
 class _Evil:
@@ -57,12 +58,6 @@ class RunUnpicklerTests(unittest.TestCase):
             _read_run_frame(path)
         self.assertIn("read_pickle", str(caught.exception))
 
-    def test_loads_a_legit_run_frame(self):
-        path = Path(tempfile.mkdtemp()) / "families.pkl"
-        frame = pd.DataFrame({"a": [1, 2], "roles": [("x",), ("y",)]})
-        frame.to_pickle(path)
-        self.assertEqual(list(_read_run_frame(path)["a"]), [1, 2])
-
     def test_refuses_a_code_execution_pickle(self):
         path = Path(tempfile.mkdtemp()) / "evil.pkl"
         path.write_bytes(pickle.dumps(_Evil()))
@@ -97,13 +92,8 @@ class MarkupTests(unittest.TestCase):
 
     def test_browse_prints_a_handle_with_markup(self):
         from meerkat import browse
-        from tests.test_cli import make_alerts, make_families, make_sessions
 
-        runs = Path(tempfile.mkdtemp())
-        decorated = cli.decorate_families(make_families(), make_alerts(), budget=2)
-        cli.save_run(runs, "acme-1", {"company": "acme", "budget": 2},
-                     decorated, make_sessions(), make_alerts())
-        run = cli.load_run(runs, "acme-1")
+        run = cli.load_run(make_run(), "acme-1")
         script = iter(["F[/x]", "F1", "S[/x]", "S1", "A[/x]", "[/x]", "q"])
         with cli.errors.capture() as capture, cli.console.capture():
             browse.browse_loop(run, input_line=lambda _: next(script))

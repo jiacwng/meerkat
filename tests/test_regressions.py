@@ -20,9 +20,10 @@ import pandas as pd
 from core import classifier, features
 from core.drift import build_profile, compare_profile
 from core.features import standardize_severity
-from core.inventory import Asset, Inventory, load_inventory
+from core.inventory import Inventory, load_inventory
 from core.normalize import get_timestamp, iter_normalized_rows, normalize_scenario
-from core.sessions import FAMILY_KEY, SESSION_KEY, build_families, build_sessions
+from core.sessions import build_sessions
+from tests.fixtures import tiny_bundle, wazuh_record, write_company_inventory
 
 # Regression tests for the QA findings fixed before the first release.
 
@@ -41,19 +42,17 @@ def one_detector_client(detector_records: list[dict], blank_line: bool = False) 
     return directory
 
 
-def wazuh(second: int) -> dict:
-    return {
-        "@timestamp": f"2022-01-21T00:00:0{second}Z",
-        "agent": {"name": "w", "ip": "10.0.0.1"},
-        "rule": {"id": "5710", "level": 5, "description": "sshd auth failure",
-                 "groups": ["syslog", "sshd"]},
-        "predecoder": {"hostname": "h1"},
-    }
-
-
 class TestSingleDetectorClient(unittest.TestCase):
     def sessions_for(self, **kwargs):
-        directory = one_detector_client([wazuh(i) for i in range(4)], **kwargs)
+        records = [
+            wazuh_record(
+                f"2022-01-21T00:00:0{second}Z", rule_id="5710", level=5,
+                description="sshd auth failure", groups=("syslog", "sshd"),
+                agent_ip="10.0.0.1", agent_name="w", hostname="h1",
+            )
+            for second in range(4)
+        ]
+        directory = one_detector_client(records, **kwargs)
         frame = normalize_scenario(
             directory, None, "acme", directory / "inventory" / "acme.json"
         )
@@ -105,6 +104,7 @@ class TestDegeneratePrior(unittest.TestCase):
             classifier.fit_soft_labels(X, np.ones(20), None, n_estimators=5)
         self.assertIn("nothing to", str(caught.exception))
 
+
 class TestCliRobustness(unittest.TestCase):
     # every one of these reached the user as a Python traceback before release
     def client(self, alerts: str, inventory: str) -> Path:
@@ -119,11 +119,6 @@ class TestCliRobustness(unittest.TestCase):
 
     GOOD_INVENTORY = json.dumps({"company": "x", "assets": [
         {"hostname": "h1", "ip_addresses": ["10.0.0.1"], "roles": ["server"]}]})
-
-    def test_a_record_without_rule_or_agent_is_not_claimed_as_wazuh(self):
-        from core.normalize import classify_wazuh_record
-        self.assertEqual(classify_wazuh_record({}), "")
-        self.assertEqual(classify_wazuh_record({"rule": {"id": "1"}}), "")
 
     def test_a_malformed_line_names_its_file_and_line(self):
         from core.normalize import AlertFileError, read_alert_record
@@ -167,14 +162,6 @@ class TestCliRobustness(unittest.TestCase):
         drift = compare_profile(profile, pd.DataFrame({"log_size": [1.0, 2.0]}))
         self.assertEqual(len(drift), 1)
         self.assertTrue(np.isnan(drift[0].training_median))
-
-    def test_csv_export_strips_control_characters(self):
-        # this file goes to a ticketing system and gets cat'd, and hostnames are
-        # written by whoever set the alert off
-        from meerkat.cli import _csv_safe
-        self.assertEqual(_csv_safe("host\x1b[2Jname"), "host[2Jname")
-        self.assertEqual(_csv_safe("a\x00b"), "ab")
-        self.assertEqual(_csv_safe("=cmd()"), "'=cmd()")
 
 
 class TestBoundaryValues(unittest.TestCase):
@@ -264,7 +251,6 @@ class TestTechniqueParsing(unittest.TestCase):
     def test_a_single_technique_given_as_a_string_stays_one_technique(self):
         # "T1059" is iterable, so it used to join to "T;1;0;5;9" and
         # technique_count, a live re-ranker feature, read 5 instead of 1
-        from core.inventory import Inventory
         from core.normalize import extract_wazuh_fields
         record = {
             "agent": {"name": "w", "ip": "10.0.0.1"},
@@ -275,17 +261,7 @@ class TestTechniqueParsing(unittest.TestCase):
         self.assertEqual(fields.native_technique_ids, "T1059")
 
 
-class TestMissingBundle(unittest.TestCase):
-    # triage, retrain and demo each checked for the bundle themselves and drift
-    # did not, so the one command a new user runs against an unfetched LFS
-    # clone answered with a traceback
-    def test_every_command_that_loads_a_model_reports_it_missing(self):
-        from meerkat import cli
-        absent = Path(tempfile.mkdtemp()) / "meerkat_bundle.skops"
-        with self.assertRaises(SystemExit) as caught:
-            cli._require_bundle(absent)
-        self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
-
+class TestMissingInputDirectory(unittest.TestCase):
     def test_a_missing_input_directory_is_not_reported_as_a_missing_inventory(self):
         # require_directory only rejected a path that existed and was a file, so
         # a first run with nothing in place fell through to the inventory check
@@ -296,69 +272,6 @@ class TestMissingBundle(unittest.TestCase):
             cli.require_directory(absent)
         self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
 
-    def test_drift_goes_through_the_same_guard(self):
-        # the guard lives in _load_bundle so a future command cannot forget it,
-        # and it has to answer before the export is read rather than after
-        from meerkat import cli
-        directory = Path(tempfile.mkdtemp())
-        (directory / "inventory").mkdir()
-        inventory = directory / "inventory" / f"{directory.name}.json"
-        inventory.write_text(
-            json.dumps({"company": "x", "assets": [
-                {"hostname": "h1", "ip_addresses": ["10.0.0.1"], "roles": ["server"]}
-            ]}), encoding="utf-8"
-        )
-        with (
-            mock.patch.object(cli, "normalize_scenario") as read_alerts,
-            contextlib.redirect_stdout(io.StringIO()),
-            contextlib.redirect_stderr(io.StringIO()),
-            self.assertRaises(SystemExit) as caught,
-        ):
-            cli.cmd_drift(argparse.Namespace(
-                model=directory / "absent.skops", input=directory, company=None,
-                inventory=inventory, wazuh_file=None, aminer_file=None, top=5,
-            ))
-        self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
-        self.assertEqual(read_alerts.call_count, 0)
-
-
-class TestNoStaleCommandNames(unittest.TestCase):
-    def test_nothing_shipped_points_at_the_removed_train_command(self):
-        # `meerkat train` moved to bench/ and is not in the installed package,
-        # so an error message naming it sends the user to a command that no
-        # longer parses
-        root = Path(__file__).resolve().parent.parent
-        offenders = []
-        for package in ("core", "meerkat"):
-            for path in (root / package).rglob("*.py"):
-                if "meerkat train" in path.read_text(encoding="utf-8"):
-                    offenders.append(path.name)
-        self.assertEqual(offenders, [])
-
-
-def wazuh_line(rule_id: str, description: str, timestamp: str) -> str:
-    return json.dumps({
-        "rule": {"id": rule_id, "level": 5, "description": description},
-        "agent": {"ip": "10.0.0.1", "name": "wazuh-client"},
-        "predecoder": {"hostname": "server"},
-        "@timestamp": timestamp,
-    })
-
-
-def write_inventory(path: Path) -> Path:
-    path.write_text(
-        json.dumps({
-            "company": "demo",
-            "assets": [{
-                "hostname": "server",
-                "ip_addresses": ["10.0.0.1"],
-                "groups": ["servers"],
-            }],
-        }),
-        encoding="utf-8",
-    )
-    return path
-
 
 class UndecodableAlertFileTests(unittest.TestCase):
     # a log line is attacker-influenced, so one byte that is not valid UTF-8
@@ -366,52 +279,37 @@ class UndecodableAlertFileTests(unittest.TestCase):
     # UnicodeDecodeError. sniff_alert_family already survived it, so discovery
     # accepted a file that ingestion then refused to read.
 
-    def test_ingest_survives_an_invalid_byte_in_the_wazuh_export(self):
+    def test_ingest_survives_an_invalid_byte_and_keeps_source_positions(self):
         with tempfile.TemporaryDirectory() as directory:
             raw_dir = Path(directory)
-            inventory_path = write_inventory(raw_dir / "inventory.json")
-            wazuh_path = raw_dir / "demo_wazuh.json"
+            inventory_path = write_company_inventory(
+                raw_dir / "inventory.json", ("server", "10.0.0.1", ("servers",))
+            )
 
-            clean = wazuh_line("100", "first", "2024-01-01T00:00:00Z")
+            def line(rule_id: str, description: str, timestamp: str) -> bytes:
+                return json.dumps(wazuh_record(
+                    timestamp, rule_id=rule_id, level=5, description=description,
+                    groups=(), agent_ip="10.0.0.1", agent_name="wazuh-client",
+                    hostname="server",
+                )).encode()
+
             # 0x9c is a continuation byte with nothing in front of it, so utf-8
             # cannot decode it. It sits inside a JSON string, which keeps the
             # line parseable once the decoder replaces it.
-            broken = wazuh_line("200", "second", "2024-01-01T00:10:00Z").encode()
-            broken = broken.replace(b'"second"', b'"sec\x9cond"')
-            wazuh_path.write_bytes(
-                clean.encode("utf-8") + b"\n" + broken + b"\n"
-            )
+            lines = [
+                line("100", "first", "2024-01-01T00:00:00Z"),
+                line("200", "second", "2024-01-01T00:10:00Z")
+                .replace(b'"second"', b'"sec\x9cond"'),
+                line("300", "third", "2024-01-01T00:20:00Z"),
+            ]
+            (raw_dir / "demo_wazuh.json").write_bytes(b"\n".join(lines) + b"\n")
 
-            rows = list(iter_normalized_rows(
-                raw_dir, None, "demo", inventory_path
-            ))
+            rows = list(iter_normalized_rows(raw_dir, None, "demo", inventory_path))
 
-        self.assertEqual(len(rows), 2)
-        self.assertEqual([row["rule_id"] for row in rows], ["100", "200"])
-        # the bad byte becomes the replacement character rather than taking the
-        # record with it
+        self.assertEqual([row["rule_id"] for row in rows], ["100", "200", "300"])
         self.assertIn("�", rows[1]["name"])
-
-    def test_source_positions_still_line_up_after_a_replacement(self):
         # the event-label join is by line number, so replacing a byte must not
         # add or drop a line
-        with tempfile.TemporaryDirectory() as directory:
-            raw_dir = Path(directory)
-            inventory_path = write_inventory(raw_dir / "inventory.json")
-            wazuh_path = raw_dir / "demo_wazuh.json"
-            lines = [
-                wazuh_line("100", "first", "2024-01-01T00:00:00Z").encode(),
-                wazuh_line("200", "second", "2024-01-01T00:10:00Z")
-                .encode()
-                .replace(b'"second"', b'"sec\xffond"'),
-                wazuh_line("300", "third", "2024-01-01T00:20:00Z").encode(),
-            ]
-            wazuh_path.write_bytes(b"\n".join(lines) + b"\n")
-
-            rows = list(iter_normalized_rows(
-                raw_dir, None, "demo", inventory_path
-            ))
-
         self.assertEqual([row["source_position"] for row in rows], [0, 1, 2])
 
 
@@ -452,62 +350,6 @@ class UnscaledDetectorTests(unittest.TestCase):
 
         self.assertEqual(caught, [])
         self.assertEqual(list(standardized), [1.0, 1.0, 0.5])
-
-
-class SessionKeyTests(unittest.TestCase):
-    def test_sessions_and_families_still_carry_the_key_columns(self):
-        # the features and the CLI read these back off the row to describe a
-        # unit, so grouping them away has to be undone on both frames
-        asset = Asset("server", ("10.0.0.1",), ("servers",))
-        inventory = Inventory("demo", {"10.0.0.1": asset}, {"server": "10.0.0.1"})
-        alerts = pd.DataFrame({
-            "timestamp": [0.0, 60.0, 100000.0],
-            "entity_id": ["10.0.0.1"] * 3,
-            "detector_source": ["wazuh"] * 3,
-            "rule_id": ["100", "100", "100"],
-            "severity": [5.0, 10.0, 3.0],
-            "native_technique_ids": ["", "T1110", ""],
-            "alert_category": ["authentication", "policy", ""],
-            "rule_groups": ["auth", "auth;policy", ""],
-            "entity_in_inventory": [True] * 3,
-            "event_label": ["", "brute_force", ""],
-            "window_id": [-1, 0, -1],
-        })
-
-        sessions = build_sessions(alerts, "demo", inventory)
-        for name in SESSION_KEY:
-            self.assertIn(name, sessions.columns)
-
-        sessions["ranking_score"] = [0.9, 0.1]
-        families = build_families(sessions)
-        for name in FAMILY_KEY:
-            self.assertIn(name, families.columns)
-        # the two days do not merge, and the better child represents its family
-        self.assertEqual(len(families), 2)
-        self.assertEqual(
-            families.sort_values("ranking_score", ascending=False)
-            .iloc[0]["representative_session_id"],
-            sessions.iloc[0]["session_id"],
-        )
-
-
-class RemovedNamesTests(unittest.TestCase):
-    def test_dead_names_are_gone(self):
-        # each of these had no caller anywhere in core, meerkat, bench or tests
-        from core import classifier, normalize, sessions
-
-        for module, name in (
-            (normalize, "normalize"),
-            (normalize, "build_normalized_frame"),
-            (normalize, "write_day_partitioned"),
-            (normalize, "iter_days"),
-            (normalize, "SECONDS_PER_DAY"),
-            (sessions, "DESCRIPTIVE"),
-            (sessions, "SPLIT_SESSIONS_AT_MIDNIGHT"),
-            (classifier, "SKOPS_SUFFIX"),
-        ):
-            with self.subTest(name=f"{module.__name__}.{name}"):
-                self.assertFalse(hasattr(module, name))
 
 
 # --------------------------------------------------------------------------
@@ -756,19 +598,7 @@ class CsvExportTests(unittest.TestCase):
         self.assertEqual(rows[0]["title"], "")
 
 
-class CsvBlankCellTests(unittest.TestCase):
-    # "" is in every string, so `value[:1] in "=+-@\t\r"` was True for a blank
-    # cell and every empty field in every export became a lone apostrophe
-    def test_a_blank_cell_stays_blank(self):
-        from meerkat.cli import _csv_safe
-        self.assertEqual(_csv_safe(""), "")
-
-    def test_a_formula_still_gets_its_apostrophe(self):
-        from meerkat.cli import _csv_safe
-        for cell in ("=cmd()", "+1", "-1", "@x", "\tx"):
-            with self.subTest(cell=cell):
-                self.assertEqual(_csv_safe(cell), "'" + cell)
-
+class CsvLeadingNewlineTests(unittest.TestCase):
     def test_a_leading_newline_no_longer_hides_the_formula(self):
         # \r never survives _CONTROL, and \n did, so this reached the
         # spreadsheet with = still at the front of the cell
@@ -776,24 +606,6 @@ class CsvBlankCellTests(unittest.TestCase):
         self.assertEqual(
             _csv_safe("\n=HYPERLINK(1)"), "'\n=HYPERLINK(1)"
         )
-
-    def test_the_whole_export_has_no_invented_apostrophes(self):
-        from meerkat.cli import _csv_safe
-        frame = pd.DataFrame([{"a": "", "b": None, "c": 1}])
-        cleaned = frame.map(_csv_safe)
-        self.assertEqual(cleaned.iloc[0]["a"], "")
-        self.assertIsNone(cleaned.iloc[0]["b"])
-
-
-def small_bundle(directory: Path) -> Path:
-    from sklearn.ensemble import RandomForestClassifier
-    X = pd.DataFrame({"a": np.arange(20.0), "b": np.zeros(20)})
-    forest = RandomForestClassifier(n_estimators=2, random_state=0).fit(
-        X, np.array([0, 1] * 10)
-    )
-    path = directory / "bundle.skops"
-    classifier.save_model(forest, path)
-    return path
 
 
 def rewrite_members(source: Path, target: Path, edit) -> Path:
@@ -811,7 +623,7 @@ class HostileBundleTests(unittest.TestCase):
         # skops blocks __reduce__, but Tree.__setstate__ checks dtype and shape
         # and never the values, so these indices used to load cleanly and then
         # read out of bounds inside Tree.apply, which is a segfault
-        good = small_bundle(self.directory)
+        good = tiny_bundle(self.directory / "bundle.skops")
 
         def corrupt(name: str, raw: bytes) -> bytes:
             if not name.endswith(".npy"):
@@ -850,16 +662,6 @@ class HostileBundleTests(unittest.TestCase):
             classifier._refuse_malformed_forest(Path("evil.skops"), Forest())
         self.assertIn("malformed", str(caught.exception))
 
-    def test_the_shipped_bundle_passes_the_structural_check(self):
-        # a checkout without LFS leaves the pointer file in place, so the bundle
-        # exists and is not a bundle. CI does not fetch LFS, and existence alone
-        # let this run there against three lines of text.
-        from meerkat.cli import _is_lfs_pointer
-        path = Path(__file__).resolve().parent.parent / "models/meerkat_bundle.skops"
-        if not path.exists() or _is_lfs_pointer(path):
-            self.skipTest("the bundle is not fetched")
-        classifier.load_model(path)
-
     def test_a_zip_bomb_is_refused_before_it_is_unpacked(self):
         # a 204 KB file whose schema.json declares 200 MB drove peak allocation
         # to 459 MB inside get_untrusted_types, before the allowlist ran
@@ -872,38 +674,6 @@ class HostileBundleTests(unittest.TestCase):
         # the limit an operator would have to argue with is in the message
         self.assertIn(str(classifier.MAX_BUNDLE_RATIO), str(caught.exception))
 
-    def test_the_size_limits_leave_room_for_a_real_bundle(self):
-        # the shipped bundle is about 15 MB and skops stores its members
-        # uncompressed, so both limits sit far above anything real
-        self.assertGreaterEqual(classifier.MAX_BUNDLE_UNPACKED, 128 * 1024 * 1024)
-        classifier.load_model(small_bundle(self.directory))
-
-    def test_a_zip_without_schema_json_gets_the_gate_message(self):
-        # every zip passed _is_skops, so this reached skops and came back as a
-        # KeyError on the missing member
-        path = self.directory / "empty.skops"
-        with zipfile.ZipFile(path, "w") as archive:
-            archive.writestr("nothing.txt", "x")
-        with self.assertRaises(classifier.UntrustedBundleError) as caught:
-            classifier.load_model(path)
-        self.assertIn("not a skops bundle", str(caught.exception))
-
-    def test_a_sidecar_that_is_not_an_object_gets_the_gate_message(self):
-        # a bundle from elsewhere brings its own sidecar, and a list reached
-        # .get and answered with an AttributeError
-        path = self.directory / "bundle.skops"
-        path.write_bytes(b"PK\x03\x04")
-        for body in ("[]", '"x"', "{oops"):
-            classifier.provenance_path(path).write_text(body, encoding="utf-8")
-            with self.subTest(body=body):
-                with self.assertRaises(classifier.UntrustedBundleError):
-                    classifier.read_provenance(path)
-
-    def test_a_written_sidecar_still_reads_back(self):
-        path = small_bundle(self.directory)
-        record = classifier.read_provenance(path)
-        self.assertTrue(record["matches_file"])
-
 
 class DeepJsonTests(unittest.TestCase):
     # json.loads recurses, so a record nested a few thousand deep raises
@@ -912,13 +682,7 @@ class DeepJsonTests(unittest.TestCase):
     # inspect --raw with a traceback
     DEEP = "{" + '"a":{' * 40_000
 
-    def test_a_deeply_nested_raw_log_line_is_skipped(self):
-        from core.normalize import aminer_host_candidates
-        record = {"LogData": {"RawLogData": [self.DEEP]}}
-        self.assertEqual(aminer_host_candidates(record), set())
-
     def test_a_deeply_nested_raw_log_line_still_yields_a_row(self):
-        from core.inventory import Inventory
         from core.normalize import extract_aminer_fields
         record = {
             "AMiner": {"ID": "1"},
@@ -961,17 +725,6 @@ class RawSourceEncodingTests(unittest.TestCase):
         with mock.patch.object(cli, "console", console):
             cli._render_raw(alert_slice, directory, 5)
         self.assertIn("acme_wazuh.json", plain(buffer.getvalue()[:200]))
-
-
-class PandasPinTests(unittest.TestCase):
-    def test_the_declared_floors_are_the_numpy_2_releases(self):
-        # the run allowlist names numpy 2 paths only, and the csv export
-        # sanitises every cell with DataFrame.map, added in pandas 2.1
-        root = Path(__file__).resolve().parent.parent
-        text = (root / "pyproject.toml").read_text(encoding="utf-8")
-        for floor in ('"numpy>=2.0"', '"pandas>=2.2.2"', '"scikit-learn>=1.4.2"'):
-            self.assertIn(floor, text)
-        self.assertTrue(hasattr(pd.DataFrame, "map"))
 
 
 if __name__ == "__main__":

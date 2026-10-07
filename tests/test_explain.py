@@ -1,11 +1,6 @@
 # ranking explanations: the family re-ranker's score split into per-feature pushes
 
-import argparse
-import contextlib
-import io
-import tempfile
 import unittest
-from pathlib import Path
 from unittest import mock
 
 import numpy as np
@@ -19,7 +14,7 @@ from core.classifier import (
 )
 from core.features import CONTRIBUTION_PREFIX
 from meerkat import cli
-from tests.test_cli import HAS_BUNDLE, SHIPPED_BUNDLE, client_directory
+from tests.fixtures import HAS_BUNDLE, SHIPPED_BUNDLE, triage_client
 
 
 def _families() -> pd.DataFrame:
@@ -65,19 +60,7 @@ class ContributionTests(unittest.TestCase):
         HAS_BUNDLE, "needs models/meerkat_bundle.skops, which is stored with Git LFS"
     )
     def test_a_saved_run_stores_pushes_that_rebuild_its_scores(self):
-        directory = client_directory()
-        runs = Path(tempfile.mkdtemp())
-        with (
-            contextlib.redirect_stdout(io.StringIO()),
-            contextlib.redirect_stderr(io.StringIO()),
-        ):
-            cli.cmd_triage(argparse.Namespace(
-                model=SHIPPED_BUNDLE, input=directory, company="acme",
-                inventory=directory / "inventory" / "acme.json",
-                labels=None, event_csv_dir=None,
-                wazuh_file=None, aminer_file=None, budget=2, runs_dir=runs,
-            ))
-        families = cli.load_run(runs).families
+        families = triage_client().run.families
         columns = [c for c in families.columns if c.startswith(CONTRIBUTION_PREFIX)]
         self.assertTrue(columns)
         self.assertTrue(all(families[c].dtype == float for c in columns))

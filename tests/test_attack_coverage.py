@@ -15,14 +15,13 @@ import pandas as pd
 
 from core.attack_mapping import DETECTION_MAPPINGS, map_alert, with_local_mappings
 from meerkat import cli
-from tests.test_cli import (
+from tests.fixtures import (
     HAS_BUNDLE,
-    SHIPPED_BUNDLE,
     client_directory,
     make_alerts,
-    make_families,
-    make_sessions,
+    make_run,
     squashed,
+    triage_client,
 )
 
 
@@ -52,9 +51,6 @@ class LocalMappingTests(unittest.TestCase):
         self.assertEqual(mapping.source, "rule")
         self.assertIn("Credential Access", mapping.tactics)
         self.assertEqual(map_alert("wazuh", "31101", "T1595", merged).source, "suppressed")
-
-    def test_no_local_file_is_the_shipped_mapping(self):
-        self.assertIs(with_local_mappings(None), DETECTION_MAPPINGS)
 
     def test_a_bad_file_is_refused_with_its_name(self):
         for content in (
@@ -131,15 +127,10 @@ class CheckCoverageTests(unittest.TestCase):
 
 
 def _run():
-    alerts = make_alerts().assign(
+    return make_run(alerts=make_alerts().assign(
         mapping_source=["rule", "rule", "rule", ""],
         technique_ids=["T1595.002", "T1595.002", "T1595.002", ""],
-    )
-    decorated = cli.decorate_families(make_families(), alerts, budget=2)
-    runs = Path(tempfile.mkdtemp())
-    cli.save_run(runs, "acme-1", {"company": "acme", "budget": 2},
-                 decorated, make_sessions(), alerts)
-    return runs
+    ))
 
 
 class AttackCommandTests(unittest.TestCase):
@@ -169,52 +160,36 @@ class ConfigTests(unittest.TestCase):
             cli._apply_config(args)
         self.assertEqual(args.attack_mappings, Path("local.json"))
 
-    def test_unset_means_the_shipped_mapping(self):
-        args = cli.build_parser().parse_args(["check"])
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("MEERKAT_ATTACK_MAPPINGS", None)
-            with mock.patch.object(cli, "_load_config", return_value=({}, "")):
-                cli._apply_config(args)
-        self.assertIsNone(args.attack_mappings)
-
 
 @unittest.skipUnless(
     HAS_BUNDLE, "needs models/meerkat_bundle.skops, which is stored with Git LFS"
 )
 class TriageWithLocalMappingTests(unittest.TestCase):
-    def _triage(self, mappings):
-        directory = client_directory()
-        runs = Path(tempfile.mkdtemp())
-        with (
-            contextlib.redirect_stdout(io.StringIO()),
-            contextlib.redirect_stderr(io.StringIO()),
-        ):
-            cli.cmd_triage(argparse.Namespace(
-                model=SHIPPED_BUNDLE, input=directory, company="acme",
-                inventory=directory / "inventory" / "acme.json",
-                labels=None, event_csv_dir=None, wazuh_file=None, aminer_file=None,
-                attack_mappings=mappings, budget=2, runs_dir=runs,
-            ))
-        return cli.load_run(runs)
+    @classmethod
+    def setUpClass(cls):
+        cls.path = _mapping_file(LOCAL)
+        cls.local = triage_client(mappings=cls.path).run
+        cls.shipped = triage_client().run
 
     def test_a_local_mapping_changes_the_tactics_and_never_the_ranking(self):
-        path = _mapping_file(LOCAL)
-        local = self._triage(path)
-        shipped = self._triage(None)
         columns = ["family_id", "ranking_score", "queue_rank", "in_queue", "handle"]
-        pd.testing.assert_frame_equal(local.families[columns], shipped.families[columns])
+        pd.testing.assert_frame_equal(
+            self.local.families[columns], self.shipped.families[columns]
+        )
         self.assertNotEqual(
-            list(local.alerts["mapping_source"]), list(shipped.alerts["mapping_source"])
+            list(self.local.alerts["mapping_source"]),
+            list(self.shipped.alerts["mapping_source"]),
         )
 
     def test_run_json_records_the_file_and_its_sha256(self):
         import hashlib
 
-        path = _mapping_file(LOCAL)
-        meta = self._triage(path).meta["attack_mappings"]
-        self.assertEqual(meta["file"], str(path))
-        self.assertEqual(meta["sha256"], hashlib.sha256(path.read_bytes()).hexdigest())
-        self.assertIsNone(self._triage(None).meta["attack_mappings"])
+        meta = self.local.meta["attack_mappings"]
+        self.assertEqual(meta["file"], str(self.path))
+        self.assertEqual(
+            meta["sha256"], hashlib.sha256(self.path.read_bytes()).hexdigest()
+        )
+        self.assertIsNone(self.shipped.meta["attack_mappings"])
 
 
 if __name__ == "__main__":

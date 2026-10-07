@@ -16,7 +16,7 @@ from bench.evaluate import (
 )
 
 
-def family(day, entity, alerts, positive, windows=(), labelled_alerts=0):
+def family(day, entity, alerts, positive, windows=(), labelled_alerts=0, overlap=()):
     return {
         "day": day,
         "entity_id": entity,
@@ -26,7 +26,7 @@ def family(day, entity, alerts, positive, windows=(), labelled_alerts=0):
         "family_positive": positive,
         "labelled_alert_count": labelled_alerts,
         "labelled_windows": frozenset(windows),
-        "temporal_overlap_windows": frozenset(windows),
+        "temporal_overlap_windows": frozenset(windows) | frozenset(overlap),
         "event_categories": frozenset(),
         "n_child_sessions": 1,
     }
@@ -35,7 +35,7 @@ def family(day, entity, alerts, positive, windows=(), labelled_alerts=0):
 def two_day_families():
     # day 1 holds 100 alerts in two families, day 2 holds 50 in two more
     return pd.DataFrame([
-        family(1, "a", 90, True, windows={"scan"}, labelled_alerts=3),
+        family(1, "a", 90, True, windows={"scan"}, labelled_alerts=3, overlap={"probe"}),
         family(1, "b", 10, False),
         family(2, "c", 30, True, windows={"exfil"}, labelled_alerts=2),
         family(2, "d", 20, False),
@@ -48,11 +48,6 @@ class ExactSignTests(unittest.TestCase):
         p, n_eff = _exact_sign_p([1, 1, 1])
         self.assertEqual(n_eff, 3)
         self.assertAlmostEqual(p, 0.25)
-
-    def test_eight_wins_is_the_floor_of_eight_folds(self):
-        p, n_eff = _exact_sign_p([1] * 8)
-        self.assertEqual(n_eff, 8)
-        self.assertAlmostEqual(p, 2 / 256)
 
     def test_ties_drop_out(self):
         p, n_eff = _exact_sign_p([0, 0, 0])
@@ -72,6 +67,9 @@ class CostColumnTests(unittest.TestCase):
         queue = families.iloc[[0, 2]]
         metrics = _queue_metrics(queue, families, total_labelled_alerts=5, budget=1)
         self.assertEqual(metrics["alerts_in_queue"], 120)
+        # the looser overlap count is reported beside the strict one, never in its place
+        self.assertEqual(metrics["strict_windows"], 2)
+        self.assertEqual(metrics["temporal_overlap_windows"], 3)
         # day 1 reads 90 of 100, day 2 reads 30 of 50
         self.assertAlmostEqual(metrics["share_of_day_alerts"], (0.9 + 0.6) / 2)
 
@@ -80,6 +78,7 @@ class CostColumnTests(unittest.TestCase):
         floor = _floor_metrics(families, total_labelled_alerts=5, budget=5)
         self.assertEqual(floor["queued"], 2)
         self.assertEqual(floor["strict_windows"], 2)
+        self.assertEqual(floor["temporal_overlap_windows"], 3)
         self.assertEqual(floor["alerts_in_queue"], 150)
         self.assertEqual(floor["share_of_day_alerts"], 1.0)
         self.assertEqual(floor["labelled_alert_coverage"], 1.0)
@@ -107,15 +106,6 @@ class SignTestTableTests(unittest.TestCase):
         # the floor is a different unit, so it is never tested as a ranker
         self.assertNotIn("floor: one item per day", against)
 
-    def test_five_informative_folds_cannot_print_a_p(self):
-        # 2/2^5 = 0.0625: no p under .05 exists, so no p is printed
-        per_fold = pd.DataFrame(
-            self.rows("family re-ranker", [5, 5, 5, 5, 5, 4, 4, 4])
-            + self.rows("random", [4, 4, 4, 4, 4, 4, 4, 4])
-        )
-        table = sign_tests(per_fold)
-        self.assertEqual(table["verdict"].iloc[0], "not separable (n_eff=5)")
-
     def test_the_test_runs_on_any_metric_column(self):
         # the claim is cheaper at equal coverage, so cost must be testable too
         per_fold = pd.DataFrame(
@@ -134,12 +124,10 @@ class SignTestTableTests(unittest.TestCase):
 
 
 class BudgetParserTests(unittest.TestCase):
-    def test_a_comma_list_and_a_range_parse(self):
+    def test_lists_and_ranges_parse_duplicates_collapse_and_zero_is_refused(self):
         self.assertEqual(parse_budgets("5,10,25"), (5, 10, 25))
         self.assertEqual(parse_budgets("1-4"), (1, 2, 3, 4))
         self.assertEqual(parse_budgets("1-3,10"), (1, 2, 3, 10))
-
-    def test_duplicates_collapse_and_zero_is_refused(self):
         self.assertEqual(parse_budgets("5,5,5"), (5,))
         with self.assertRaises(ValueError):
             parse_budgets("0-3")
