@@ -2,8 +2,7 @@
 # directory; queue, attack, runs, inspect, review, browse and export reopen it
 # without scoring again. pull, inventory and check prepare the input, retrain
 # and drift compare the model with the client's data, demo scores the bundled
-# example, completion prints a shell script, and bare `meerkat` says where
-# things stand. Order in this file: run state, rendering, commands, parser.
+# example, and bare `meerkat` says where things stand. Order in this file: run state, rendering, commands, parser.
 
 from __future__ import annotations
 
@@ -15,7 +14,6 @@ import hashlib
 import html
 import io
 import json
-import math
 import os
 import pickle
 import re
@@ -23,7 +21,7 @@ import shutil
 import sys
 import tomllib
 import warnings
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import cached_property
 from itertools import islice
@@ -54,10 +52,8 @@ from core.drift import (
 from core.features import CONTRIBUTION_PREFIX, build_session_feature_matrix
 from core.incidents import (
     assign_bag_priors,
-    assign_reviewed,
     entity_for,
     load_incidents,
-    load_reviewed_periods,
     unresolved_hosts,
 )
 from core.inventory import CRITICALITY_LEVELS, UNSET, load_inventory
@@ -1575,34 +1571,6 @@ def _check_field(field: str, columns: set[str]) -> None:
         )
 
 
-def _parse_pairs(pairs, columns) -> list[tuple[str, str]]:
-    parsed = []
-    for pair in pairs or []:
-        if "=" not in pair:
-            _fail(f"[red]expected field=value, got {safe(repr(pair))}[/red]")
-        field, value = pair.split("=", 1)
-        _check_field(field, columns)
-        parsed.append((field, value))
-    return parsed
-
-
-def _match(series, value):
-    if series.dtype.kind == "f":
-        try:
-            return series == float(value)
-        except ValueError:
-            return series.astype(str).eq(value)
-    return series.astype(str).eq(value)
-
-
-def _apply_filters(alert_slice, wheres, excludes):
-    for field, value in wheres:
-        alert_slice = alert_slice[_match(alert_slice[field], value)]
-    for field, value in excludes:
-        alert_slice = alert_slice[~_match(alert_slice[field], value)]
-    return alert_slice
-
-
 def _render_raw(alert_slice, raw_dir: Path, limit: int) -> None:
     for source_file, group in alert_slice.head(limit).groupby(
         "source_file", sort=False, observed=True
@@ -1719,8 +1687,6 @@ def cmd_inspect(args) -> None:
     if not args.json:
         _announce_run(run)
     columns = set(run.alerts.columns)
-    wheres = _parse_pairs(args.where, columns)
-    excludes = _parse_pairs(args.exclude, columns)
     if args.distinct:
         _check_field(args.distinct, columns)
 
@@ -1738,13 +1704,12 @@ def cmd_inspect(args) -> None:
         _inspect_alert(run, family, session, args)
         return
 
-    alert_slice = _apply_filters(alert_slice, wheres, excludes)
     if args.distinct:
         render_distinct(alert_slice, args.distinct)
         return
 
     reviews = current_reviews(run.directory)
-    wants_rows = bool(args.alerts or args.raw or wheres or excludes)
+    wants_rows = bool(args.alerts or args.raw)
     session_handle = canon_handle(args.session) if args.session else None
 
     def render() -> None:
@@ -1839,7 +1804,9 @@ def _incident_reach(families, incidents, inventory, budget):
 # pairs reach 0.0625 and six reach 0.031; below six no difference can be called real
 MIN_DISCORDANT = 6
 
-LOCAL_WEIGHTS_COMFORT = 15
+RETRAIN_TREES = 200
+RETRAIN_FITS = 5
+MIN_BAGGED_SESSIONS = 10
 
 
 def _validate_retrain_result(old, new) -> None:
@@ -1947,17 +1914,12 @@ def cmd_retrain(args) -> None:
     train = sessions[sessions["day"] < cutoff].copy()
     held = sessions[sessions["day"] >= cutoff].copy()
 
-    reviewed_periods = (
-        load_reviewed_periods(args.reviewed_periods)
-        if args.reviewed_periods else None
-    )
-    train["reviewed"] = assign_reviewed(train, reviewed_periods)
     # split the incidents on the same instant as the sessions. Passing all of them
     # would let a burst that spans the cutoff be labelled by a held-out incident.
     boundary = cutoff * SECONDS_PER_DAY
     train_incidents = incidents[incidents["start"] < boundary]
     held_incidents = incidents[incidents["start"] >= boundary]
-    prior = assign_bag_priors(train, train_incidents, inventory, args.prior_k)
+    prior = assign_bag_priors(train, train_incidents, inventory)
     bags = int((prior > 0).sum())
     console.print(
         f"{len(sessions)} sessions over {len(days)} days, "
@@ -1970,10 +1932,10 @@ def cmd_retrain(args) -> None:
             "so training has nothing to learn from; lower --holdout-days, "
             "or supply incidents covering an earlier period"
         )
-    if bags < args.min_positives:
+    if bags < MIN_BAGGED_SESSIONS:
         failures.append(
             f"only {bags} sessions fall inside an incident; at least "
-            f"{args.min_positives} are needed to retrain"
+            f"{MIN_BAGGED_SESSIONS} are needed to retrain"
         )
     if failures:
         _fail("\n".join(f"[red]{safe(failure)}[/red]" for failure in failures))
@@ -1981,10 +1943,8 @@ def cmd_retrain(args) -> None:
     # enough for seed noise to flip it
     try:
         candidates = [
-            refit_forest(
-                bundle, train, prior, n_estimators=args.trees, seed=args.seed + offset
-            )
-            for offset in range(args.fits)
+            refit_forest(bundle, train, prior, RETRAIN_TREES, seed=offset)
+            for offset in range(RETRAIN_FITS)
         ]
     except ValueError as error:
         _fail(f"[red]{safe(error)}[/red]")
@@ -2006,14 +1966,7 @@ def cmd_retrain(args) -> None:
         )
         raise SystemExit(EXIT_DECLINED)
 
-    retrained = candidates[verdict["median_index"]]
-    ranking_note = "kept: ranking weights (shipped), calibrator"
-    if args.refit_ranking_weights:
-        retrained, ranking_note = _contest_ranking_weights(
-            retrained, candidates, verdict, train, prior, held, alerts,
-            held_incidents, inventory, args,
-        )
-    save_model(retrained, args.out)
+    save_model(candidates[verdict["median_index"]], args.out)
     console.print(
         f"[green]saved[/green] {args.out}  "
         f"{sum(verdict['passed'])} of {len(verdict['passed'])} seeds passed, "
@@ -2021,55 +1974,7 @@ def cmd_retrain(args) -> None:
     )
     console.print(
         "[dim]refit: forest (your sessions)  rescaled: re-ranker scale "
-        f"(your families)  {ranking_note}[/dim]"
-    )
-
-
-def _contest_ranking_weights(
-    retrained, candidates, verdict, train, prior, held, alerts,
-    held_incidents, inventory, args,
-):
-    from core.scenario_eval import fit_local_reranker
-
-    fits = [
-        fit_local_reranker(train, prior, args.trees, args.seed + offset)
-        for offset in range(args.fits)
-    ]
-    positives = fits[0][1]
-    style = "yellow" if positives < LOCAL_WEIGHTS_COMFORT else "dim"
-    console.print(
-        f"[{style}]your incident records yield {positives} positive families; "
-        f"a ranking-weight fit is usually not competitive below "
-        f"~{LOCAL_WEIGHTS_COMFORT} (about {LOCAL_WEIGHTS_COMFORT} recorded "
-        f"incidents is a comfortable history)[/{style}]"
-    )
-    if any(fit is None for fit, _ in fits):
-        return retrained, (
-            "kept: ranking weights (shipped; the local fit could not be "
-            "attempted), calibrator"
-        )
-    wins = 0
-    for candidate, (local, _), shipped_reach in zip(
-        candidates, fits, verdict["candidates"]
-    ):
-        local_reach = incident_reach_for(
-            replace(candidate, reranker=local), held, alerts,
-            held_incidents, inventory, args.budget,
-        )
-        wins += int(local_reach.sum() > shipped_reach.sum())
-    if wins * 2 > len(fits):
-        adopted = replace(
-            retrained,
-            reranker=fits[verdict["median_index"]][0],
-            ranking_weights="local",
-        )
-        return adopted, (
-            f"adopted: local ranking weights (won {wins} of {len(fits)} "
-            "seeds), kept: calibrator"
-        )
-    return retrained, (
-        f"kept: ranking weights (shipped won {len(fits) - wins} of "
-        f"{len(fits)} seeds), calibrator"
+        "(your families)  kept: ranking weights (shipped), calibrator[/dim]"
     )
 
 
@@ -2761,38 +2666,6 @@ def cmd_browse(args) -> None:
     browse_loop(run)
 
 
-def cmd_completion(args) -> None:
-    parser = build_parser()
-    subparsers = next(
-        action for action in parser._actions
-        if isinstance(action, argparse._SubParsersAction)
-    )
-    names = " ".join(sorted(subparsers.choices))
-    lines = [
-        "_meerkat() {",
-        '  local cur="${COMP_WORDS[COMP_CWORD]}"',
-        '  if [ "$COMP_CWORD" -eq 1 ]; then',
-        f'    COMPREPLY=($(compgen -W "{names}" -- "$cur"))',
-        "    return",
-        "  fi",
-        '  case "${COMP_WORDS[1]}" in',
-    ]
-    for name, sub in sorted(subparsers.choices.items()):
-        words = {
-            option for action in sub._actions
-            for option in action.option_strings if option.startswith("--")
-        }
-        for action in sub._actions:
-            if isinstance(action, argparse._SubParsersAction):
-                words.update(action.choices)
-        flags = " ".join(sorted(words))
-        lines.append(
-            f'    {name}) COMPREPLY=($(compgen -W "{flags}" -- "$cur"));;'
-        )
-    lines += ["  esac", "}", "complete -F _meerkat meerkat"]
-    print("\n".join(lines))
-
-
 def cmd_orientation(args) -> None:
     latest = latest_run_id(args.runs_dir)
     if latest is None:
@@ -2835,13 +2708,6 @@ def resolve_company(args) -> str:
             "root has no directory name to use. Pass --environment with a "
             "label, or point --input at a named directory."
         )
-
-
-def _positive_float(value: str) -> float:
-    number = float(value)
-    if not (math.isfinite(number) and number > 0):
-        raise argparse.ArgumentTypeError("must be a finite number above 0")
-    return number
 
 
 def _add_environment(parser) -> None:
@@ -3031,7 +2897,7 @@ def build_parser() -> argparse.ArgumentParser:
             "input commands: pull, inventory, check\n"
             "run commands: attack, runs, export\n"
             "model commands: retrain, drift\n"
-            "other: demo, completion; bare `meerkat` says where things stand"
+            "other: demo; bare `meerkat` says where things stand"
         ),
         epilog=(
             "first run:\n"
@@ -3147,11 +3013,6 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("session", nargs="?", help="session handle, e.g. S1")
     inspect.add_argument("alert", nargs="?",
                          help="alert handle, e.g. A2, in the session's own order")
-    inspect.add_argument("--where", action="append", metavar="field=value",
-                         help="keep alerts matching a field, e.g. "
-                              "--where http_status=404; repeatable")
-    inspect.add_argument("--exclude", action="append", metavar="field=value",
-                         help="drop alerts matching a field; repeatable")
     inspect.add_argument("--distinct", metavar="field",
                          help="count the distinct values of one field")
     inspect.add_argument("--alerts", type=_positive, metavar="N",
@@ -3255,12 +3116,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_selector(browse)
     browse.set_defaults(func=cmd_browse)
 
-    completion = sub.add_parser(
-        "completion",
-        help="print a bash completion script; zsh loads it via bashcompinit",
-    )
-    completion.set_defaults(func=cmd_completion)
-
     demo = sub.add_parser("demo", help="run the bundled russellmitchell demo")
     demo.set_defaults(func=cmd_demo, raw_dir=DEMO_RAW, model=DEFAULT_MODEL,
                       budget=10, runs_dir=DEFAULT_RUNS)
@@ -3318,10 +3173,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_environment(retrain)
     retrain.add_argument("--incidents", type=Path, required=True)
-    retrain.add_argument(
-        "--reviewed-periods", type=Path,
-        help="CSV of start,end periods whose alerts were fully reviewed",
-    )
     _add_inventory(retrain)
     _add_input(retrain)
     _add_alert_files(retrain)
@@ -3329,23 +3180,6 @@ def build_parser() -> argparse.ArgumentParser:
     retrain.add_argument("--out", type=Path, default=Path("models/retrained.skops"))
     retrain.add_argument("--holdout-days", type=_positive, default=7)
     retrain.add_argument("--budget", type=_positive, default=10)
-    tuning = retrain.add_argument_group(
-        "tuning",
-        "defaults are what the benchmark shipped with; leave them alone unless "
-        "you are measuring something",
-    )
-    tuning.add_argument("--prior-k", type=_positive_float, default=1.0,
-                        help="bag-size discount; a ticket contributes k/n per "
-                             "session and k=1 keeps every ticket's total at 1.0")
-    tuning.add_argument("--min-positives", type=_positive, default=10)
-    tuning.add_argument("--refit-ranking-weights", action="store_true",
-                        help="also fit the family ranking weights on your own "
-                             "incidents; adopted only if they beat the shipped "
-                             "ones on the held-out days")
-    tuning.add_argument("--trees", type=int, default=200)
-    tuning.add_argument("--seed", type=int, default=0)
-    tuning.add_argument("--fits", type=_positive, default=5,
-                        help="forests to fit; a majority must beat the shipped one")
     retrain.set_defaults(func=cmd_retrain)
 
     return parser

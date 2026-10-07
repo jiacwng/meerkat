@@ -165,8 +165,7 @@ The busiest day in the test data, 453,697 alerts, triages in 72 seconds with
   from the test data, so a score that used it could not be tested fairly.
 - Wazuh, Suricata and AMiner are supported. Another detector needs an adapter.
 - Retraining is only as good as the incident records a company can supply, and
-  the shipped ranking weights stay unless `--refit-ranking-weights` beats them
-  on your own held-out incidents.
+  it keeps the shipped ranking weights.
 - Below roughly 300 training sessions, drift reporting is mostly noise.
 
 ## Reference

@@ -141,7 +141,6 @@ def predict_scores(
 def fit_soft_labels(
     X: pd.DataFrame,
     prior: np.ndarray,
-    reviewed: np.ndarray | None = None,
     n_estimators: int = 200,
     seed: int = 0,
 ) -> RandomForestClassifier:
@@ -150,18 +149,11 @@ def fit_soft_labels(
     if not in_bag.any():
         raise ValueError("no session falls inside an incident")
     negative = ~in_bag
-    if not negative.any() and reviewed is None:
+    if not negative.any():
         raise ValueError(
             "every session falls inside an incident, so there is nothing to "
             "learn a negative from; supply incidents covering part of the period"
         )
-    if reviewed is not None:
-        negative = negative & np.asarray(reviewed, dtype=bool)
-        if (~in_bag).any() and not negative.any():
-            raise ValueError(
-                "the reviewed periods exclude every session outside an incident, "
-                "so there is nothing left to learn a negative from"
-            )
     X_stacked = pd.concat([X[negative], X[in_bag], X[in_bag]], axis=0)
     y = np.concatenate([
         np.zeros(negative.sum()), np.ones(in_bag.sum()), np.zeros(in_bag.sum()),
@@ -384,7 +376,6 @@ def _write_provenance(model: object, path: Path) -> None:
         "max_depth": params.get("max_depth"),
         "min_samples_leaf": params.get("min_samples_leaf"),
         "class_weight": params.get("class_weight"),
-        "ranking_weights": getattr(model, "ranking_weights", "shipped"),
     }
     provenance_path(path).write_text(
         json.dumps(record, indent=2) + "\n", encoding="utf-8"

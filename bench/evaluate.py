@@ -578,10 +578,7 @@ def build_bundle(
         training_scenarios=training_scenarios,
         n_estimators=n_estimators,
         seed=seed,
-        profile=build_profile(
-            X, predict_scores(forest, X), training_families,
-            reranker.predict(training_families),
-        ),
+        profile=build_profile(X, reranker.predict(training_families)),
     )
 
 def parse_budgets(text: str) -> tuple[int, ...]:

@@ -101,7 +101,7 @@ class TestDegeneratePrior(unittest.TestCase):
         # meaningless. The mirror case was already refused.
         X = pd.DataFrame({"signal": np.linspace(0, 1, 20), "noise": np.zeros(20)})
         with self.assertRaises(ValueError) as caught:
-            classifier.fit_soft_labels(X, np.ones(20), None, n_estimators=5)
+            classifier.fit_soft_labels(X, np.ones(20), n_estimators=5)
         self.assertIn("nothing to", str(caught.exception))
 
 
@@ -173,17 +173,6 @@ class TestBoundaryValues(unittest.TestCase):
                 with self.subTest(command=command[0], value=value):
                     with self.assertRaises(SystemExit):
                         self.parser().parse_args([*command, "--budget", value])
-
-    def test_prior_k_must_be_finite_and_positive(self):
-        # a negative or NaN k left every prior at zero, and the error then
-        # blamed the user's incident records for a tuning flag
-        base = ["retrain", "--incidents", "i.csv", "--inventory", "v.json"]
-        for value in ("-1", "0", "nan", "inf"):
-            with self.subTest(value=value), self.assertRaises(SystemExit):
-                self.parser().parse_args([*base, "--prior-k", value])
-        self.assertEqual(
-            self.parser().parse_args([*base, "--prior-k", "2.5"]).prior_k, 2.5
-        )
 
     def test_a_bidi_override_is_stripped_like_any_control_character(self):
         # rich strips neither C1 nor the bidi overrides, and one reorders the

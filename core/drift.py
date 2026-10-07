@@ -31,12 +31,9 @@ class TrainingProfile:
         default_factory=dict
     )
     feature_medians: dict[str, float] = field(default_factory=dict)
-    session_score_bins: tuple[tuple[float, ...], tuple[float, ...]] = ((), ())
     family_score_bins: tuple[tuple[float, ...], tuple[float, ...]] = ((), ())
-    detector_mix: dict[str, float] = field(default_factory=dict)
     inventory_coverage: float = 0.0
     n_sessions: int = 0
-    n_families: int = 0
 
 
 @dataclass
@@ -63,14 +60,7 @@ def _reference(values: np.ndarray) -> tuple[tuple[float, ...], tuple[float, ...]
     return tuple(float(c) for c in cuts), tuple(float(s) for s in shares)
 
 
-def build_profile(
-    X: pd.DataFrame,
-    session_scores: np.ndarray,
-    families: pd.DataFrame | None = None,
-    family_scores: np.ndarray | None = None,
-) -> TrainingProfile:
-    detector_columns = [c for c in X.columns if c.startswith("detector_")]
-    total = float(len(X)) or 1.0
+def build_profile(X: pd.DataFrame, family_scores: np.ndarray) -> TrainingProfile:
     compared = [name for name in X.columns if _compared(name)]
     return TrainingProfile(
         feature_bins={name: _reference(X[name].to_numpy()) for name in compared},
@@ -79,20 +69,11 @@ def build_profile(
             for name in compared
             if len(X)
         },
-        session_score_bins=_reference(np.asarray(session_scores)),
-        family_score_bins=(
-            _reference(np.asarray(family_scores))
-            if family_scores is not None else ((), ())
-        ),
-        detector_mix={
-            c.removeprefix("detector_"): float(X[c].sum() / total)
-            for c in detector_columns
-        },
+        family_score_bins=_reference(np.asarray(family_scores)),
         inventory_coverage=(
             float(X["in_inventory"].mean()) if "in_inventory" in X else 0.0
         ),
         n_sessions=int(len(X)),
-        n_families=int(len(families)) if families is not None else 0,
     )
 
 

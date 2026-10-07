@@ -45,10 +45,8 @@ from core.features import (
 )
 from core.incidents import (
     assign_bag_priors,
-    assign_reviewed,
     entity_for,
     load_incidents,
-    load_reviewed_periods,
     unresolved_hosts,
 )
 from core.inventory import Asset, Inventory
@@ -274,12 +272,11 @@ class TestProfile(unittest.TestCase):
         self.assertIn("log_size", profile.feature_bins)
         self.assertNotIn("role_server", profile.feature_bins)
 
-    def test_the_profile_records_size_and_detector_mix(self):
+    def test_the_profile_records_size_and_inventory_coverage(self):
         X = matrix(400)
         profile = build_profile(X, np.zeros(400))
         self.assertEqual(profile.n_sessions, 400)
         self.assertAlmostEqual(profile.inventory_coverage, 1.0)
-        self.assertIn("wazuh", profile.detector_mix)
 
     def test_the_same_data_shows_no_drift_against_its_own_profile(self):
         X = matrix(800, seed=1)
@@ -645,27 +642,6 @@ class ClientRetrainingTests(unittest.TestCase):
         )
         self.assertIs(retrained.calibrator, self.bundle.calibrator)
 
-    def test_a_local_reranker_fits_on_a_multi_day_client(self):
-        from core.scenario_eval import fit_local_reranker
-        client = pd.concat(self.sessions.values(), ignore_index=True)
-        prior = pd.Series(0.0, index=client.index)
-        prior[client["positive"]] = 0.5
-        local, positives = fit_local_reranker(client, prior, n_estimators=5)
-        self.assertIsNotNone(local)
-        self.assertGreater(positives, 0)
-        # the fit ranks: predict returns one score per family
-        scored = client.copy()
-        scored["ranking_score"] = 0.5
-        from core.sessions import build_families
-        families = build_families(scored)
-        self.assertEqual(len(local.predict(families)), len(families))
-
-    def test_a_single_day_client_cannot_fold_and_says_none(self):
-        from core.scenario_eval import fit_local_reranker
-        prior = self._prior(3)
-        local, positives = fit_local_reranker(self.client, prior, n_estimators=5)
-        self.assertIsNone(local)
-
 
 # The client retraining path: soft labels from bags, a rescaled re-ranker and a
 # forest swapped into an otherwise frozen bundle.
@@ -719,53 +695,6 @@ class TestSoftLabels(unittest.TestCase):
         np.testing.assert_allclose(
             classifier.predict_scores(over, X),
             classifier.predict_scores(at_one, X),
-        )
-
-    def test_an_unreviewed_session_is_dropped_rather_than_trained_as_clean(self):
-        # sessions 0-1 reviewed and clean, 2-3 never looked at, 4-5 in a bag
-        X = features(6, np.array([0.0, 0.0, 9.0, 9.0, 1.0, 1.0]))
-        prior = np.array([0.0, 0.0, 0.0, 0.0, 0.5, 0.5])
-        reviewed = np.array([True, True, False, False, True, True])
-
-        model = classifier.fit_soft_labels(
-            X, prior, reviewed, n_estimators=20, seed=0
-        )
-
-        # the unreviewed rows never entered training, so the forest cannot have
-        # learned their signal value of 9.0 as a negative. Training them as clean
-        # drops them to 0.0, below the reviewed negatives; dropping them leaves
-        # them above, because 9.0 sits on the bagged side of the only split.
-        self.assertEqual(model.n_features_in_, X.shape[1])
-        seen = classifier.predict_scores(model, X)
-        self.assertGreater(seen[2:4].mean(), seen[:2].mean())
-        self.assertGreater(seen[4:].mean(), seen[:2].mean())
-
-    def test_reviewed_periods_that_exclude_every_negative_are_refused(self):
-        # a period file covering only the incident hours leaves both classes
-        # made of the same rows, so it stops rather than fitting noise
-        X = features(4, np.array([0.0, 0.0, 1.0, 1.0]))
-        with self.assertRaises(ValueError) as caught:
-            classifier.fit_soft_labels(
-                X,
-                np.array([0.0, 0.0, 0.5, 0.5]),
-                np.array([False, False, True, True]),
-                n_estimators=5,
-                seed=0,
-            )
-        self.assertIn("nothing left to learn a negative from", str(caught.exception))
-
-    def test_no_reviewed_argument_keeps_every_session_outside_a_bag(self):
-        # passing no period file has to behave exactly like marking everything
-        # reviewed, so adding the flag later cannot move a client's scores
-        X = features(4, np.array([0.0, 0.0, 1.0, 1.0]))
-        prior = np.array([0.0, 0.0, 0.5, 0.5])
-        without = classifier.fit_soft_labels(X, prior, None, n_estimators=20, seed=0)
-        all_reviewed = classifier.fit_soft_labels(
-            X, prior, np.ones(4, dtype=bool), n_estimators=20, seed=0
-        )
-        np.testing.assert_allclose(
-            classifier.predict_scores(without, X),
-            classifier.predict_scores(all_reviewed, X),
         )
 
     def test_a_larger_prior_pushes_bagged_sessions_higher(self):
@@ -1051,43 +980,6 @@ class TestHostResolution(unittest.TestCase):
         self.assertEqual(unresolved_hosts(incidents, inventory()), ["printer"])
 
 
-class TestReviewedPeriods(unittest.TestCase):
-    def test_no_period_file_preserves_the_old_all_reviewed_behaviour(self):
-        # --reviewed-periods is optional, and without it every session outside
-        # a bag counts as reviewed and trains as a negative
-        reviewed = assign_reviewed(
-            sessions(("10.0.0.1", 10.0, 20.0), ("10.0.0.2", 30.0, 40.0)),
-            None,
-        )
-        self.assertEqual(list(reviewed), [True, True])
-
-    def test_only_sessions_fully_inside_a_reviewed_period_are_marked(self):
-        # a burst half outside the reviewed hours was only half looked at, so
-        # both ends have to be contained before it can be a negative
-        periods = pd.DataFrame([{"start": 10.0, "end": 30.0}])
-        table = sessions(
-            ("10.0.0.1", 10.0, 20.0),
-            ("10.0.0.1", 5.0, 15.0),
-            ("10.0.0.1", 31.0, 40.0),
-        )
-        self.assertEqual(
-            list(assign_reviewed(table, periods)),
-            [True, False, False],
-        )
-
-    def test_reviewed_period_csv_loads_start_and_end(self):
-        # the period file needs two columns and they arrive as text, so both
-        # are parsed to float before any session comparison, ISO times included
-        periods = load_reviewed_periods(write("start,end\n10,20\n"))
-        self.assertEqual(periods.to_dict("records"), [{"start": 10.0, "end": 20.0}])
-        iso = load_reviewed_periods(
-            write("start,end\n2026-01-21T00:00:00,2026-01-21T01:00:00\n")
-        )
-        self.assertEqual(
-            iso.loc[0, "start"], pd.Timestamp("2026-01-21T00:00:00Z").timestamp()
-        )
-
-
 class TestBagPriors(unittest.TestCase):
     def test_a_session_outside_every_incident_is_a_clean_negative(self):
         # a prior of 0.0 is what makes a session a training negative, so a
@@ -1156,10 +1048,9 @@ class TestBagPriors(unittest.TestCase):
             {"start": 10.0, "end": 35.0, "host": "web-01"},
         ])
 
-        forward = assign_bag_priors(table, incidents, inventory(), numerator=1.0)
+        forward = assign_bag_priors(table, incidents, inventory())
         reverse = assign_bag_priors(
-            table, incidents.iloc[::-1].reset_index(drop=True), inventory(),
-            numerator=1.0,
+            table, incidents.iloc[::-1].reset_index(drop=True), inventory()
         )
 
         expected = [0.5, 0.5, 1 / 3, 1 / 3]

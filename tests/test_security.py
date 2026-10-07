@@ -110,11 +110,11 @@ class MarkupTests(unittest.TestCase):
     def test_an_os_error_with_markup_exits_cleanly(self):
         refused = PermissionError(13, "Permission denied", "[/x]")
         with (
-            patch.object(cli, "cmd_completion", side_effect=refused),
+            patch.object(cli, "cmd_runs", side_effect=refused),
             contextlib.redirect_stderr(io.StringIO()),
         ):
             with self.assertRaises(SystemExit) as caught:
-                cli.main(["completion"])
+                cli.main(["runs"])
         self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
 
 

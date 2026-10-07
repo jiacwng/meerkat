@@ -1,8 +1,8 @@
 {
-  "sha256": "ddd80c77c1fa06ed0f9e598b0d04f7bfa5bc2cc2ceae4aae4b0bfc875b1b3abf",
+  "sha256": "a9feeed4c454bd26791e368545a0238c5ee67565586c43cc585d5e96046caf4d",
   "sklearn_version": "1.9.0",
   "python_version": "3.12.3",
-  "written_at": "2026-10-07T13:31:59+00:00",
+  "written_at": "2026-10-07T15:57:58+00:00",
   "training_scenarios": [
     "fox",
     "harrison",
@@ -34,6 +34,5 @@
   ],
   "max_depth": null,
   "min_samples_leaf": 1,
-  "class_weight": "balanced",
-  "ranking_weights": "shipped"
+  "class_weight": "balanced"
 }

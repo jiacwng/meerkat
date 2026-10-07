@@ -21,7 +21,6 @@ POSITIVE_VERDICTS = frozenset({
 })
 BAG_SIZE_DISCOUNT = 1.0
 REQUIRED_COLUMNS = ("start", "end", "host", "verdict")
-REVIEWED_COLUMNS = ("start", "end")
 
 
 def _epoch_seconds(values: pd.Series, column: str, path: Path) -> pd.Series:
@@ -82,38 +81,6 @@ def load_incidents(path: Path) -> pd.DataFrame:
     return kept
 
 
-def load_reviewed_periods(path: Path) -> pd.DataFrame:
-    with path.open(encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        rows = list(reader)
-    missing = [c for c in REVIEWED_COLUMNS if c not in (reader.fieldnames or [])]
-    if missing:
-        raise ValueError(
-            f"{path} is missing {', '.join(missing)}; "
-            f"expected columns {', '.join(REVIEWED_COLUMNS)}"
-        )
-    frame = pd.DataFrame(rows, columns=REVIEWED_COLUMNS)
-    frame["start"] = _epoch_seconds(frame["start"], "start", path)
-    frame["end"] = _epoch_seconds(frame["end"], "end", path)
-    return frame
-
-
-def assign_reviewed(
-    sessions: pd.DataFrame,
-    periods: pd.DataFrame | None,
-) -> pd.Series:
-    if periods is None:
-        return pd.Series(True, index=sessions.index, dtype=bool)
-
-    reviewed = pd.Series(False, index=sessions.index, dtype=bool)
-    for period in periods.itertuples():
-        reviewed |= (
-            sessions["start"].ge(period.start)
-            & sessions["end"].le(period.end)
-        )
-    return reviewed
-
-
 def entity_for(host: str, inventory: Inventory) -> str:
     host = str(host).strip()
     if host in inventory.assets_by_ip:
@@ -125,7 +92,6 @@ def assign_bag_priors(
     sessions: pd.DataFrame,
     incidents: pd.DataFrame,
     inventory: Inventory,
-    numerator: float = BAG_SIZE_DISCOUNT,
 ) -> pd.Series:
     prior = pd.Series(0.0, index=sessions.index, dtype=float)
     entities = sessions["entity_id"].astype(str)
@@ -142,7 +108,7 @@ def assign_bag_priors(
         )
         count = int(overlap.sum())
         if count:
-            candidate = numerator / count
+            candidate = BAG_SIZE_DISCOUNT / count
             prior.loc[overlap] = prior.loc[overlap].clip(lower=candidate)
     return prior.clip(upper=1.0)
 

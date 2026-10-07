@@ -35,6 +35,11 @@
   later. A run saved under numpy 1 no longer opens; re-run triage.
 - `inspect` replaces "Related ATT&CK observations" with "ATT&CK chain on this
   host", computed over the whole host and day.
+- `retrain` drops `--reviewed-periods`, `--refit-ranking-weights`, `--prior-k`,
+  `--min-positives`, `--trees`, `--seed` and `--fits`. The values are fixed at
+  the old defaults.
+- `meerkat completion` is removed.
+- `inspect` drops `--where` and `--exclude`. `--distinct` stays.
 
 ### Changed
 
