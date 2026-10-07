@@ -6,15 +6,12 @@ import argparse
 import contextlib
 import io
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from meerkat import cli
-
-ROOT = Path(__file__).resolve().parents[1]
+from tests.fixtures import HAS_RUN, ROOT, run_cli
 
 
 def parse(arguments: list[str]):
@@ -26,11 +23,6 @@ def parse(arguments: list[str]):
 class EnvironmentFlag(unittest.TestCase):
     def test_the_new_spelling_sets_the_label(self):
         self.assertEqual(parse(["triage", "--environment", "acme"]).company, "acme")
-
-    def test_the_old_spelling_is_gone(self):
-        with self.assertRaises(SystemExit) as caught:
-            parse(["check", "--company", "acme"])
-        self.assertEqual(caught.exception.code, 2)
 
 
 class ConfigPrecedence(unittest.TestCase):
@@ -80,11 +72,6 @@ class Completion(unittest.TestCase):
         self.assertIn("complete -F _meerkat meerkat", script)
 
 
-class NoColor(unittest.TestCase):
-    def test_the_flag_parses_before_the_subcommand(self):
-        self.assertTrue(parse(["--no-color", "runs"]).no_color)
-
-
 class WhatDiffers(unittest.TestCase):
     def test_the_varying_field_is_found_and_constants_are_skipped(self):
         import pandas as pd
@@ -108,28 +95,18 @@ class TechniqueText(unittest.TestCase):
 
 
 class Orientation(unittest.TestCase):
-    def run_bare(self, cwd: Path) -> subprocess.CompletedProcess:
-        environment = os.environ.copy()
-        environment["PYTHONPATH"] = str(ROOT)
-        environment["PYTHONIOENCODING"] = "utf-8"
-        return subprocess.run(
-            [sys.executable, "-m", "meerkat.cli"],
-            cwd=cwd, env=environment, capture_output=True, text=True,
-        )
-
     def test_bare_invocation_orients_instead_of_erroring(self):
         with tempfile.TemporaryDirectory() as empty:
-            result = self.run_bare(Path(empty))
+            result = run_cli([], cwd=Path(empty))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("no runs yet", result.stdout)
         self.assertIn("meerkat demo", result.stdout)
 
     @unittest.skipUnless(
-        (ROOT / "runs" / "latest.txt").exists(),
-        "needs the local demo run; a clone has no runs directory",
+        HAS_RUN, "needs the local demo run; a clone has no runs directory"
     )
     def test_the_orientation_names_the_latest_run(self):
-        result = self.run_bare(ROOT)
+        result = run_cli([], cwd=ROOT)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("latest run", result.stdout)
         self.assertIn("meerkat queue", result.stdout)

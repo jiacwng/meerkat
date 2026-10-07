@@ -5,33 +5,17 @@ import argparse
 import contextlib
 import io
 import json
-import os
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from meerkat import cli
-
-ROOT = Path(__file__).resolve().parents[1]
+from tests.fixtures import ROOT, run_cli, wazuh_record
 
 
 def run_pull(args, env_extra=None):
-    env = os.environ.copy()
-    env["PYTHONIOENCODING"] = "utf-8"
-    if env_extra:
-        env.update(env_extra)
-    return subprocess.run(
-        [sys.executable, "-m", "meerkat.cli", "pull", *args],
-        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", env=env,
-    )
-
-
-def wazuh(ts):
-    return {"timestamp": ts, "rule": {"level": 5, "id": "1", "description": "x"},
-            "agent": {"id": "1", "name": "h"}, "data": {}}
+    return run_cli(["pull", *args], cwd=ROOT, env=env_extra)
 
 
 def flat(result):
@@ -43,9 +27,11 @@ class PullFileModeTests(unittest.TestCase):
         self.dir = Path(tempfile.mkdtemp())
         self.out = self.dir / "out"
         self.src = self.dir / "src.json"
-        self.src.write_text(
-            json.dumps(wazuh("2022-01-21T06:00:00+0000")) + "\n", encoding="utf-8"
+        record = wazuh_record(
+            "2022-01-21T06:00:00+0000", rule_id="1", level=5, description="x",
+            timestamp_key="timestamp",
         )
+        self.src.write_text(json.dumps(record) + "\n", encoding="utf-8")
 
     def base(self, *extra):
         return ["--environment", "acme", "--input", str(self.out), "--source",

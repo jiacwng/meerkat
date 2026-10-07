@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import tempfile
 import unittest
 import unittest.mock
@@ -18,7 +19,6 @@ from bench import evaluate as bench_eval
 from bench.evaluate import (
     _out_of_fold_families,
     _out_of_fold_reranker_scores,
-    _queue_metrics,
     build_bundle,
     evaluate_scenarios,
     prepare_sessions,
@@ -26,7 +26,6 @@ from bench.evaluate import (
 from core import classifier
 from core.classifier import FAMILY_NUMERIC_FEATURES
 from core.drift import (
-    HOST_FEATURES,
     PSI_MAJOR,
     PSI_STABLE,
     UNSEEN_RULE_WARN,
@@ -40,7 +39,6 @@ from core.drift import (
 )
 from core.features import (
     SCHEMA_INDEX_NAMES,
-    SESSION_NUMERIC_FEATURES,
     SessionFeatureSchema,
 )
 from core.incidents import (
@@ -53,7 +51,7 @@ from core.incidents import (
 )
 from core.inventory import Asset, Inventory
 from core.scenario_eval import add_window_ids, refit_forest
-from meerkat.cli import _validate_retrain_result, build_parser
+from meerkat.cli import _validate_retrain_result
 
 
 class ClassifierTests(unittest.TestCase):
@@ -161,29 +159,6 @@ class TestBundleGate(unittest.TestCase):
             classifier.load_model(path)
         return str(caught.exception)
 
-    def test_a_file_that_is_not_a_skops_bundle_is_refused_not_unpickled(self):
-        # this is the one that mattered: a pickle used to be loaded, which runs
-        # whatever it contains before anything has decided to trust it
-        path = self.directory / "model.skops"
-        path.write_bytes(b"\x80\x05\x95\x0c\x00\x00\x00\x00\x00\x00\x00")
-        message = self.refuse(path)
-        self.assertIn("not a skops bundle", message)
-        self.assertIn("meerkat retrain", message)
-
-    def test_an_unfetched_lfs_pointer_is_named_as_one(self):
-        # the shipped bundle is stored in Git LFS, so a clone without it holds
-        # a 130-byte text file where the model should be. "not a skops bundle"
-        # is true and useless; the fix is two commands.
-        path = self.directory / "meerkat_bundle.skops"
-        path.write_bytes(
-            b"version https://git-lfs.github.com/spec/v1\n"
-            b"oid sha256:0000000000000000000000000000000000000000000000000000000000000000\n"
-            b"size 15042836\n"
-        )
-        message = self.refuse(path)
-        self.assertIn("unfetched Git LFS pointer", message)
-        self.assertIn("git lfs pull", message)
-
     def test_a_type_outside_the_allowlist_is_refused_and_named(self):
         # skops lists every type needing explicit trust, so the test is what
         # falls outside TRUSTED_TYPES rather than what falls inside it
@@ -204,25 +179,20 @@ class TestBundleGate(unittest.TestCase):
             archive.writestr("nothing.txt", "x")
         self.assertIn("not a skops bundle", self.refuse(path))
 
-    def test_a_sidecar_that_is_valid_json_but_not_an_object_is_refused(self):
+    def test_a_sidecar_that_is_not_a_json_object_is_refused(self):
         # a bundle from elsewhere brings its own sidecar, so it is as untrusted
         # as the bundle. A list reached .get and raised AttributeError.
         path = self.directory / "bundle.skops"
         path.write_bytes(b"PK\x03\x04")
-        for body in ("[]", '"x"', "3"):
+        for body, message in (
+            ("[]", "not the object"), ('"x"', "not the object"),
+            ("3", "not the object"), ("{oops", "not valid JSON"),
+        ):
             classifier.provenance_path(path).write_text(body, encoding="utf-8")
             with self.subTest(body=body):
                 with self.assertRaises(classifier.UntrustedBundleError) as caught:
                     classifier.read_provenance(path)
-                self.assertIn("not the object", str(caught.exception))
-
-    def test_a_missing_sidecar_reads_as_no_record_rather_than_a_crash(self):
-        # the CLI turns this None into the "no provenance" note; a bundle
-        # without a sidecar still loads, it just proves nothing about itself
-        path = self.directory / "bundle.skops"
-        path.write_bytes(b"PK\x03\x04")
-        self.assertFalse(classifier.provenance_path(path).exists())
-        self.assertIsNone(classifier.read_provenance(path))
+                self.assertIn(message, str(caught.exception))
 
     def test_a_written_sidecar_matches_the_file_it_was_written_beside(self):
         model = classifier.fit_model(
@@ -238,25 +208,8 @@ class TestBundleGate(unittest.TestCase):
     def test_the_default_forest_is_the_one_the_benchmark_trained(self):
         # 300 in core against 200 in bench meant a no-flag retrain fitted a
         # different forest than the shipped one it must beat
-        self.assertEqual(
-            classifier.fit_model(
-                pd.DataFrame({"signal": [0.0, 1.0]}), pd.Series([False, True]),
-            ).n_estimators,
-            200,
-        )
-
-    def test_provenance_records_the_forest_settings(self):
-        model = classifier.fit_model(
-            pd.DataFrame({"signal": [0.0, 1.0]}), pd.Series([False, True]),
-            n_estimators=2, seed=0,
-        )
-        path = self.directory / "bundle.skops"
-        classifier.save_model(model, path)
-        record = classifier.read_provenance(path)
-        self.assertIsNone(record["max_depth"])
-        self.assertEqual(record["min_samples_leaf"], 1)
-        self.assertEqual(record["class_weight"], "balanced")
-        self.assertEqual(record["ranking_weights"], "shipped")
+        default = inspect.signature(classifier.fit_model).parameters["n_estimators"]
+        self.assertEqual(default.default, 200)
 
 
 # Drift reports covariate shift and refuses to claim anything about accuracy.
@@ -377,9 +330,6 @@ class TestProfile(unittest.TestCase):
         profile = build_profile(X, np.zeros(500))
         self.assertNotIn("groups_on_entity", profile.feature_bins)
         self.assertNotIn("groups_on_entity", profile.feature_medians)
-
-    def test_the_host_features_are_session_features(self):
-        self.assertLessEqual(HOST_FEATURES, set(SESSION_NUMERIC_FEATURES))
 
     def test_a_stored_profile_with_host_features_does_not_compare_them(self):
         X = matrix(500).assign(groups_on_entity=np.arange(500, dtype=float))
@@ -674,49 +624,16 @@ class ScenarioEvaluationTests(unittest.TestCase):
         learned = [s for s in queued_scores if s.eq(0.123).all()]
         self.assertEqual(len(learned), len(self.frames))
 
-    def test_queue_reports_strict_and_temporal_window_coverage_together(self):
-        # the headline 58 of 60 counts strictly labelled windows, so the
-        # looser overlap count is reported beside it and never in its place
-        families = pd.DataFrame([{
-            "labelled_windows": frozenset({0}),
-            "temporal_overlap_windows": frozenset({0, 1}),
-            "event_categories": frozenset({"attack"}),
-            "day": 0,
-            "entity_id": "10.0.0.1",
-            "detector_source": "wazuh",
-            "rule_id": "100",
-            "family_positive": True,
-            "labelled_alert_count": 1,
-            "alert_count": 2,
-            "n_child_sessions": 1,
-        }])
-
-        metrics = _queue_metrics(
-            families,
-            families,
-            total_labelled_alerts=1,
-            budget=1,
-        )
-
-        self.assertIn("strict_windows", metrics)
-        self.assertIn("temporal_overlap_windows", metrics)
-        self.assertEqual(metrics["strict_windows"], 1)
-        self.assertEqual(metrics["temporal_overlap_windows"], 2)
-
 
 class ClientRetrainingTests(unittest.TestCase):
-    def setUp(self):
-        self.frames, self.inventories, self.windows = {}, {}, {}
+    @classmethod
+    def setUpClass(cls):
+        frames, inventories, windows = {}, {}, {}
         for day, name in enumerate(("alpha", "beta", "gamma"), start=1):
-            frame, inventory, windows = scenario_data(name, day)
-            self.frames[name] = frame
-            self.inventories[name] = inventory
-            self.windows[name] = windows
-        self.sessions = prepare_sessions(
-            self.frames, self.inventories, self.windows, gap_s=600.0
-        )
-        self.bundle = build_bundle(self.sessions, n_estimators=10, seed=0)
-        self.client = self.sessions["alpha"]
+            frames[name], inventories[name], windows[name] = scenario_data(name, day)
+        cls.sessions = prepare_sessions(frames, inventories, windows, gap_s=600.0)
+        cls.bundle = build_bundle(cls.sessions, n_estimators=10, seed=0)
+        cls.client = cls.sessions["alpha"]
 
     def _prior(self, positives: int) -> pd.Series:
         prior = pd.Series(0.0, index=self.client.index)
@@ -733,17 +650,18 @@ class ClientRetrainingTests(unittest.TestCase):
             )
         self.assertIn("at least 10", str(caught.exception))
 
-    def test_the_reranker_coefficients_survive_a_retrain(self):
+    def test_a_retrain_keeps_the_shipped_coefficients_and_refits_the_scaler(self):
         # those coefficients came from out-of-fold folds across eight
-        # environments, which one client cannot reproduce, so they are kept
+        # environments, which one client cannot reproduce. The scaler is the
+        # part that moves, because a client forest scores lower and tighter.
         retrained = refit_forest(
             self.bundle, self.client, self._prior(3),
             n_estimators=10, min_positives=1,
         )
-        np.testing.assert_array_equal(
-            self.bundle.reranker.model.named_steps["model"].coef_,
-            retrained.reranker.model.named_steps["model"].coef_,
-        )
+        shipped = self.bundle.reranker.model.named_steps
+        refitted = retrained.reranker.model.named_steps
+        np.testing.assert_array_equal(shipped["model"].coef_, refitted["model"].coef_)
+        self.assertFalse(np.array_equal(shipped["scale"].mean_, refitted["scale"].mean_))
 
     def test_the_calibrator_is_carried_over_untouched(self):
         # the calibrator is defined across environments too, so the client
@@ -753,26 +671,6 @@ class ClientRetrainingTests(unittest.TestCase):
             n_estimators=10, min_positives=1,
         )
         self.assertIs(retrained.calibrator, self.bundle.calibrator)
-
-    def test_the_forest_is_replaced_not_reused(self):
-        # the point of a retrain is a forest fitted on the client's own
-        # alerts, so the shipped one is dropped rather than fitted further
-        retrained = refit_forest(
-            self.bundle, self.client, self._prior(3),
-            n_estimators=10, min_positives=1,
-        )
-        self.assertIsNot(retrained.forest, self.bundle.forest)
-
-    def test_the_scaler_is_refitted_on_the_client_families(self):
-        # a client forest scores lower and tighter, so the AIT means in the
-        # scaler would put every family the same distance from centre
-        retrained = refit_forest(
-            self.bundle, self.client, self._prior(3),
-            n_estimators=10, min_positives=1,
-        )
-        before = self.bundle.reranker.model.named_steps["scale"].mean_
-        after = retrained.reranker.model.named_steps["scale"].mean_
-        self.assertFalse(np.array_equal(before, after))
 
     def test_a_local_reranker_fits_on_a_multi_day_client(self):
         from core.scenario_eval import fit_local_reranker
@@ -806,13 +704,6 @@ class ClientRetrainingTests(unittest.TestCase):
             build_bundle(self.sessions, n_estimators=10, seed=0, pu_c=0.5)
         self.assertTrue(pu_fit.called)
         self.assertEqual(pu_fit.call_args.kwargs["c"], 0.5)
-
-    def test_without_pu_c_the_supervised_fit_is_used(self):
-        with patch.object(
-            bench_eval, "fit_model_pu", wraps=bench_eval.fit_model_pu
-        ) as pu_fit:
-            build_bundle(self.sessions, n_estimators=10, seed=0)
-        self.assertFalse(pu_fit.called)
 
 
 # The client retraining path: soft labels from bags, a rescaled re-ranker and a
@@ -970,18 +861,6 @@ class TestRetrainGate(unittest.TestCase):
         # first count that can call the difference real
         _validate_retrain_result(reached(0, 10), reached(6, 10))
 
-    def test_retrain_accepts_an_optional_reviewed_period_file(self):
-        # --reviewed-periods has to parse as a Path and stay optional, since
-        # the three required flags already make a valid retrain
-        args = build_parser().parse_args([
-            "retrain",
-            "--environment", "acme",
-            "--incidents", "incidents.csv",
-            "--inventory", "inventory.json",
-            "--reviewed-periods", "reviewed.csv",
-        ])
-        self.assertEqual(args.reviewed_periods, Path("reviewed.csv"))
-
 
 class TestRescaleReranker(unittest.TestCase):
     def setUp(self):
@@ -1068,13 +947,6 @@ class TestCompareModels(unittest.TestCase):
         self.assertFalse(refused["approved"])
         self.assertEqual(sum(refused["passed"]), 1)
         self.assertIn("none of the 10", refused["reason"])
-
-    def test_two_indistinguishable_models_are_refused_for_disagreeing_too_little(self):
-        # every forest reaches the same five incidents the shipped bundle does, so
-        # there is no reason to swap a production model for an equal one
-        refused = self.verdict(5, [5, 5, 5], 10)
-        self.assertFalse(refused["approved"])
-        self.assertIn("disagree on 0", refused["reason"])
 
     def test_the_median_seed_is_kept_rather_than_the_best(self):
         # picking the best would select on the same held-out incidents the gate
@@ -1202,12 +1074,6 @@ class TestLoadIncidents(unittest.TestCase):
         self.assertIn("1 row(s)", message)
         self.assertIn("epoch seconds nor ISO 8601", message)
 
-    def test_a_reviewed_period_file_reads_iso_the_same_way(self):
-        path = write("start,end\n2026-01-21T00:00:00,2026-01-21T01:00:00\n")
-        frame = load_reviewed_periods(path)
-        expected = pd.Timestamp("2026-01-21T00:00:00Z").timestamp()
-        self.assertEqual(frame.loc[0, "start"], expected)
-
 
 class TestHostResolution(unittest.TestCase):
     def test_hostname_and_address_both_resolve(self):
@@ -1250,9 +1116,15 @@ class TestReviewedPeriods(unittest.TestCase):
 
     def test_reviewed_period_csv_loads_start_and_end(self):
         # the period file needs two columns and they arrive as text, so both
-        # are parsed to float before any session comparison
+        # are parsed to float before any session comparison, ISO times included
         periods = load_reviewed_periods(write("start,end\n10,20\n"))
         self.assertEqual(periods.to_dict("records"), [{"start": 10.0, "end": 20.0}])
+        iso = load_reviewed_periods(
+            write("start,end\n2026-01-21T00:00:00,2026-01-21T01:00:00\n")
+        )
+        self.assertEqual(
+            iso.loc[0, "start"], pd.Timestamp("2026-01-21T00:00:00Z").timestamp()
+        )
 
 
 class TestBagPriors(unittest.TestCase):

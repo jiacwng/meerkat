@@ -1,5 +1,4 @@
-# the README and manual recorded outputs and the pipeline figure, checked
-# against a saved run
+# the README's recorded output and the pipeline figure, checked against a saved run
 
 import json
 import os
@@ -8,11 +7,11 @@ import subprocess
 import sys
 import unittest
 import xml.etree.ElementTree as ET
-from pathlib import Path
 
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[1]
+from tests.fixtures import HAS_RUN, ROOT
+
 SVG_NAMESPACE = "{http://www.w3.org/2000/svg}"
 README = ROOT / "README.md"
 
@@ -56,44 +55,12 @@ def without_whitespace(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
-HAS_RUN = (ROOT / "runs" / "latest.txt").exists()
-
-
-def manual_fence(heading: str) -> str:
-    text = (ROOT / "docs" / "manual.md").read_text(encoding="utf-8")
-    section = text.index(f"### meerkat {heading}\n")
-    start = text.index("```text\n", section) + len("```text\n")
-    return text[start:text.index("\n```", start)]
-
-
 def without_borders(text: str) -> str:
-    # the manual records on linux, where rich draws heavy box glyphs; windows
-    # consoles get light ones. The cells are what rot, so borders are ignored.
+    # the README records on linux, where rich draws heavy box glyphs; windows
+    # consoles get light ones. The cells are what rot, so borders are ignored,
+    # and so is the id of the run, which is new every time the demo is scored.
+    text = re.sub(r"\brun \S+", "run", text)
     return without_whitespace(re.sub(r"[─-╿]", "", text))
-
-
-@unittest.skipUnless(
-    HAS_RUN,
-    "needs a saved run; produced locally by `meerkat demo`, absent in CI "
-    "because the raw alerts live in Git LFS",
-)
-class ManualCaptureTests(unittest.TestCase):
-    # the manual embeds recorded output as text, so it goes stale the same way
-    # a screenshot does and is diffed against the live command the same way
-
-    def test_the_manual_queue_capture_matches_the_live_command(self):
-        self.assertEqual(
-            without_borders(manual_fence("queue")),
-            without_borders(
-                command_output(["queue", "--day", "2022-01-21"], 190)
-            ),
-        )
-
-    def test_the_manual_inspect_capture_matches_the_live_command(self):
-        self.assertEqual(
-            without_borders(manual_fence("inspect")),
-            without_borders(command_output(["inspect", "F212"], 120)),
-        )
 
 
 @unittest.skipUnless(

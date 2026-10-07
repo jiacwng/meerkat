@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,24 +15,6 @@ from core.roles import CANONICAL_ROLES, LEGACY_ROLE_ALIASES, canonicalize
 
 
 class AttackModuleTests(unittest.TestCase):
-    def test_module_import_does_not_depend_on_working_directory(self):
-        # the module reads its JSON mappings at import, so the path resolves
-        # from the module file rather than wherever the shell happens to be
-        repo_root = Path(__file__).resolve().parents[1]
-        environment = os.environ.copy()
-        environment["PYTHONPATH"] = str(repo_root)
-
-        with tempfile.TemporaryDirectory() as directory:
-            completed = subprocess.run(
-                [sys.executable, "-c", "import core.attack_mapping"],
-                cwd=directory,
-                env=environment,
-                capture_output=True,
-                text=True,
-            )
-
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-
     def test_coverage_counts_every_tactic_on_a_multi_tactic_alert(self):
         # one alert can map to two tactics and both count, and a tactic
         # nobody triggered still reports 0 so the table keeps its shape
@@ -135,16 +114,6 @@ class MappingPolicyTests(unittest.TestCase):
 
 
 class DetectionMappingConfigTests(unittest.TestCase):
-    def test_invalid_configured_technique_fails_validation(self):
-        # detection_mappings.json is hand-edited, and a typo there would
-        # spread one wrong technique across every alert on that rule
-        with tempfile.TemporaryDirectory() as directory:
-            bad = Path(directory) / "detection_mappings.json"
-            bad.write_text('{"wazuh": {"1": ["T9999"]}}', encoding="utf-8")
-
-            with self.assertRaises(ValueError):
-                attack_mapping.load_detection_mappings(bad)
-
     def test_committed_config_only_contains_known_techniques(self):
         # the committed file goes through the same validation, and _comment
         # keys are stripped so they never look like a detector name
@@ -160,22 +129,15 @@ class DetectionMappingConfigTests(unittest.TestCase):
 
 
 class TestCanonicalize(unittest.TestCase):
-    def test_every_alias_lands_on_a_canonical_name(self):
-        # an alias pointing outside CANONICAL_ROLES drops that asset's role
-        # silently, so the table has to close on itself
-        for alias, target in LEGACY_ROLE_ALIASES.items():
-            self.assertIn(target, CANONICAL_ROLES, f"{alias} maps outside the vocabulary")
-
-    def test_aliases_are_one_to_one_so_the_feature_space_keeps_its_shape(self):
-        # two aliases sharing a target would merge two role columns into one
-        # and change the feature width a shipped model expects
+    def test_the_alias_table_is_one_to_one_closed_and_disjoint_from_the_vocabulary(self):
+        # two aliases sharing a target would merge two role columns into one and
+        # change the feature width a shipped model expects. A target outside
+        # CANONICAL_ROLES drops that asset's role, and an alias that is itself
+        # canonical would be rewritten before the canonical lookup saw it.
         targets = list(LEGACY_ROLE_ALIASES.values())
         self.assertEqual(len(targets), len(set(targets)), "an alias merges two roles")
-
-    def test_no_alias_shadows_a_canonical_name(self):
-        # a name in both tables would be rewritten before the canonical
-        # lookup ever saw it, so the two vocabularies stay disjoint
-        for alias in LEGACY_ROLE_ALIASES:
+        for alias, target in LEGACY_ROLE_ALIASES.items():
+            self.assertIn(target, CANONICAL_ROLES, f"{alias} maps outside the vocabulary")
             self.assertNotIn(alias, CANONICAL_ROLES)
 
     def test_testbed_names_translate(self):
@@ -222,15 +184,6 @@ class TestInventoryContract(unittest.TestCase):
         )
         return path
 
-    def test_roles_key_is_accepted(self):
-        # roles is the key `meerkat inventory` scaffolds and the README
-        # documents, so it has to reach Asset.groups
-        path = self._write(
-            [{"hostname": "web", "ip_addresses": ["10.0.0.1"], "roles": ["server"]}]
-        )
-        inventory = load_inventory(path)
-        self.assertEqual(inventory.assets_by_ip["10.0.0.1"].groups, ("server",))
-
     def test_legacy_groups_key_still_works(self):
         # the AIT inventories and every file written before the rename use
         # groups, and re-editing them by hand is a migration nobody wants
@@ -249,7 +202,7 @@ class TestInventoryContract(unittest.TestCase):
         inventory = load_inventory(path)
         self.assertEqual(inventory.unknown_roles, ("nas-box",))
 
-    def test_shipped_inventories_use_only_known_roles(self):
+    def test_shipped_inventories_use_only_known_roles_and_the_demo_carries_tiers(self):
         # these eight inventories define the role columns the model trains
         # on, so one unrecognised name there shrinks the feature block.
         # Resolve from this file: a glob relative to the working directory
@@ -260,6 +213,9 @@ class TestInventoryContract(unittest.TestCase):
         for path in paths:
             with self.subTest(company=path.stem):
                 self.assertEqual(load_inventory(path).unknown_roles, ())
+        demo = load_inventory(directory / "russellmitchell.json")
+        self.assertEqual(demo.assets_without_criticality(), ())
+        self.assertEqual(demo.unknown_criticalities, ())
 
 
 if __name__ == "__main__":

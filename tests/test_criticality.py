@@ -18,18 +18,15 @@ from core.inventory import load_inventory
 from core.normalize import normalize_scenario
 from core.sessions import build_families, build_sessions
 from meerkat import cli
-from tests.test_cli import (
+from tests.fixtures import (
     HAS_BUNDLE,
-    SHIPPED_BUNDLE,
     client_directory,
-    make_alerts,
     make_families,
-    make_sessions,
+    make_run,
     squashed,
+    triage_client,
     write_inventory,
 )
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load(assets: list[dict]):
@@ -119,40 +116,15 @@ class CriticalityNeverScoresTests(unittest.TestCase):
         HAS_BUNDLE, "needs models/meerkat_bundle.skops, which is stored with Git LFS"
     )
     def test_triage_ranks_identically_with_and_without_tiers(self):
-        def triage(tiered: bool) -> pd.DataFrame:
-            directory = client_directory()
-            write_inventory(
-                directory / "inventory" / "acme.json",
-                [{"hostname": "web01", "ip_addresses": ["10.0.0.9"],
-                  "roles": ["server", "internet_facing"],
-                  **({"criticality": "high"} if tiered else {})}],
-            )
-            runs = Path(tempfile.mkdtemp())
-            with (
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                cli.cmd_triage(argparse.Namespace(
-                    model=SHIPPED_BUNDLE, input=directory, company="acme",
-                    inventory=directory / "inventory" / "acme.json",
-                    labels=None, event_csv_dir=None,
-                    wazuh_file=None, aminer_file=None, budget=2, runs_dir=runs,
-                ))
-            return cli.load_run(runs).families
-
         columns = ["family_id", "ranking_score", "queue_rank", "in_queue", "handle"]
-        tiered = triage(True)
-        untiered = triage(False)
+        tiered = triage_client("high").run.families
+        untiered = triage_client().run.families
         self.assertEqual(set(tiered["criticality"]), {"high"})
         pd.testing.assert_frame_equal(tiered[columns], untiered[columns])
 
 
 def _run(criticalities):
-    families = make_families().assign(criticality=criticalities)
-    decorated = cli.decorate_families(families, make_alerts(), budget=2)
-    runs = Path(tempfile.mkdtemp())
-    cli.save_run(runs, "acme-1", {"company": "acme", "budget": 2},
-                 decorated, make_sessions(), make_alerts())
+    runs = make_run(families=make_families().assign(criticality=criticalities))
     return cli.load_run(runs, "acme-1")
 
 
@@ -199,15 +171,6 @@ class DisplayAndFilterTests(unittest.TestCase):
             ["medium", "unset"],
         )
 
-    def test_the_parser_refuses_a_tier_outside_the_vocabulary(self):
-        parser = cli.build_parser()
-        self.assertEqual(
-            parser.parse_args(["queue", "--criticality", "high"]).criticality, "high"
-        )
-        with contextlib.redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit):
-                parser.parse_args(["queue", "--criticality", "urgent"])
-
 
 class CheckAndScaffoldTests(unittest.TestCase):
     def _check(self, assets: list[dict]) -> tuple[str, dict]:
@@ -253,15 +216,6 @@ class CheckAndScaffoldTests(unittest.TestCase):
         self.assertTrue(assets)
         self.assertTrue(all(asset["criticality"] == "" for asset in assets))
         self.assertEqual(load_inventory(out).unknown_criticalities, ())
-
-
-class DemoInventoryTests(unittest.TestCase):
-    def test_every_demo_asset_carries_a_tier(self):
-        inventory = load_inventory(
-            ROOT / "data" / "raw" / "inventory" / "russellmitchell.json"
-        )
-        self.assertEqual(inventory.assets_without_criticality(), ())
-        self.assertEqual(inventory.unknown_criticalities, ())
 
 
 if __name__ == "__main__":

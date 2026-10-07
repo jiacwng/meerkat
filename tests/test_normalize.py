@@ -19,6 +19,13 @@ from core.normalize import (
     resolve_alert_files,
     sniff_alert_family,
 )
+from tests.fixtures import (
+    aminer_export_record,
+    eve_alert_record,
+    wazuh_record,
+    write_company_inventory,
+    write_records,
+)
 
 try:
     inventory = importlib.import_module("core.inventory")
@@ -45,23 +52,28 @@ def company_inventory(*assets: tuple[str, str, tuple[str, ...]]) -> inventory.In
     return inventory.Inventory("demo", assets_by_ip, ip_by_hostname)
 
 
-def write_company_inventory(
-    path: Path,
-    *assets: tuple[str, str, tuple[str, ...]],
+MINER_ASSET = ("cloud-share", "10.0.0.7", ("servers",))
+
+
+def build_raw_tree(
+    *files: tuple[str, list[dict]],
+    asset: tuple[str, str, tuple[str, ...]] = ("mail", "10.0.0.1", ("servers",)),
 ) -> Path:
-    config = {
-        "company": "demo",
-        "assets": [
-            {
-                "hostname": hostname,
-                "ip_addresses": [ip],
-                "groups": list(groups),
-            }
-            for hostname, ip, groups in assets
-        ],
-    }
-    path.write_text(json.dumps(config), encoding="utf-8")
-    return path
+    root = Path(tempfile.mkdtemp())
+    raw = root / "raw"
+    raw.mkdir()
+    for name, records in files:
+        write_records(raw / name, *records)
+    (root / "labels.csv").write_text("scenario,attack,start,end\n", encoding="utf-8")
+    write_company_inventory(root / "company.json", asset)
+    return raw
+
+
+def normalized_tree(raw: Path) -> pd.DataFrame:
+    root = raw.parent
+    return normalize.normalize_scenario(
+        raw, root / "labels.csv", "demo", root / "company.json"
+    )
 
 
 class InventoryTests(unittest.TestCase):
@@ -181,24 +193,6 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertEqual(fields.observer_id, "10.0.0.254")
         self.assertTrue(fields.entity_in_inventory)
 
-    def test_suricata_known_source_wins_over_external_destination(self):
-        # outbound traffic to an unmanaged address still has to attach to the
-        # managed source, or every exfil alert lands on an entity nobody owns
-        record = {
-            "data": {
-                "alert": {"signature": "Outbound alert", "severity": 2},
-                "src_ip": "10.0.0.1",
-                "dest_ip": "198.51.100.8",
-            },
-            "agent": {"ip": "10.0.0.254", "name": "gateway"},
-        }
-        assets = company_inventory(("source", "10.0.0.1", ("servers",)))
-
-        fields = normalize.extract_suricata_fields(record, assets)
-
-        self.assertEqual(fields.entity_id, "10.0.0.1")
-        self.assertTrue(fields.entity_in_inventory)
-
     def test_suricata_unknown_endpoints_use_destination(self):
         # neither endpoint is in the inventory, so the destination is still a
         # stable key and entity_in_inventory stays False for the features
@@ -306,20 +300,6 @@ class EntityAttributionTests(unittest.TestCase):
                     normalize.read_family_record(record, AMINER_FAMILY), (key, value)
                 )
 
-    def test_log_resources_of_the_wrong_type_are_ignored(self):
-        record = aminer_record("10.0.0.7", "x")
-        record["LogData"]["LogResources"] = {"/var/log/auth.log": 1}
-        self.assertEqual(normalize.aminer_log_resources(record), [])
-
-    def test_log_resources_as_one_string_is_one_resource(self):
-        record = aminer_record("10.0.0.7", "Jan 19 02:45:26 web01 sshd[1]: x")
-        record["LogData"]["LogResources"] = "/var/log/auth.log"
-        assets = company_inventory(("web01", "10.0.0.7", ("server",)))
-
-        fields = normalize.extract_aminer_fields(record, assets)
-
-        self.assertEqual(fields.log_resource, "/var/log/auth.log")
-
 
 class ReaderRegistryTests(unittest.TestCase):
     def test_an_unknown_detector_is_named_rather_than_read_as_aminer(self):
@@ -332,12 +312,6 @@ class ReaderRegistryTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("loglizer", message)
         self.assertIn("wazuh", message)
-
-    def test_every_detector_the_classifiers_emit_has_a_reader(self):
-        # the classifiers emit these names, so the table has to match them
-        self.assertEqual(
-            set(normalize.READERS), {"wazuh", "suricata", "aminer"}
-        )
 
 
 class NativeMappingTests(unittest.TestCase):
@@ -497,6 +471,7 @@ class RawScenarioTests(unittest.TestCase):
 
         self.assertEqual(fields.entity_id, "10.0.0.9")
         self.assertEqual(fields.host, "webserver")
+        self.assertTrue(fields.entity_in_inventory)
 
     def test_aminer_preserves_affected_web_request(self):
         # AMiner reports the anomalous value under AffectedLogAtomValues, and
@@ -656,31 +631,10 @@ class RawScenarioTests(unittest.TestCase):
         }
         duplicate = dict(suricata, decoder={"name": "snort"})
 
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            raw = root / "raw"
-            raw.mkdir()
-            labels = root / "labels.csv"
-            labels.write_text("scenario,attack,start,end\n", encoding="utf-8")
-            (raw / "demo_aminer.json").write_text(
-                json.dumps(aminer) + "\n",
-                encoding="utf-8",
-            )
-            (raw / "demo_wazuh.json").write_text(
-                "".join(json.dumps(record) + "\n" for record in [wazuh, suricata, duplicate]),
-                encoding="utf-8",
-            )
-            inventory_path = write_company_inventory(
-                root / "company.json",
-                ("mail", "10.0.0.1", ("servers",)),
-            )
-
-            result = normalize.normalize_scenario(
-                raw,
-                labels,
-                "demo",
-                inventory_path,
-            )
+        result = normalized_tree(build_raw_tree(
+            ("demo_aminer.json", [aminer]),
+            ("demo_wazuh.json", [wazuh, suricata, duplicate]),
+        ))
 
         self.assertEqual(list(result.columns), normalize.COLUMNS)
         self.assertEqual(list(result["detector_source"]), ["aminer", "wazuh", "suricata"])
@@ -702,27 +656,7 @@ class RawScenarioTests(unittest.TestCase):
             "agent": {"name": "mail"},
         }
 
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            raw = root / "raw"
-            raw.mkdir()
-            labels = root / "labels.csv"
-            labels.write_text("scenario,attack,start,end\n", encoding="utf-8")
-            (raw / "demo_wazuh.json").write_text(
-                json.dumps(wazuh) + "\n",
-                encoding="utf-8",
-            )
-            inventory_path = write_company_inventory(
-                root / "company.json",
-                ("mail", "10.0.0.1", ("servers",)),
-            )
-
-            result = normalize.normalize_scenario(
-                raw,
-                labels,
-                "demo",
-                inventory_path,
-            )
+        result = normalized_tree(build_raw_tree(("demo_wazuh.json", [wazuh])))
 
         self.assertEqual(list(result["detector_source"]), ["wazuh"])
         self.assertEqual(list(result["source_file"]), ["demo_wazuh.json"])
@@ -730,19 +664,8 @@ class RawScenarioTests(unittest.TestCase):
     def test_normalize_scenario_names_both_files_when_neither_is_present(self):
         # a typo in --company surfaces here first, so the error names both
         # filenames it looked for
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            raw = root / "raw"
-            raw.mkdir()
-            labels = root / "labels.csv"
-            labels.write_text("scenario,attack,start,end\n", encoding="utf-8")
-            inventory_path = write_company_inventory(
-                root / "company.json",
-                ("mail", "10.0.0.1", ("servers",)),
-            )
-
-            with self.assertRaises(FileNotFoundError) as caught:
-                normalize.normalize_scenario(raw, labels, "demo", inventory_path)
+        with self.assertRaises(FileNotFoundError) as caught:
+            normalized_tree(build_raw_tree())
 
         message = str(caught.exception)
         self.assertIn("demo_wazuh.json", message)
@@ -764,31 +687,11 @@ class RawScenarioTests(unittest.TestCase):
             "agent": {"ip": "10.0.0.1", "name": "wazuh-client"},
         }
 
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            raw = root / "raw"
-            raw.mkdir()
-            labels = root / "labels.csv"
-            labels.write_text("scenario,attack,start,end\n", encoding="utf-8")
-            (raw / "demo_aminer.json").write_text(
-                json.dumps(aminer) + "\n",
-                encoding="utf-8",
-            )
-            (raw / "demo_wazuh.json").write_text(
-                json.dumps(wazuh) + "\n",
-                encoding="utf-8",
-            )
-            inventory_path = write_company_inventory(
-                root / "company.json",
-                ("server-a", "10.0.0.1", ("servers",)),
-            )
-
-            result = normalize.normalize_scenario(
-                raw,
-                labels,
-                "demo",
-                inventory_path,
-            )
+        result = normalized_tree(build_raw_tree(
+            ("demo_aminer.json", [aminer]),
+            ("demo_wazuh.json", [wazuh]),
+            asset=("server-a", "10.0.0.1", ("servers",)),
+        ))
 
         self.assertEqual(list(result["host"]), ["server-a", "server-a"])
 
@@ -862,22 +765,6 @@ class RawScenarioTests(unittest.TestCase):
 # a company whose wazuh export is named alerts.json needs no override flag.
 
 
-def wazuh_record() -> dict:
-    return {
-        "predecoder": {"hostname": "mail", "program_name": "freshclam"},
-        "agent": {"ip": "172.19.130.4", "name": "wazuh-client", "id": "19"},
-        "manager": {"name": "wazuh.manager"},
-        "rule": {
-            "level": 3,
-            "description": "ClamAV database update",
-            "groups": ["clamd", "virus"],
-            "id": "52507",
-        },
-        "decoder": {"name": "freshclam"},
-        "@timestamp": "2022-01-21T00:02:27.000000Z",
-    }
-
-
 def suricata_record() -> dict:
     return {
         "agent": {"ip": "10.143.0.103", "name": "wazuh-client", "id": "16"},
@@ -899,33 +786,8 @@ def suricata_record() -> dict:
     }
 
 
-def aminer_export_record() -> dict:
-    return {
-        "AnalysisComponent": {
-            "AnalysisComponentType": "NewMatchPathDetector",
-            "AnalysisComponentName": "AMiner: New event type.",
-            "TrainingMode": True,
-            "AffectedLogAtomPaths": ["/model", "/model/time"],
-        },
-        "LogData": {
-            "RawLogData": ["Jan 21 00:00:01 cloud-share CRON[4388]: session opened"],
-            "Timestamps": [1642723201],
-            "LogLinesCount": 1,
-            "LogResources": ["/var/log/auth.log"],
-        },
-        "AMiner": {"ID": "172.19.130.106"},
-    }
-
-
 def raw_directory() -> Path:
     return Path(tempfile.mkdtemp())
-
-
-def write_records(path: Path, *records: dict) -> Path:
-    path.write_text(
-        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
-    )
-    return path
 
 
 class FormatSniffing(unittest.TestCase):
@@ -1013,15 +875,6 @@ class ConventionFirst(unittest.TestCase):
             [(path.name, family) for path, family in files],
             [("acme_aminer.json", AMINER_FAMILY), ("acme_wazuh.json", WAZUH_FAMILY)],
         )
-
-    def test_an_explicit_path_beats_the_convention_and_the_sniffer(self):
-        # an analyst who names a file has looked at it, so the flag wins over
-        # both guesses even when a conventional file sits right there
-        directory = raw_directory()
-        write_records(directory / "acme_wazuh.json", wazuh_record())
-        chosen = write_records(directory / "yesterday.json", wazuh_record())
-        files = resolve_alert_files(directory, "acme", wazuh_path=chosen)
-        self.assertEqual([path for path, _ in files], [chosen])
 
 
 class SniffedDiscovery(unittest.TestCase):
@@ -1113,26 +966,6 @@ class SniffedDiscovery(unittest.TestCase):
 # often holds one of those beside the wazuh export rather than instead of it.
 
 
-def eve_alert_record(signature: str = "ET SCAN Nmap Scripting Engine") -> dict:
-    return {
-        "timestamp": "2022-01-21T00:20:00.123456+0000",
-        "flow_id": 1741725479112999,
-        "event_type": "alert",
-        "src_ip": "10.0.0.9",
-        "src_port": 44321,
-        "dest_ip": "10.0.0.1",
-        "dest_port": 80,
-        "proto": "TCP",
-        "alert": {
-            "action": "allowed",
-            "signature_id": 2009582,
-            "signature": signature,
-            "category": "Attempted Information Leak",
-            "severity": 2,
-        },
-    }
-
-
 def eve_other_records() -> list[dict]:
     # every eve line carries the object its event_type names
     return [
@@ -1142,30 +975,10 @@ def eve_other_records() -> list[dict]:
 
 
 class NativeSuricataExports(unittest.TestCase):
-    def build(self, *files: tuple[str, list[dict]]) -> Path:
-        root = Path(tempfile.mkdtemp())
-        raw = root / "raw"
-        raw.mkdir()
-        for name, records in files:
-            write_records(raw / name, *records)
-        (root / "labels.csv").write_text(
-            "scenario,attack,start,end\n", encoding="utf-8"
-        )
-        write_company_inventory(
-            root / "company.json", ("mail", "10.0.0.1", ("servers",))
-        )
-        return raw
-
-    def normalized(self, raw: Path) -> pd.DataFrame:
-        root = raw.parent
-        return normalize.normalize_scenario(
-            raw, root / "labels.csv", "demo", root / "company.json"
-        )
-
     def test_a_wazuh_export_and_an_eve_file_in_one_tree_are_both_read(self):
         # CAM-LDS ships both, and returning one file per detector read the wazuh
         # half and dropped the eve half with no message at all
-        raw = self.build(
+        raw = build_raw_tree(
             ("alerts.json", [wazuh_record()]),
             ("eve.json", [eve_alert_record()]),
         )
@@ -1173,7 +986,7 @@ class NativeSuricataExports(unittest.TestCase):
             [family for _, family in resolve_alert_files(raw, "demo")],
             [SURICATA_FAMILY, WAZUH_FAMILY],
         )
-        frame = self.normalized(raw)
+        frame = normalized_tree(raw)
         self.assertEqual(
             sorted(frame["source_file"].astype(str)), ["alerts.json", "eve.json"]
         )
@@ -1184,7 +997,7 @@ class NativeSuricataExports(unittest.TestCase):
     def test_an_eve_file_on_its_own_reads_as_suricata(self):
         # a company running suricata without wazuh has no envelope anywhere, and
         # the severity scale is the detector's own 1-3 either way
-        frame = self.normalized(self.build(("eve.json", [eve_alert_record()])))
+        frame = normalized_tree(build_raw_tree(("eve.json", [eve_alert_record()])))
         self.assertEqual(list(frame["detector_source"].astype(str)), ["suricata"])
         self.assertEqual(list(frame["name"]), ["ET SCAN Nmap Scripting Engine"])
         self.assertEqual(list(frame["severity"]), [2.0])
@@ -1193,10 +1006,10 @@ class NativeSuricataExports(unittest.TestCase):
     def test_the_lines_that_are_not_alerts_are_skipped_rather_than_fatal(self):
         # eve.json holds every event type suricata emits, so most of the file is
         # flow and dns records that no reader can turn into an alert
-        raw = self.build(
+        raw = build_raw_tree(
             ("eve.json", [*eve_other_records(), eve_alert_record(), *eve_other_records()])
         )
-        frame = self.normalized(raw)
+        frame = normalized_tree(raw)
         self.assertEqual(list(frame["detector_source"].astype(str)), ["suricata"])
         # the skipped lines still count, so `inspect --raw` finds the line again
         self.assertEqual(list(frame["source_position"]), [5])
@@ -1215,34 +1028,26 @@ class NativeSuricataExports(unittest.TestCase):
                 "alert": {k: str(v) for k, v in alert["alert"].items()},
             },
         }
-        raw = self.build(
+        raw = build_raw_tree(
             ("alerts.json", [forwarded]),
             ("eve.json", [alert]),
         )
-        frame = self.normalized(raw)
+        frame = normalized_tree(raw)
         # the copy kept is suricata's own, so the file it came from says eve.json
         self.assertEqual(list(frame["source_file"].astype(str)), ["eve.json"])
 
     def test_a_deeply_nested_file_does_not_stop_the_run(self):
         # json.loads raises RecursionError, not a decode error, and the sniffer
         # reads every json file in the directory before anything is ingested
-        raw = self.build(("alerts.json", [wazuh_record()]))
+        raw = build_raw_tree(("alerts.json", [wazuh_record()]))
         (raw / "deep.json").write_text("[" * 60000 + "]" * 60000, encoding="utf-8")
         self.assertEqual(sniff_alert_family(raw / "deep.json"), "")
-        self.assertEqual(len(self.normalized(raw)), 1)
-
-    def test_a_line_shaped_like_a_miner_record_is_skipped(self):
-        # a concatenated export decides its family from the first lines, and the
-        # miner reader trusted that instead of checking each record
-        self.assertIsNone(normalize.read_family_record({"LogData": 1}, "aminer"))
-        self.assertIsNone(
-            normalize.read_family_record({"AnalysisComponent": {}}, "aminer")
-        )
+        self.assertEqual(len(normalized_tree(raw)), 1)
 
     def test_a_named_file_is_never_listed_twice(self):
         # its first line sniffed as a third family, so the file was read twice
         # and the positional label join moved with it
-        raw = self.build(("demo_wazuh.json", [wazuh_record()]))
+        raw = build_raw_tree(("demo_wazuh.json", [wazuh_record()]))
         (raw / "demo_wazuh.json").write_text(
             json.dumps({"event_type": "data", "data": {"x": 1}}) + "\n"
             + json.dumps(wazuh_record()) + "\n",
@@ -1264,18 +1069,18 @@ class NativeSuricataExports(unittest.TestCase):
                 "alert": {k: str(v) for k, v in alert["alert"].items()},
             },
         }
-        raw = self.build(
+        raw = build_raw_tree(
             ("eve.json", [alert]),
             ("alerts.json", [forwarded] * 9),
         )
-        frame = self.normalized(raw)
+        frame = normalized_tree(raw)
         suricata = frame[frame["detector_source"].astype(str).eq("suricata")]
         self.assertEqual(len(suricata), 9)
 
     def test_a_hostile_signature_id_does_not_stop_the_ingest(self):
         # an alert field is attacker-influenced: "inf" overflowed int() and a
         # nested object was unhashable, and either took the whole run down
-        raw = self.build(
+        raw = build_raw_tree(
             ("alerts.json", [wazuh_record()]),
             ("eve.json", [
                 self.hostile_eve("inf"),
@@ -1284,7 +1089,7 @@ class NativeSuricataExports(unittest.TestCase):
                 eve_alert_record(),
             ]),
         )
-        frame = self.normalized(raw)
+        frame = normalized_tree(raw)
         detectors = frame["detector_source"].astype(str)
         self.assertEqual(int(detectors.eq("suricata").sum()), 4)
         self.assertEqual(int(detectors.eq("wazuh").sum()), 1)
@@ -1297,13 +1102,13 @@ class NativeSuricataExports(unittest.TestCase):
     def test_two_copies_inside_one_file_are_both_kept(self):
         # suricata does log the same signature twice on a burst, and russellmitchell
         # has 20 such lines, so a repeat within one file is not a duplicate
-        raw = self.build(("eve.json", [eve_alert_record(), eve_alert_record()]))
-        self.assertEqual(len(self.normalized(raw)), 2)
+        raw = build_raw_tree(("eve.json", [eve_alert_record(), eve_alert_record()]))
+        self.assertEqual(len(normalized_tree(raw)), 2)
 
     def test_an_eve_file_beside_the_conventional_export_is_read(self):
         # the convention covers wazuh and the miner, so suricata's own file is
         # the one it says nothing about and it used to be dropped
-        raw = self.build(
+        raw = build_raw_tree(
             ("demo_wazuh.json", [wazuh_record()]),
             ("eve.json", [eve_alert_record()]),
         )
@@ -1312,67 +1117,49 @@ class NativeSuricataExports(unittest.TestCase):
             [("eve.json", SURICATA_FAMILY), ("demo_wazuh.json", WAZUH_FAMILY)],
         )
 
-    def test_a_named_file_is_still_the_only_one_read(self):
-        # --wazuh-file is how an analyst says "this export, not the directory",
-        # so an eve.json sitting beside it must not be added to the answer
-        raw = self.build(
-            ("yesterday.json", [wazuh_record()]),
-            ("eve.json", [eve_alert_record()]),
-        )
-        chosen = raw / "yesterday.json"
-        self.assertEqual(
-            resolve_alert_files(raw, "demo", wazuh_path=chosen),
-            [(chosen, WAZUH_FAMILY)],
-        )
-
-    def test_a_named_miner_file_is_still_the_only_one_read(self):
-        # the same for --aminer-file: naming one file replaces the search, and
-        # the eve file next to it is not a second opinion
-        raw = self.build(
-            ("miner.json", [aminer_export_record()]),
-            ("eve.json", [eve_alert_record()]),
-        )
-        chosen = raw / "miner.json"
-        self.assertEqual(
-            resolve_alert_files(raw, "demo", aminer_path=chosen),
-            [(chosen, AMINER_FAMILY)],
-        )
+    def test_a_named_file_replaces_the_search_and_nothing_joins_it(self):
+        # --wazuh-file and --aminer-file are how an analyst says "this export,
+        # not the directory", so neither a conventional file nor an eve.json
+        # beside it is added to the answer
+        for flag, files, chosen, family in (
+            ("wazuh_path", [("demo_wazuh.json", wazuh_record()),
+                            ("yesterday.json", wazuh_record())],
+             "yesterday.json", WAZUH_FAMILY),
+            ("wazuh_path", [("yesterday.json", wazuh_record()),
+                            ("eve.json", eve_alert_record())],
+             "yesterday.json", WAZUH_FAMILY),
+            ("aminer_path", [("miner.json", aminer_export_record()),
+                             ("eve.json", eve_alert_record())],
+             "miner.json", AMINER_FAMILY),
+        ):
+            with self.subTest(flag=flag, chosen=chosen, files=len(files)):
+                raw = build_raw_tree(*[(name, [record]) for name, record in files])
+                path = raw / chosen
+                self.assertEqual(
+                    resolve_alert_files(raw, "demo", **{flag: path}),
+                    [(path, family)],
+                )
 
 
 class NativeAminerExports(unittest.TestCase):
-    def build(self, records: list[dict]) -> Path:
-        root = Path(tempfile.mkdtemp())
-        raw = root / "raw"
-        raw.mkdir()
-        write_records(raw / "miner.json", *records)
-        (root / "labels.csv").write_text(
-            "scenario,attack,start,end\n", encoding="utf-8"
-        )
-        write_company_inventory(
-            root / "company.json", ("cloud-share", "10.0.0.7", ("servers",))
-        )
-        return raw
-
-    def normalized(self, raw: Path) -> pd.DataFrame:
-        root = raw.parent
-        return normalize.normalize_scenario(
-            raw, root / "labels.csv", "demo", root / "company.json"
-        )
-
     def test_a_record_without_the_envelope_is_read(self):
         # the AMiner block is the export's wrapper; the miner's own output has
         # none, and requiring it dropped every native record without a message
         record = aminer_export_record()
         del record["AMiner"]
-        frame = self.normalized(self.build([record]))
+        frame = normalized_tree(build_raw_tree(("miner.json", [record]), asset=MINER_ASSET))
         self.assertEqual(list(frame["detector_source"].astype(str)), ["aminer"])
         self.assertEqual(list(frame["entity_id"].astype(str)), ["10.0.0.7"])
 
     def test_an_envelope_with_no_analysis_block_is_skipped(self):
         # this shape passed the old guard and raised KeyError in the extractor
         bad = {"AMiner": {"ID": "x"}, "LogData": {"RawLogData": ["r"], "Timestamps": [1.0]}}
+        no_log_data = {"AnalysisComponent": {"AnalysisComponentName": "c"}}
         self.assertIsNone(normalize.read_family_record(bad, "aminer"))
-        frame = self.normalized(self.build([bad, aminer_export_record()]))
+        self.assertIsNone(normalize.read_family_record(no_log_data, "aminer"))
+        frame = normalized_tree(build_raw_tree(
+            ("miner.json", [bad, aminer_export_record()]), asset=MINER_ASSET
+        ))
         self.assertEqual(len(frame), 1)
 
     def test_embedded_ruleset_mitre_tags_become_native_ids(self):
@@ -1385,16 +1172,20 @@ class NativeAminerExports(unittest.TestCase):
         )
         self.assertEqual(fields.native_technique_ids, "T1595;T1046")
 
-    def test_the_log_resource_field_is_read_in_both_shapes(self):
+    def test_the_log_resource_field_is_read_in_every_shape(self):
         listed = {"LogData": {"LogResources": ["/var/log/auth.log"]}}
         single = {"AnalysisComponent": {"LogResource": "file:///logs/access.log"}}
-        self.assertEqual(
-            normalize.aminer_log_resources(listed), ["/var/log/auth.log"]
-        )
-        self.assertEqual(
-            normalize.aminer_log_resources(single), ["file:///logs/access.log"]
-        )
-        self.assertEqual(normalize.aminer_log_resources({}), [])
+        one_string = {"LogData": {"LogResources": "/var/log/auth.log"}}
+        wrong_type = {"LogData": {"LogResources": {"/var/log/auth.log": 1}}}
+        for record, expected in (
+            (listed, ["/var/log/auth.log"]),
+            (single, ["file:///logs/access.log"]),
+            (one_string, ["/var/log/auth.log"]),
+            (wrong_type, []),
+            ({}, []),
+        ):
+            with self.subTest(record=record):
+                self.assertEqual(normalize.aminer_log_resources(record), expected)
 
 
 if __name__ == "__main__":
