@@ -152,17 +152,6 @@ class TestCliRobustness(unittest.TestCase):
         inventory = load_inventory(directory / "inventory" / f"{directory.name}.json")
         self.assertEqual(inventory.assets_by_ip["10.0.0.1"].groups, ("server",))
 
-    def test_a_bundle_without_the_median_field_still_reports_drift(self):
-        # skops restores a field a stored profile never had as absent, so a
-        # bundle written before feature_medians existed crashed every drift run
-        from core.drift import TrainingProfile, compare_profile
-        profile = TrainingProfile()
-        profile.feature_bins = {"log_size": ((1.0,), (0.5, 0.5))}
-        del profile.__dict__["feature_medians"]
-        drift = compare_profile(profile, pd.DataFrame({"log_size": [1.0, 2.0]}))
-        self.assertEqual(len(drift), 1)
-        self.assertTrue(np.isnan(drift[0].training_median))
-
 
 class TestBoundaryValues(unittest.TestCase):
     # each of these was accepted silently and produced a wrong or unreachable
@@ -405,6 +394,7 @@ def one_family_run():
         "technique_id_set": frozenset({f"T1059 {BREAKS_MARKUP}"}),
         "child_session_ids": ("s1",),
         "alert_rows": (0,),
+        "criticality": "unset",
     })
     alerts = pd.DataFrame([{
         "timestamp": 0.0,
@@ -483,7 +473,7 @@ class MarkupInAlertTextTests(unittest.TestCase):
             # no alert files in the directory, so it stops just after the warning
             with self.assertRaises(FileNotFoundError):
                 cli._score_company(
-                    None, directory, "acme", inventory_path, None, None
+                    None, directory, "acme", inventory_path, None, None, {}
                 )
         self.assertIn("unrecognised roles", buffer.getvalue())
         self.assertNotIn(OSC8, buffer.getvalue())

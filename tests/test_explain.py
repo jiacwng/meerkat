@@ -116,6 +116,7 @@ class RenderTests(unittest.TestCase):
             "handle": "F1", "day": 0, "start": 0.0, "host_label": "web01",
             "detector_source": "wazuh", "title": "t", "rule_id": "1",
             "alert_count": 1, "ranking_score": 0.5, "family_id": "f",
+            "criticality": "unset",
         })])
         with mock.patch.object(cli, "console", Console(width=220)):
             with cli.console.capture() as capture:

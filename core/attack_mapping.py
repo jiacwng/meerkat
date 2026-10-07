@@ -1,11 +1,5 @@
-"""Map detector alerts to MITRE ATT&CK and build analyst context.
-
-Public API:
-    map_alert(detector, rule_id, native_ids) -> AlertMapping
-    with_local_mappings(path)               -> shipped mapping, local file on top
-    host_chain(timestamps, tactics)         -> one host-day's ATT&CK chain
-    tactic_coverage(tactics)                -> counts across all tactics
-"""
+# Maps detector alerts to MITRE ATT&CK techniques and tactics, orders one host's
+# tactics into an attack chain, and writes an ATT&CK Navigator layer.
 
 from __future__ import annotations
 
@@ -15,8 +9,6 @@ from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
 
-import pandas as pd
-
 
 @dataclass
 class AlertMapping:
@@ -25,19 +17,12 @@ class AlertMapping:
     source: str               # mapping source: rule, suppressed, native, or none
 
 
-def load_attack_lookup(path: Traversable | Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-# the json lives inside the package so pip installs it; resources.files finds it
-# in a wheel, an editable install and a zip alike, where a path walked up from
-# __file__ points at a repo directory that was never shipped
+# resources.files finds the json in a wheel, an editable install and a zip alike
 DATA_DIR = resources.files("core") / "data"
-ATTACK_LOOKUP = load_attack_lookup(DATA_DIR / "attack_lookup.json")
+ATTACK_LOOKUP = json.loads((DATA_DIR / "attack_lookup.json").read_text(encoding="utf-8"))
 TACTIC_ORDER = ATTACK_LOOKUP["tactic_order"]
-# the technique names and the tactic order both come from this release. The lookup
-# file holds tactic_order and techniques and nothing else, so the release is only
-# recorded here and has to be changed by hand when the lookup is rebuilt.
+# the technique names and the tactic order both come from this release; the lookup
+# file does not record it, so change it by hand when the lookup is rebuilt
 ATTACK_RELEASE = "19.1"          # Enterprise ATT&CK, STIX distribution
 ATTACK_VERSION = ATTACK_RELEASE.split(".")[0]   # navigator layers take the major
 
@@ -61,14 +46,13 @@ def load_detection_mappings(path: Traversable | Path) -> dict[str, dict[str, lis
             )
 
     known = ATTACK_LOOKUP["techniques"]
-    unknown = set()
-    for detector_rules in mappings.values():
-        for technique_ids in detector_rules.values():
-            for technique_id in technique_ids:
-                if technique_id not in known:
-                    unknown.add(technique_id)
-
-    # configured IDs must exist, detector IDs may be newer than our lookup
+    unknown = {
+        technique_id
+        for rules in mappings.values()
+        for ids in rules.values()
+        for technique_id in ids
+        if technique_id not in known
+    }
     if unknown:
         raise ValueError(
             f"{path.name}: unknown ATT&CK techniques {sorted(unknown)}"
@@ -80,7 +64,6 @@ DETECTION_MAPPINGS = load_detection_mappings(DATA_DIR / "detection_mappings.json
 
 
 def with_local_mappings(path: Path | None) -> dict[str, dict[str, list[str]]]:
-    # rule by rule: a local entry replaces the shipped one, every other rule stays
     if path is None:
         return DETECTION_MAPPINGS
     merged = {detector: dict(rules) for detector, rules in DETECTION_MAPPINGS.items()}
@@ -91,32 +74,16 @@ def with_local_mappings(path: Path | None) -> dict[str, dict[str, list[str]]]:
 
 def technique_name(technique_id: str) -> str:
     entry = ATTACK_LOOKUP["techniques"].get(technique_id)
-    if entry is None:
-        return technique_id
-    return str(entry["name"])
+    return technique_id if entry is None else str(entry["name"])
 
 
 def tactics_for_techniques(technique_ids: str) -> tuple[str, ...]:
     found: set[str] = set()
-
     for technique_id in technique_ids.split(";"):
-        technique_id = technique_id.strip()
-        if not technique_id:
-            continue
-
-        entry = ATTACK_LOOKUP["techniques"].get(technique_id)
-        if entry is None:
-            continue
-
-        for tactic in entry.get("tactics", []):
-            found.add(tactic)
-
-    ordered = []
-    for tactic in TACTIC_ORDER:
-        if tactic in found:
-            ordered.append(tactic)
-
-    return tuple(ordered)
+        entry = ATTACK_LOOKUP["techniques"].get(technique_id.strip())
+        if entry is not None:
+            found.update(entry.get("tactics", []))
+    return tuple(tactic for tactic in TACTIC_ORDER if tactic in found)
 
 
 def map_alert(
@@ -126,18 +93,14 @@ def map_alert(
     mappings: dict[str, dict[str, list[str]]] = DETECTION_MAPPINGS,
 ) -> AlertMapping:
     configured = mappings.get(detector_source, {}).get(rule_id)
-
     if configured is not None:
         if configured:
             joined = ";".join(configured)
             return AlertMapping(joined, tactics_for_techniques(joined), "rule")
-        # an empty mapping means the rule was reviewed and maps to nothing
         return AlertMapping("", (), "suppressed")
-
     if native_technique_ids:
         tactics = tactics_for_techniques(native_technique_ids)
         return AlertMapping(native_technique_ids, tactics, "native")
-
     return AlertMapping("", (), "")
 
 
@@ -164,8 +127,6 @@ def host_chain(timestamps, tactics) -> HostChain:
     ):
         known = [tactic for tactic in alert_tactics if tactic in position]
         seen.update(known)
-        # extend from the state before this alert, so one alert cannot chain
-        # two of its own tactics
         before = [list(chain) for chain in best]
         for tactic in known:
             index = position[tactic]
@@ -178,13 +139,6 @@ def host_chain(timestamps, tactics) -> HostChain:
         tactic for tactic in TACTIC_ORDER if tactic in seen and tactic not in on_chain
     )
     return HostChain(chain, off_chain)
-
-
-def tactic_coverage(tactics: pd.Series) -> dict[str, int]:
-    # empty tuples become NaN when exploded, hence the dropna
-    expanded = tactics.explode().dropna()
-    counts = expanded.value_counts()
-    return {tactic: int(counts.get(tactic, 0)) for tactic in TACTIC_ORDER}
 
 
 def export_navigator_layer(technique_ids, path: Path,

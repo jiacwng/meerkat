@@ -18,12 +18,12 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
-from core.classifier import save_model
+from core.classifier import is_lfs_pointer, save_model
 from meerkat import cli
 
 ROOT = Path(__file__).resolve().parents[1]
 SHIPPED_BUNDLE = ROOT / "models" / "meerkat_bundle.skops"
-HAS_BUNDLE = SHIPPED_BUNDLE.exists() and not cli._is_lfs_pointer(SHIPPED_BUNDLE)
+HAS_BUNDLE = SHIPPED_BUNDLE.exists() and not is_lfs_pointer(SHIPPED_BUNDLE)
 HAS_RUN = (ROOT / "runs" / "latest.txt").exists()
 
 
@@ -79,10 +79,8 @@ def make_families() -> pd.DataFrame:
             "child_session_ids": ["acme#0", "acme#1"], "child_score_max": 0.9,
             "detectors_nearby_10m": 2.0, "technique_count": 1,
             "technique_id_set": frozenset({"T1595"}), "family_positive": True,
-            "asset_roles": ("intranet", "servers"),
-            "labelled_windows": frozenset({0}),
-            "temporal_overlap_windows": frozenset({0}),
-            "labelled_alert_count": 2, "family_id": "acme#0#10.0.0.5#wazuh#31101",
+            "asset_roles": ("intranet", "servers"), "scenario": "acme",
+            "criticality": "unset", "family_id": "acme#0#10.0.0.5#wazuh#31101",
         },
         {
             "day": 0, "entity_id": "10.0.0.5", "detector_source": "suricata",
@@ -93,10 +91,8 @@ def make_families() -> pd.DataFrame:
             "child_session_ids": ["acme#2"], "child_score_max": 0.4,
             "detectors_nearby_10m": 2.0, "technique_count": 0,
             "technique_id_set": frozenset(), "family_positive": False,
-            "asset_roles": (),
-            "labelled_windows": frozenset(),
-            "temporal_overlap_windows": frozenset(),
-            "labelled_alert_count": 0, "family_id": "acme#0#10.0.0.5#suricata#2001",
+            "asset_roles": (), "scenario": "acme", "criticality": "unset",
+            "family_id": "acme#0#10.0.0.5#suricata#2001",
         },
     ])
 
@@ -283,8 +279,7 @@ def triage_client(criticality: str = "", mappings: Path | None = None) -> Triage
         cli.cmd_triage(argparse.Namespace(
             model=SHIPPED_BUNDLE, input=directory, company="acme",
             inventory=directory / "inventory" / "acme.json",
-            labels=None, event_csv_dir=None, wazuh_file=None, aminer_file=None,
-            attack_mappings=mappings, budget=2, runs_dir=runs,
+            wazuh_file=None, aminer_file=None, attack_mappings=mappings, budget=2, runs_dir=runs,
         ))
     return Triaged(cli.load_run(runs), printed.getvalue())
 

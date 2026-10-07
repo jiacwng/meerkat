@@ -99,7 +99,7 @@ class SignTestTableTests(unittest.TestCase):
             + self.rows("best child session", [5, 5, 5, 5, 5, 4, 4, 4])
             + self.rows("floor: one item per day", [9] * 8)
         )
-        table = sign_tests(per_fold)
+        table = sign_tests(per_fold, metric="strict_windows")
         against = dict(zip(table["against"], table["verdict"]))
         self.assertEqual(against["random"], "p=0.008")
         self.assertEqual(against["best child session"], "not separable (n_eff=3)")

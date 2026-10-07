@@ -1,14 +1,6 @@
-"""Group normalized alerts into sessions and daily review families.
-
-A session holds alerts from one entity, detector and rule until that stream goes
-quiet for more than ten minutes. A family joins same-day sessions sharing that
-identity and carries the aggregates used by the family re-ranker.
-
-Public API:
-    assign_sessions(alerts, gap_s)              -> session number per alert
-    build_sessions(alerts, scenario, inventory) -> one row per session
-    build_families(scored_sessions)             -> one row per review family
-"""
+# Groups normalized alerts into sessions (one entity, detector and rule, until the
+# stream is quiet for ten minutes) and sessions into daily review families, which
+# carry the aggregates the family re-ranker reads.
 
 from __future__ import annotations
 
@@ -21,50 +13,34 @@ from core.inventory import UNSET, Inventory
 SECONDS_PER_DAY = 86400.0
 SESSION_GAP_S = 600.0
 SESSION_KEY = ("entity_id", "detector_source", "rule_id")
-# a family is one day of one session key, so the two must stay in step: a column
-# that stops being a session key stops being a family key with it
 FAMILY_KEY = ("day",) + SESSION_KEY
 
 
-def assign_sessions(
-    alerts: pd.DataFrame,
-    gap_s: float = SESSION_GAP_S,
-) -> pd.Series:
-    # alerts must already be sorted by key then timestamp, so one forward scan
-    # is enough to close a session on the first long silence
+def assign_sessions(alerts: pd.DataFrame) -> pd.Series:
+    # alerts are sorted by key then timestamp, so one forward scan closes a
+    # session on the first long silence
     key_changed = alerts[list(SESSION_KEY)].ne(
         alerts[list(SESSION_KEY)].shift()
     ).any(axis=1)
-    quiet = alerts["timestamp"].diff().gt(gap_s)
+    quiet = alerts["timestamp"].diff().gt(SESSION_GAP_S)
     return (key_changed | quiet).cumsum() - 1
 
 
-def _nonempty(values: pd.Series) -> frozenset[str]:
-    return frozenset(value for value in values.astype(str) if value)
-
-
-def _window_ids(values: pd.Series) -> frozenset[int]:
-    return frozenset(int(value) for value in values if value >= 0)
+def _union(values: pd.Series) -> frozenset:
+    return frozenset().union(*values)
 
 
 def _pair_counts(values: pd.Series) -> tuple[tuple[tuple[str, str], int], ...]:
-    # what the session is actually made of. Under a key that carries
-    # detector_source and rule_id this is always one pair, but the feature builder
-    # must not assume that or the aggregation grid measures the key's side effects
-    # instead of the key.
     return tuple(values.value_counts().items())
 
 
-def _count_union(values: pd.Series) -> int:
-    return len(frozenset().union(*values))
-
-
-def _split_values(values: pd.Series) -> frozenset[str]:
-    # cast to str before filling: pandas fills only a category that already exists
-    found = set()
-    for value in values.astype(str).fillna(""):
-        found.update(part for part in value.split(";") if part)
-    return frozenset(found)
+def _part_sets(column: pd.Series) -> pd.Series:
+    text = column.astype(str)
+    parts = {
+        value: frozenset(part for part in value.split(";") if part)
+        for value in text.unique()
+    }
+    return text.map(parts)
 
 
 def _asset_roles(entity_id: str, inventory: Inventory) -> tuple[str, ...]:
@@ -83,10 +59,7 @@ def session_detectors(pair_counts: pd.Series) -> pd.Series:
     )
 
 
-def _nearby_detector_count(
-    sessions: pd.DataFrame,
-    gap_s: float = SESSION_GAP_S,
-) -> pd.Series:
+def _nearby_detector_count(sessions: pd.DataFrame) -> pd.Series:
     counts = np.ones(len(sessions), dtype=float)
     detector_sets = session_detectors(sessions["pair_counts"]).to_numpy()
     for positions in sessions.groupby(
@@ -100,8 +73,8 @@ def _nearby_detector_count(
 
         for local_position, session_position in enumerate(positions):
             nearby = (
-                (starts <= ends[local_position] + gap_s)
-                & (ends >= starts[local_position] - gap_s)
+                (starts <= ends[local_position] + SESSION_GAP_S)
+                & (ends >= starts[local_position] - SESSION_GAP_S)
             )
             counts[session_position] = len(frozenset().union(*detectors[nearby]))
     return pd.Series(counts, index=sessions.index, dtype=float)
@@ -111,18 +84,14 @@ def build_sessions(
     alerts: pd.DataFrame,
     scenario: str,
     inventory: Inventory,
-    gap_s: float = SESSION_GAP_S,
 ) -> pd.DataFrame:
     work = alerts.copy()
     work["scenario"] = scenario
     work["_alert_row"] = np.arange(len(work))
-    if "event_label" not in work:
-        work["event_label"] = ""
-    work["event_label"] = work["event_label"].fillna("").astype(str)
-    work["_is_event"] = work["event_label"].ne("")
-    if "window_id" not in work:
-        work["window_id"] = -1
-    work["_labelled_window"] = work["window_id"].where(work["_is_event"], -1)
+    work["_is_event"] = (
+        work["event_label"].fillna("").astype(str).ne("")
+        if "event_label" in work else False
+    )
     work["_severity"] = standardize_severity(
         work["detector_source"], work["severity"]
     )
@@ -137,18 +106,19 @@ def build_sessions(
         _asset_criticality(str(entity), inventory)
         for entity in work["entity_id"]
     ]
+    work["_alert_category_set"] = _part_sets(work["alert_category"])
+    work["_technique_id_set"] = _part_sets(work["native_technique_ids"])
+    work["_rule_group_set"] = _part_sets(work["rule_groups"])
     work["_pair"] = list(zip(
         work["detector_source"].astype(str), work["rule_id"].astype(str)
     ))
     work = work.sort_values(
         list(SESSION_KEY) + ["timestamp"], kind="stable"
     ).reset_index(drop=True)
-    work["unit"] = assign_sessions(work, gap_s)
+    work["unit"] = assign_sessions(work)
 
     sessions = work.groupby("unit", observed=True, sort=False).agg(
         scenario=("scenario", "first"),
-        # the key columns are grouped away, and the features and the CLI both
-        # read them back to describe a unit, so carry them onto the row
         **{name: (name, "first") for name in SESSION_KEY},
         start=("timestamp", "min"),
         end=("timestamp", "max"),
@@ -158,13 +128,9 @@ def build_sessions(
         has_technique=("_has_technique", "max"),
         in_inventory=("entity_in_inventory", "max"),
         positive=("_is_event", "any"),
-        labelled_alert_count=("_is_event", "sum"),
-        labelled_windows=("_labelled_window", _window_ids),
-        temporal_overlap_windows=("window_id", _window_ids),
-        event_categories=("event_label", _nonempty),
-        alert_category_set=("alert_category", _split_values),
-        technique_id_set=("native_technique_ids", _split_values),
-        rule_group_set=("rule_groups", _split_values),
+        alert_category_set=("_alert_category_set", _union),
+        technique_id_set=("_technique_id_set", _union),
+        rule_group_set=("_rule_group_set", _union),
         asset_roles=("_asset_roles", "first"),
         criticality=("_asset_criticality", "first"),
         alert_rows=("_alert_row", list),
@@ -172,8 +138,8 @@ def build_sessions(
     ).reset_index()
 
     sessions["session_id"] = scenario + "#" + sessions["unit"].astype(str)
-    # take roles from the whole inventory, not only the ones seen in this batch,
-    # otherwise the feature columns change between batches
+    # roles come from the whole inventory, not the ones seen in this batch, so the
+    # feature columns do not change between batches
     configured_roles = tuple(sorted({
         role
         for asset in inventory.assets_by_ip.values()
@@ -191,7 +157,7 @@ def build_sessions(
     entity_day = sessions.groupby(
         ["day", "entity_id"], observed=True, sort=False
     ).agg(
-        detectors_on_entity=("_detectors", _count_union),
+        detectors_on_entity=("_detectors", lambda sets: len(_union(sets))),
         alerts_on_entity=("size", "sum"),
         groups_on_entity=("unit", "size"),
     ).reset_index()
@@ -202,10 +168,6 @@ def build_sessions(
     sessions["detectors_nearby_10m"] = _nearby_detector_count(sessions)
     sessions["order"] = np.arange(len(sessions))
     return sessions
-
-
-def _union(values: pd.Series) -> frozenset:
-    return frozenset().union(*values)
 
 
 def _flatten(values: pd.Series) -> list:
@@ -231,15 +193,11 @@ def build_families(scored_sessions: pd.DataFrame) -> pd.DataFrame:
         child_score_mean=("ranking_score", "mean"),
         child_score_std=("ranking_score", _population_std),
         family_positive=("positive", "any"),
-        labelled_windows=("labelled_windows", _union),
-        temporal_overlap_windows=("temporal_overlap_windows", _union),
-        event_categories=("event_categories", _union),
         start=("start", "min"),
         end=("end", "max"),
         child_session_ids=("session_id", list),
         n_child_sessions=("session_id", "size"),
         alert_count=("size", "sum"),
-        labelled_alert_count=("labelled_alert_count", "sum"),
         alert_rows=("alert_rows", _flatten),
         asset_roles=("asset_roles", "first"),
         criticality=("criticality", "first"),

@@ -1,24 +1,6 @@
-"""Compare a client's current alerts against what the model was trained on.
-
-Drift detection here answers one question and refuses the other two. Of the three
-kinds of drift in the usual taxonomy, only the first is visible without labels:
-
-    covariate shift   P(X) moved. new rules, new hosts, a detector upgrade.
-                      DETECTABLE, and it is what this module reports.
-    concept drift     P(y|X) moved. what an attack looks like changed.
-                      NEEDS LABELS. not detectable here.
-    prior shift       P(y) moved. the attack rate changed.
-                      NEEDS LABELS. not detectable here.
-
-So a drift report is an alarm and never a verdict. It says the input moved. It
-cannot say the queue got worse, and nothing in here should be read that way.
-
-Public API:
-    TrainingProfile                       what a bundle records about its training set
-    build_profile(X, scores, families)    compute one at training time
-    compare_profile(profile, X)           one FeatureDrift per feature
-    population_stability_index(...)       PSI against a stored reference histogram
-"""
+# Compares a client's alerts against the training profile stored in the bundle.
+# Only covariate shift (the inputs moved) is visible without labels, so a report is
+# an alarm that the input moved and never a verdict that the queue got worse.
 
 from __future__ import annotations
 
@@ -27,15 +9,11 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-# The credit-risk convention, which is where PSI comes from and where the whole
-# reject-inference framing in this project comes from too. The 0.10 and 0.25 bands
-# are Siddiqi's, Credit Risk Scorecards, 2006, not anything tuned here.
+# the 0.10 and 0.25 bands are Siddiqi's, Credit Risk Scorecards, 2006, not tuned here
 PSI_STABLE = 0.10
 PSI_MAJOR = 0.25
 DECILES = tuple(round(0.1 * i, 2) for i in range(1, 10))
 
-# a rule the model never saw contributes no rarity signal, so this is the drift
-# that matters most for a ranking built on rule identity
 UNSEEN_RULE_WARN = 0.20
 
 # every session on a host repeats the host's value, so a day holds about as many
@@ -49,12 +27,9 @@ def _compared(name: str) -> bool:
 
 @dataclass
 class TrainingProfile:
-    # edges and the reference share per bin, because collapsed deciles (a binary
-    # feature) break an even-10%-per-bin assumption
     feature_bins: dict[str, tuple[tuple[float, ...], tuple[float, ...]]] = field(
         default_factory=dict
     )
-    # the real median, stored because collapsed deciles make a bin edge wrong
     feature_medians: dict[str, float] = field(default_factory=dict)
     session_score_bins: tuple[tuple[float, ...], tuple[float, ...]] = ((), ())
     family_score_bins: tuple[tuple[float, ...], tuple[float, ...]] = ((), ())
@@ -74,8 +49,6 @@ class FeatureDrift:
 
 
 def _bin_shares(edges: np.ndarray, values: np.ndarray) -> np.ndarray:
-    # side="left" makes each bin right-closed, so a value on a quantile edge
-    # falls in the bin below
     index = np.searchsorted(edges, values, side="left")
     return np.bincount(index, minlength=len(edges) + 1) / len(values)
 
@@ -98,18 +71,13 @@ def build_profile(
 ) -> TrainingProfile:
     detector_columns = [c for c in X.columns if c.startswith("detector_")]
     total = float(len(X)) or 1.0
+    compared = [name for name in X.columns if _compared(name)]
     return TrainingProfile(
-        # roles are excluded: they describe the client's inventory rather than the
-        # alert stream, and `meerkat check` already reports role coverage directly
-        feature_bins={
-            name: _reference(X[name].to_numpy())
-            for name in X.columns
-            if _compared(name)
-        },
+        feature_bins={name: _reference(X[name].to_numpy()) for name in compared},
         feature_medians={
             name: float(np.nanmedian(X[name].to_numpy(dtype=float)))
-            for name in X.columns
-            if _compared(name) and len(X)
+            for name in compared
+            if len(X)
         },
         session_score_bins=_reference(np.asarray(session_scores)),
         family_score_bins=(
@@ -170,11 +138,7 @@ def compare_profile(
             name=name,
             psi=psi,
             verdict=verdict_for(psi),
-            # getattr, because skops restores a field a stored profile never had
-            # as absent. A bundle written before this field existed still reports.
-            training_median=getattr(profile, "feature_medians", {}).get(
-                name, float("nan")
-            ),
+            training_median=profile.feature_medians.get(name, float("nan")),
             current_median=(
                 float(np.nanmedian(current)) if len(current) else float("nan")
             ),
@@ -183,8 +147,6 @@ def compare_profile(
 
 
 def unseen_rule_share(schema, pair_counts: pd.Series) -> float:
-    # free: the schema already holds every (detector, rule) pair the forest saw, so
-    # the most likely real drift needs no new stored statistic at all
     known = set(schema.rule_counts.index)
     seen = unseen = 0
     for pairs in pair_counts:

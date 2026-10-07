@@ -1,18 +1,7 @@
-"""Check the AIT-ADS dataset layout before bench.train or bench.evaluate run.
-
-Seven of the eight environments' alert files are gitignored, so a fresh clone
-reaches bench.evaluate and gets a bare FileNotFoundError with nothing in it about
-the 2.7 GB download it is missing. This module answers that first: what is here,
-what is not, and the exact path each absent file needs.
-
-Nothing here opens an alert file. The set is 2.7 GB and wilson_wazuh.json alone
-is 673 MB, so existence and st_size are the whole check.
-
-Public API:
-    check_dataset(raw_dir, labels_path)  -> one ScenarioCheck per environment
-    format_report(checks, labels_path)   -> the table, the summary, the guidance
-    main(argv)                           -> exit code, 0 when all eight are usable
-"""
+# Checks the AIT-ADS dataset layout before bench.train or bench.evaluate run, so a
+# fresh clone gets a table of what is missing and where each file goes instead of a
+# bare FileNotFoundError. Nothing here opens an alert file: the set is 2.7 GB, so
+# existence and st_size are the whole check.
 
 from __future__ import annotations
 
@@ -32,12 +21,10 @@ from core.normalize import (
 
 ZENODO_RECORD = "8263181"
 ZENODO_URL = "https://zenodo.org/records/8263181"
-# bench/README.md quotes sizes in decimal MB, 673 MB for wilson_wazuh.json, so
-# divide by 10**6 and not by 2**20 or the two disagree by seven percent
+# bench/README.md quotes decimal MB
 BYTES_PER_MB = 1_000_000
 
-# the detector ceilings from bench/README.md. Losing the miner drops a third of
-# the attack windows, so the warning says so
+# the detector ceilings from bench/README.md
 WINDOWS_ALL_DETECTORS = 60
 WINDOWS_WITHOUT_AMINER = 41
 AMINER_ONLY_WINDOWS = WINDOWS_ALL_DETECTORS - WINDOWS_WITHOUT_AMINER
@@ -81,18 +68,14 @@ def _file_bytes(path: Path) -> int | None:
 
 
 def _resolve_pair(raw_dir: Path, scenario: str) -> tuple[Path, Path]:
-    # resolve_alert_files is what decides which files the loader will accept, by
-    # name first and by format second, so ask it instead of testing for
-    # <scenario>_wazuh.json here and disagreeing with it later. Finding nothing
-    # raises there, which for a check is the answer rather than a failure: fall
-    # back to the two paths bench/README.md tells the reader to fill.
+    # ask the loader which files it would read rather than disagree with it later;
+    # finding none is the answer for a check, so fall back to the documented paths
     default_wazuh = raw_dir / f"{scenario}_wazuh.json"
     default_aminer = raw_dir / f"{scenario}_aminer.json"
     try:
         resolved = resolve_alert_files(raw_dir, scenario)
     except FileNotFoundError:
         return default_wazuh, default_aminer
-    # the table has one column per detector, so name the first file of each
     network = (WAZUH_FAMILY, SURICATA_FAMILY)
     return (
         next((p for p, f in resolved if f in network), default_wazuh),
@@ -101,8 +84,6 @@ def _resolve_pair(raw_dir: Path, scenario: str) -> tuple[Path, Path]:
 
 
 def _count_windows(labels_path: Path, scenario: str) -> int:
-    # a labels file that is absent, unreadable or not this csv all mean the same
-    # thing to the caller: no windows for this environment
     try:
         return len(load_attack_windows(labels_path, scenario))
     except (OSError, KeyError, ValueError):
@@ -128,13 +109,9 @@ def check_scenario(
     )
 
 
-def check_dataset(
-    raw_dir: Path,
-    labels_path: Path,
-    scenarios: tuple[str, ...] = SCENARIOS,
-) -> list[ScenarioCheck]:
+def check_dataset(raw_dir: Path, labels_path: Path) -> list[ScenarioCheck]:
     return [
-        check_scenario(raw_dir, labels_path, scenario) for scenario in scenarios
+        check_scenario(raw_dir, labels_path, scenario) for scenario in SCENARIOS
     ]
 
 
@@ -164,9 +141,6 @@ def _summary_line(checks: list[ScenarioCheck]) -> str:
 
 
 def _resolution_notes(checks: list[ScenarioCheck]) -> list[str]:
-    # the loader falls back to picking an alert file by format, so the file it
-    # would read is not always the one the layout names. Say which it is rather
-    # than print "ok" against a neighbour's export.
     lines = []
     for check in checks:
         expected = f"{check.scenario}_wazuh.json"
@@ -180,9 +154,6 @@ def _resolution_notes(checks: list[ScenarioCheck]) -> list[str]:
 
 
 def _aminer_warning(checks: list[ScenarioCheck]) -> list[str]:
-    # only environments that will actually run. One whose wazuh file is missing
-    # too is already an error, and naming it here would read as the smaller
-    # problem of a reduced ceiling instead of a missing download.
     absent = [
         check for check in checks
         if check.aminer_bytes is None and check.wazuh_bytes is not None

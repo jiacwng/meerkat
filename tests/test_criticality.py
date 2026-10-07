@@ -147,21 +147,8 @@ class DisplayAndFilterTests(unittest.TestCase):
 
     def test_the_filter_keeps_one_tier_across_the_whole_run(self):
         run = _run(["high", "low"])
-        selected = cli._select_families(
-            run, False, None, None, None, None, None, "low"
-        )
+        selected = cli._select_families(run, cli.QueueFilter(criticality="low"))
         self.assertEqual(list(selected["criticality"]), ["low"])
-
-    def test_a_run_saved_before_criticality_shows_blank_and_filters_to_nothing(self):
-        run = _run(["high", "low"])
-        run.families = run.families.drop(columns="criticality")
-        with cli.console.capture() as capture:
-            cli.render_queue(run.families, {}, "Review queue")
-        self.assertNotIn("high", capture.get())
-        selected = cli._select_families(
-            run, False, None, None, None, None, None, "high"
-        )
-        self.assertEqual(len(selected), 0)
 
     def test_queue_json_carries_the_tier(self):
         run = _run(["medium", "unset"])
@@ -185,6 +172,7 @@ class CheckAndScaffoldTests(unittest.TestCase):
             cli.cmd_check(argparse.Namespace(
                 company="acme", input=directory, inventory=inventory,
                 sample=100, wazuh_file=None, aminer_file=None, json=True,
+                attack_mappings=None,
             ))
         return squashed(stderr.getvalue()), json.loads(stdout.getvalue())
 

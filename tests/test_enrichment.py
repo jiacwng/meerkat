@@ -7,24 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import pandas as pd
-
 from core import attack_mapping
 from core.inventory import load_inventory
 from core.roles import CANONICAL_ROLES, LEGACY_ROLE_ALIASES, canonicalize
-
-
-class AttackModuleTests(unittest.TestCase):
-    def test_coverage_counts_every_tactic_on_a_multi_tactic_alert(self):
-        # one alert can map to two tactics and both count, and a tactic
-        # nobody triggered still reports 0 so the table keeps its shape
-        tactics = pd.Series([(), ("Execution",), ("Execution", "Persistence")])
-
-        coverage = attack_mapping.tactic_coverage(tactics)
-
-        self.assertEqual(coverage["Execution"], 2)
-        self.assertEqual(coverage["Persistence"], 1)
-        self.assertEqual(coverage["Reconnaissance"], 0)
 
 
 class TechniqueLookupTests(unittest.TestCase):

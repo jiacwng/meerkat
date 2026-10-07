@@ -121,9 +121,7 @@ def cli_column(text: str, name: str) -> int:
 class TacticFilterTests(unittest.TestCase):
     def test_the_filter_keeps_families_whose_own_alerts_map_to_it(self):
         run = _run(STEPPED)
-        selected = cli._select_families(
-            run, False, None, None, None, None, None, None, ACCESS
-        )
+        selected = cli._select_families(run, cli.QueueFilter(tactic=ACCESS))
         self.assertEqual(list(selected["handle"]), ["F2"])
 
     def test_the_tactic_name_is_case_insensitive_and_checked(self):
@@ -142,7 +140,7 @@ class ChainNeverScoresTests(unittest.TestCase):
         columns = ["family_id", "ranking_score", "queue_rank", "in_queue"]
         before = run.families[columns].copy()
         run.with_chain(run.families)
-        cli._select_families(run, False, None, None, None, None, None, None, RECON)
+        cli._select_families(run, cli.QueueFilter(tactic=RECON))
         pd.testing.assert_frame_equal(run.families[columns], before)
         self.assertNotIn("chain", run.families.columns)
 

@@ -1,9 +1,5 @@
-"""Load the merged AIT-ADS alert file into one normalized alert table.
-
-Public API:
-    normalize_scenario(raw_dir, labels_path, scenario, inventory_path) -> pd.DataFrame
-    iter_normalized_chunks(...)  -> bounded frames instead of one big list
-"""
+# Reads Wazuh, Suricata and AMiner alert exports and normalizes them into one alert
+# table with the same columns whatever detector wrote the alert.
 
 from __future__ import annotations
 
@@ -21,9 +17,6 @@ import pandas as pd
 
 from core.inventory import Inventory, load_inventory
 
-# a row dict costs about four times the same row inside a frame, so convert in
-# batches and drop the dicts. Below ~5,000 the frame itself dominates and peak
-# stops improving.
 CHUNK_ROWS = 10_000
 
 COLUMNS = [
@@ -54,15 +47,14 @@ CATEGORICAL_COLUMNS = [
 
 @dataclass
 class ExtractedFields:
-    # every detector must fill these, whatever its own schema looks like
     name: str
     host: str
     entity_id: str
     observer_id: str
     entity_in_inventory: bool
     severity: float
-    native_technique_ids: str = ""   # ";"-joined ATT&CK IDs, wazuh only
-    rule_id: str = ""                # stable detector rule identity, for mapping config
+    native_technique_ids: str = ""   # ";"-joined ATT&CK IDs
+    rule_id: str = ""                # stable detector rule identity
     native_event_id: str = ""
     source_user: str = ""
     target_user: str = ""
@@ -109,35 +101,28 @@ def optional_float(value: object) -> float:
         return float("nan")
     return float(value)
 
+
 def load_attack_windows(labels_path: Path, scenario: str) -> list[tuple[float, float, str]]:
-    windows = []
     with labels_path.open(encoding="utf-8") as fh:
-        c = csv.DictReader(fh)
-        for row in c:
-            if row["scenario"] == scenario:
-                windows.append((float(row["start"]), float(row["end"]), row["attack"]))
-    return windows
+        return [
+            (float(row["start"]), float(row["end"]), row["attack"])
+            for row in csv.DictReader(fh)
+            if row["scenario"] == scenario
+        ]
 
 
 def find_attack_window(timestamp: float, windows: list[tuple[float, float, str]]) -> str:
     for start, end, phase in windows:
         if start <= timestamp <= end:
             return phase
-    
     return ""
 
 
 def get_timestamp(record: dict, detector: str) -> float:
-    # AMiner already stores the timestamp;
-    # wazuh/suricata store an ISO-8601 string ending in "Z" for UTC
     if detector == "aminer":
         return float(record["LogData"]["Timestamps"][0])
-    # elastic renames the field to @timestamp when it indexes the alert; wazuh's
-    # own alerts.json keeps the name it wrote, so read whichever is there
     stamp = datetime.fromisoformat(record.get("@timestamp") or record["timestamp"])
-    # a SIEM export that omits the zone is otherwise read in the reading
-    # machine's local time, so the same file lands in different days, sessions
-    # and attack windows depending on who runs it
+    # an export without a zone is UTC, not the reading machine's local time
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=UTC)
     return stamp.timestamp()
@@ -157,7 +142,6 @@ def extract_wazuh_fields(
         asset = inventory.assets_by_ip.get(agent_ip)
         host = asset.hostname if asset else agent_ip or agent["name"]
     mitre = rule.get("mitre") or {}
-    # a single id arrives as a bare string, which is iterable, so wrap it before joining
     mitre_ids = mitre.get("id") or []
     if isinstance(mitre_ids, str):
         mitre_ids = [mitre_ids]
@@ -194,7 +178,7 @@ def extract_wazuh_fields(
         rule_groups=";".join(str(group) for group in rule.get("groups") or []),
         rule_fired_times=optional_float(rule.get("firedtimes")),
     )
-    
+
 
 def extract_suricata_fields(
     record: dict,
@@ -204,7 +188,6 @@ def extract_suricata_fields(
     alert = data["alert"]
     source_ip = str(data.get("src_ip") or "")
     destination_ip = str(data.get("dest_ip") or "")
-    # prefer a monitored endpoint, destination wins when both are known
     if destination_ip in inventory:
         entity_id = destination_ip
     elif source_ip in inventory:
@@ -227,7 +210,6 @@ def extract_suricata_fields(
         if isinstance(first_query, dict):
             dns_query = str(first_query.get("rrname") or "")
 
-    # modern rulesets embed their own ATT&CK mapping in the rule metadata
     metadata = alert.get("metadata") or {}
     embedded = metadata.get("mitre_technique_id") or []
     if isinstance(embedded, str):
@@ -263,10 +245,8 @@ def extract_suricata_fields(
         tls_ja3=str(ja3.get("hash") or ""),
         dns_query=dns_query,
     )
-    
 
 
-# the field moved between releases: a list in LogData, then one string per record
 def aminer_log_resources(record: dict) -> list[str]:
     resources = (record.get("LogData") or {}).get("LogResources")
     if not resources:
@@ -284,9 +264,6 @@ def aminer_host_candidates(record: dict) -> set[str]:
     raw_lines = record["LogData"]["RawLogData"]
     for raw_line in raw_lines:
         raw = str(raw_line).strip()
-
-        # a miner-flagged line is attacker-influenced, and deep nesting raises
-        # RecursionError, so both are caught below, not JSONDecodeError
         if raw.startswith("{"):
             try:
                 embedded = json.loads(raw)
@@ -311,7 +288,6 @@ def _metricbeat_cpu_pct(embedded: object, key: str) -> float:
         if not isinstance(value, dict):
             return float("nan")
         value = value.get(step)
-    # metricbeat writes these as a 0-1 fraction despite the pct name
     try:
         return float(value) * 100
     except (TypeError, ValueError):
@@ -322,7 +298,6 @@ def extract_aminer_fields(
     record: dict,
     inventory: Inventory,
 ) -> ExtractedFields:
-    # the AMiner envelope comes from the export, so it is optional
     observer_id = str((record.get("AMiner") or {}).get("ID") or "")
     analysis = record["AnalysisComponent"]
     component = analysis["AnalysisComponentName"]
@@ -388,10 +363,8 @@ def extract_aminer_fields(
     target_user = ""
     command = ""
     working_directory = ""
-    # `.*?PWD=` rescans to the end at every "sudo:", so a log line of repeated
-    # "sudo: a : " costs 15s at 160KB and ten minutes at 1MB. The line is
-    # attacker-written, and a real sudo record never runs past a few hundred
-    # characters, so cap the input rather than reshape a working pattern.
+    # `.*?PWD=` rescans to the end at every "sudo:", which is quadratic on a
+    # hostile line, so the input is capped; a real sudo record is far shorter
     sudo = re.search(
         r"sudo:\s+(\S+)\s+:.*?PWD=([^;]+)\s*;\s*USER=([^;]+)\s*;\s*COMMAND=(.*)$",
         raw[:4096],
@@ -414,7 +387,6 @@ def extract_aminer_fields(
         observer_id=observer_id,
         entity_in_inventory=entity_id in inventory,
         severity=float("nan"),
-        # aminer has no numeric rule ids; the analysis component IS its stable identity
         rule_id=str(component),
         source_user=source_user,
         target_user=target_user,
@@ -444,9 +416,6 @@ def extract_aminer_fields(
     )
 
 
-# suricata writes eve.json itself, and wazuh republishes the same record inside
-# its own envelope. Folding the flat one into that envelope keeps a single
-# suricata reader, severity scale and detector name.
 def as_wrapped_suricata(record: dict) -> dict | None:
     if record.get("event_type") != "alert" or "alert" not in record:
         return None
@@ -457,12 +426,10 @@ def as_wrapped_suricata(record: dict) -> dict | None:
 
 
 def classify_wazuh_record(record: dict) -> str:
-    # wazuh reads the alert from fast.log and from eve.json, so drop the text one
     if record.get("decoder", {}).get("name") == "snort":
         return ""
     if "alert" in record.get("data", {}):
         return "suricata"
-    # a wazuh alert always carries rule and agent
     if not isinstance(record.get("rule"), dict) or "agent" not in record:
         return ""
     return "wazuh"
@@ -488,69 +455,17 @@ def normalize_record(
             f"{', '.join(sorted(READERS))}"
         )
     fields = reader(record, inventory)
-
     timestamp = get_timestamp(record, detector)
     return {
+        **vars(fields),
         "detector_source": detector,
         "timestamp": timestamp,
-        "name": fields.name,
-        "host": fields.host,
-        "entity_id": fields.entity_id,
-        "observer_id": fields.observer_id,
-        "entity_in_inventory": fields.entity_in_inventory,
-        "severity": fields.severity,
         "attack_window": find_attack_window(timestamp, windows),
-        "native_technique_ids": fields.native_technique_ids,
-        "rule_id": fields.rule_id,
-        "native_event_id": fields.native_event_id,
-        "source_user": fields.source_user,
-        "target_user": fields.target_user,
-        "command": fields.command,
-        "executable": fields.executable,
-        "working_directory": fields.working_directory,
-        "web_request": fields.web_request,
-        "source_ip": fields.source_ip,
-        "destination_ip": fields.destination_ip,
-        "source_port": fields.source_port,
-        "destination_port": fields.destination_port,
-        "network_protocol": fields.network_protocol,
-        "application_protocol": fields.application_protocol,
-        "http_method": fields.http_method,
-        "http_status": fields.http_status,
-        "http_hostname": fields.http_hostname,
-        "http_user_agent": fields.http_user_agent,
-        "alert_category": fields.alert_category,
-        "rule_groups": fields.rule_groups,
-        "rule_fired_times": fields.rule_fired_times,
-        "flow_bytes_to_server": fields.flow_bytes_to_server,
-        "flow_bytes_to_client": fields.flow_bytes_to_client,
-        "flow_packets_to_server": fields.flow_packets_to_server,
-        "flow_packets_to_client": fields.flow_packets_to_client,
-        "tls_server_name": fields.tls_server_name,
-        "tls_version": fields.tls_version,
-        "tls_ja3": fields.tls_ja3,
-        "dns_query": fields.dns_query,
-        "analysis_component_type": fields.analysis_component_type,
-        "training_mode": fields.training_mode,
-        "affected_log_paths": fields.affected_log_paths,
-        "affected_log_frequencies": fields.affected_log_frequencies,
-        "log_resource": fields.log_resource,
-        "log_lines_count": fields.log_lines_count,
-        "critical_value": fields.critical_value,
-        "probability_threshold": fields.probability_threshold,
-        "anomaly_scores": fields.anomaly_scores,
-        "cpu_total_pct": fields.cpu_total_pct,
-        "cpu_nice_pct": fields.cpu_nice_pct,
     }
 
 
-def _normalized_columns(with_event_label: bool) -> list[str]:
-    return COLUMNS + ["event_label"] if with_event_label else COLUMNS
-
-
-# separate from frame construction because a chunked reader has to concatenate
-# first: casting per chunk gives each chunk its own categories, and concatenating
-# those falls back to object dtype
+# cast after the chunks are joined: per-chunk categories would not match and the
+# concatenation would fall back to object dtype
 def finalize_normalized_frame(df: pd.DataFrame) -> pd.DataFrame:
     for column in CATEGORICAL_COLUMNS:
         df[column] = df[column].astype("category")
@@ -562,24 +477,13 @@ def finalize_normalized_frame(df: pd.DataFrame) -> pd.DataFrame:
 WAZUH_FAMILY = "wazuh"
 AMINER_FAMILY = "aminer"
 SURICATA_FAMILY = "suricata"
-# files are read in this order, so two runs of one directory agree. suricata's
-# own file comes before the wazuh export that forwards it, so the copy kept is
-# the one the sensor wrote and not wazuh's re-encoding of it
 FAMILY_ORDER = (AMINER_FAMILY, SURICATA_FAMILY, WAZUH_FAMILY)
-# the official label csv counts the wazuh file's rows first and the miner's last
 LABEL_ORDER = (WAZUH_FAMILY, SURICATA_FAMILY, AMINER_FAMILY)
 SNIFF_LINES = 5
-# an alert export is one json object per line, so a longer line belongs to some
-# other file and saying so should not pull it into memory first
 SNIFF_LINE_BYTES = 1 << 20
 
 
 def classify_alert_family(record: dict) -> str:
-    # the two exports share no top-level field. aminer writes what fired and the
-    # log it read (AnalysisComponent / LogData); wazuh writes the rule and the
-    # agent that reported it. suricata rides in the wazuh file with that same
-    # rule+agent pair and its own data.alert, so it is the wazuh family here and
-    # classify_wazuh_record splits the two apart per record at parse time.
     if "AnalysisComponent" in record or "LogData" in record:
         return AMINER_FAMILY
     if "rule" in record and "agent" in record:
@@ -587,22 +491,17 @@ def classify_alert_family(record: dict) -> str:
     data = record.get("data")
     if isinstance(data, dict) and "alert" in data:
         return WAZUH_FAMILY
-    # a native eve.json line names its own payload: an alert carries "alert", a
-    # dns event carries "dns". No rule and no agent, so wazuh did not write it.
     event_type = record.get("event_type")
     if isinstance(event_type, str) and isinstance(record.get(event_type), dict):
         return SURICATA_FAMILY
     return ""
 
 
-def sniff_alert_family(path: Path, max_lines: int = SNIFF_LINES) -> str:
-    # a wazuh export is tens of MB, so the family is decided from the first few
-    # records and the rest of the file is never read. Anything unreadable, not
-    # json, or json of neither shape is not an alert file.
+def sniff_alert_family(path: Path) -> str:
     try:
         with path.open(encoding="utf-8-sig", errors="replace") as fh:
             read = 0
-            while read < max_lines:
+            while read < SNIFF_LINES:
                 line = fh.readline(SNIFF_LINE_BYTES)
                 if not line:
                     break
@@ -612,7 +511,6 @@ def sniff_alert_family(path: Path, max_lines: int = SNIFF_LINES) -> str:
                 read += 1
                 try:
                     record = json.loads(line)
-                # a deeply nested line raises RecursionError
                 except (json.JSONDecodeError, RecursionError, ValueError):
                     continue
                 if isinstance(record, dict):
@@ -642,7 +540,6 @@ def read_alert_record(line: str, path: Path, position: int) -> dict | None:
             "Alert files are JSON lines, one object per line."
         ) from error
     except RecursionError as error:
-        # json.loads recurses, so a record nested a few thousand deep raises this
         raise AlertFileError(
             f"{path.name} line {position + 1} nests too deeply to parse. "
             "Alert files are JSON lines, one object per line."
@@ -667,13 +564,8 @@ def resolve_alert_files(
     wazuh_path: Path | None = None,
     aminer_path: Path | None = None,
 ) -> list[tuple[Path, str]]:
-    # <company>_wazuh.json is AIT's layout and stays the convenient default, but a
-    # real export is called whatever the SIEM called it, so either file can be named
-    # outright. Every file listed exists, and every one of them is read.
-    default_wazuh = raw_dir / f"{scenario}_wazuh.json"
-    default_aminer = raw_dir / f"{scenario}_aminer.json"
-    resolved_wazuh = wazuh_path or default_wazuh
-    resolved_aminer = aminer_path or default_aminer
+    resolved_wazuh = wazuh_path or raw_dir / f"{scenario}_wazuh.json"
+    resolved_aminer = aminer_path or raw_dir / f"{scenario}_aminer.json"
     named = [
         pair
         for pair in (
@@ -682,14 +574,10 @@ def resolve_alert_files(
         )
         if pair[0].exists()
     ]
-    # --wazuh-file and --aminer-file name the export to read, so the directory
-    # around them is not consulted at all
     explicit = {WAZUH_FAMILY: wazuh_path, AMINER_FAMILY: aminer_path}
     if named and any(path is not None for path in explicit.values()):
         return sort_alert_files(named)
 
-    # read the head of each json file and let its format say which detector wrote
-    # it, so an export is found whatever the file happens to be called
     found = (
         sorted(raw_dir.glob("*.json"), key=lambda path: path.name)
         if raw_dir.is_dir() else []
@@ -701,19 +589,15 @@ def resolve_alert_files(
     ]
 
     if named:
-        # the convention names a file per family and says nothing about a third,
-        # so a suricata eve.json beside <company>_wazuh.json is still read
         covered = {family for _, family in named}
-        # a named file whose first line sniffs as a third family was listed
-        # twice, which read it twice and shifted the positional label join
         chosen = {path for path, _ in named}
         return sort_alert_files(named + [
             pair for pair in sniffed
             if pair[1] not in covered and pair[0] not in chosen
         ])
 
-    # an explicit path that does not exist is a typo worth reporting, so the
-    # family it named is not filled in from the directory instead
+    # an explicit path that does not exist is a typo worth reporting, so the family
+    # it named is not filled in from the directory instead
     usable = [pair for pair in sniffed if explicit.get(pair[1]) is None]
     if usable:
         return sort_alert_files(usable)
@@ -733,8 +617,6 @@ def resolve_alert_files(
 
 def read_family_record(record: dict, family: str) -> tuple[dict, str] | None:
     if family == AMINER_FAMILY:
-        # a mixed export or a miner-shaped line can reach here, so validate the
-        # miner's own blocks per record. The envelope is the export's.
         analysis = record.get("AnalysisComponent")
         log_data = record.get("LogData")
         if not isinstance(analysis, dict) or not isinstance(log_data, dict):
@@ -748,22 +630,16 @@ def read_family_record(record: dict, family: str) -> tuple[dict, str] | None:
         return record, "aminer"
     if family == SURICATA_FAMILY:
         wrapped = as_wrapped_suricata(record)
-        # eve.json interleaves flow, dns, tls and stats lines with the alerts
         return (wrapped, "suricata") if wrapped is not None else None
     detector = classify_wazuh_record(record)
     return (record, detector) if detector else None
 
 
 def suricata_fingerprint(record: dict) -> tuple:
-    # wazuh's decoder writes every eve number back as a string, so the forwarded
-    # copy has to compare equal to the line suricata wrote itself
     data = record.get("data") or {}
     alert = data.get("alert") or {}
 
     def number(value: object) -> object:
-        # an alert field is attacker-influenced: "inf" overflows int(), a nested
-        # object is unhashable, and either would take the whole ingest down. A
-        # value that is not a plain number keeps its own text instead.
         if isinstance(value, (dict, list, set, tuple)):
             return repr(value)
         try:
@@ -781,15 +657,19 @@ def suricata_fingerprint(record: dict) -> tuple:
     )
 
 
+def load_event_labels(csv_dir: Path, scenario: str) -> list[str]:
+    with (csv_dir / f"{scenario}_alerts.txt").open(encoding="utf-8") as fh:
+        reader = csv.reader(fh)
+        next(reader)
+        return ["" if row[6] == "-" else row[6] for row in reader]
+
+
 def label_offsets(files: Sequence[tuple[Path, str]]) -> dict[Path, int]:
-    # labels are positional per file, so a file's own labels start after every
-    # line of every file the csv counted before it
     ordered = sorted(files, key=lambda pair: LABEL_ORDER.index(pair[1]))
     offsets: dict[Path, int] = {}
     offset = 0
     for index, (path, _) in enumerate(ordered):
         offsets[path] = offset
-        # counting the last file would read it twice for an offset nobody uses
         if index + 1 < len(ordered):
             with path.open(encoding="utf-8-sig", errors="replace") as fh:
                 offset += sum(1 for _ in fh)
@@ -806,45 +686,32 @@ def iter_normalized_rows(
     aminer_file: Path | None = None,
     files: Sequence[tuple[Path, str]] | None = None,
 ) -> Iterator[dict]:
-    # a caller that has already resolved the directory can hand the files back,
-    # which is how `check` samples a share of each of them
     resolved = (
         list(files) if files is not None
         else resolve_alert_files(raw_dir, scenario, wazuh_file, aminer_file)
     )
-    # an unseen company has no label file, so it carries no attack windows
     windows = load_attack_windows(labels_path, scenario) if labels_path else []
     inventory = load_inventory(inventory_path)
 
     event_labels: list[str] | None = None
     offsets: dict[Path, int] = {}
     if event_csv_dir is not None:
-        from core.event_labels import load_scenario_labels
-        _, _, _, event_labels = load_scenario_labels(event_csv_dir, scenario)
+        event_labels = load_event_labels(event_csv_dir, scenario)
         offsets = label_offsets(resolved)
 
-    # a wazuh agent that tails /var/log/suricata/eve.json forwards the same alert
-    # the file already holds, so with both in the directory it arrives twice. Two
-    # copies in one file are two events the sensor logged; only the second file
-    # is a duplicate, and that is the only case worth the memory of a key set.
-    sources = [f for _, f in resolved if f in (WAZUH_FAMILY, SURICATA_FAMILY)]
-    watch_duplicates = len(sources) > 1
-    # counted, not a set: suricata logs the same signature twice on a burst, and
-    # russellmitchell holds 26 such alerts. A set let one copy in the first file
-    # erase every copy in the second, so a burst quietly shrank to one alert.
+    # a wazuh agent that tails eve.json forwards the alert the sensor's own file
+    # already holds. Only a copy in a later file is a duplicate, and the counts
+    # keep a burst of identical alerts in one file intact.
+    watch_duplicates = sum(
+        family in (WAZUH_FAMILY, SURICATA_FAMILY) for _, family in resolved
+    ) > 1
     seen: Counter[tuple] = Counter()
 
-    # a log line is attacker-influenced, so one bad byte anywhere in a 45MB export
-    # would otherwise take the whole ingest down with a UnicodeDecodeError. The
-    # replacement character still parses as JSON and still counts as one line, so
-    # the event-label join stays aligned.
     for path, family in resolved:
         offset = offsets.get(path, 0)
         mine: Counter[tuple] = Counter()
         with path.open(encoding="utf-8-sig", errors="replace") as fh:
             for position, line in enumerate(fh):
-                # a concatenated export often carries a blank line between parts;
-                # position still advances, so the event-label join stays aligned
                 record = read_alert_record(line, path, position)
                 if record is None:
                     continue
@@ -854,7 +721,6 @@ def iter_normalized_rows(
                 parsed, detector = alert
                 if watch_duplicates and detector == "suricata":
                     fingerprint = suricata_fingerprint(parsed)
-                    # drop only as many copies as an earlier file already gave
                     if seen[fingerprint] > mine[fingerprint]:
                         mine[fingerprint] += 1
                         continue
@@ -868,30 +734,6 @@ def iter_normalized_rows(
         seen += mine
 
 
-def iter_normalized_chunks(
-    raw_dir: Path,
-    labels_path: Path | None,
-    scenario: str,
-    inventory_path: Path,
-    event_csv_dir: Path | None = None,
-    chunk_rows: int = CHUNK_ROWS,
-    wazuh_file: Path | None = None,
-    aminer_file: Path | None = None,
-) -> Iterator[pd.DataFrame]:
-    columns = _normalized_columns(event_csv_dir is not None)
-    batch: list[dict] = []
-    for row in iter_normalized_rows(
-        raw_dir, labels_path, scenario, inventory_path, event_csv_dir,
-        wazuh_file, aminer_file,
-    ):
-        batch.append(row)
-        if len(batch) >= chunk_rows:
-            yield pd.DataFrame(batch, columns=columns)
-            batch = []
-    if batch:
-        yield pd.DataFrame(batch, columns=columns)
-
-
 def normalize_scenario(
     raw_dir: Path,
     labels_path: Path | None,
@@ -901,16 +743,20 @@ def normalize_scenario(
     wazuh_file: Path | None = None,
     aminer_file: Path | None = None,
 ) -> pd.DataFrame:
-    chunks = list(
-        iter_normalized_chunks(
-            raw_dir, labels_path, scenario, inventory_path, event_csv_dir,
-            wazuh_file=wazuh_file, aminer_file=aminer_file,
-        )
-    )
+    columns = COLUMNS + ["event_label"] if event_csv_dir is not None else COLUMNS
+    chunks: list[pd.DataFrame] = []
+    batch: list[dict] = []
+    for row in iter_normalized_rows(
+        raw_dir, labels_path, scenario, inventory_path, event_csv_dir,
+        wazuh_file, aminer_file,
+    ):
+        batch.append(row)
+        if len(batch) >= CHUNK_ROWS:
+            chunks.append(pd.DataFrame(batch, columns=columns))
+            batch = []
+    if batch:
+        chunks.append(pd.DataFrame(batch, columns=columns))
     if not chunks:
-        return finalize_normalized_frame(
-            pd.DataFrame([], columns=_normalized_columns(event_csv_dir is not None))
-        )
+        return finalize_normalized_frame(pd.DataFrame([], columns=columns))
     frame = chunks[0] if len(chunks) == 1 else pd.concat(chunks, ignore_index=True)
-    del chunks
     return finalize_normalized_frame(frame)

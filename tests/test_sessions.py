@@ -5,10 +5,11 @@ import unittest
 import numpy as np
 import pandas as pd
 
+from bench.evaluate import daily_queue
 from core.features import build_session_feature_matrix, fit_session_feature_schema
 from core.inventory import Asset, Inventory
 from core.sessions import build_families, build_sessions
-from core.triage_policy import daily_queue, enrich_alerts
+from core.triage_policy import enrich_alerts
 
 
 def inventory() -> Inventory:
@@ -28,7 +29,6 @@ def alerts() -> pd.DataFrame:
         "rule_groups": ["auth", "auth;policy", "", ""],
         "entity_in_inventory": [True] * 4,
         "event_label": ["", "brute_force", "", ""],
-        "window_id": [-1, 0, -1, -1],
     })
 
 
@@ -36,65 +36,42 @@ class SessionTests(unittest.TestCase):
     def test_session_closes_only_after_more_than_600_seconds_of_silence(self):
         # the gap is a strict greater-than, so alerts exactly 600 s apart stay
         # one burst and the 601 s step up to 1201.0 is what opens a new one
-        sessions = build_sessions(alerts(), "demo", inventory(), gap_s=600.0)
+        sessions = build_sessions(alerts(), "demo", inventory())
 
         self.assertEqual(len(sessions), 3)
         self.assertEqual(list(sessions["size"]), [2, 1, 1])
         self.assertEqual(list(sessions["start"]), [0.0, 1201.0, 1300.0])
 
     def test_session_keeps_labels_roles_and_alert_provenance_out_of_features(self):
-        # the CLI slices the alert table by alert_rows and evaluation counts
-        # labelled_windows, so both ride on the session beside the features
+        # the CLI slices the alert table by alert_rows, so it rides on the session
+        # beside the features
         sessions = build_sessions(alerts(), "demo", inventory())
         first = sessions.iloc[0]
 
         self.assertTrue(bool(first["positive"]))
-        self.assertEqual(first["labelled_windows"], frozenset({0}))
-        self.assertEqual(first["event_categories"], frozenset({"brute_force"}))
         self.assertEqual(first["asset_roles"], ("intranet", "servers"))
         self.assertEqual(first["alert_rows"], [0, 1])
 
-        # and out of the matrix: labelled_windows is ground truth, alert_rows
-        # is a position in one company's file, and asset_roles reaches the
-        # forest as the role_ block rather than as the tuple itself
+        # and out of the matrix: alert_rows is a position in one company's file,
+        # and asset_roles reaches the forest as the role_ block rather than as
+        # the tuple itself
         X = build_session_feature_matrix(
             sessions, fit_session_feature_schema(sessions)
         )
-        for column in ("labelled_windows", "asset_roles", "alert_rows"):
+        for column in ("asset_roles", "alert_rows"):
             with self.subTest(column=column):
                 self.assertIn(column, sessions.columns)
                 self.assertNotIn(column, X.columns)
         self.assertIn("role_servers", X.columns)
 
-    def test_session_keeps_temporal_windows_without_calling_them_strict(self):
-        # an alert inside an attack window with no event_label is only a time
-        # overlap, so window 1 lands there and labelled_windows stays empty
-        marked_alerts = alerts()
-        marked_alerts.loc[2, "window_id"] = 1
-
-        sessions = build_sessions(marked_alerts, "demo", inventory())
-        unlabelled_session = sessions.iloc[1]
-
-        self.assertIn("temporal_overlap_windows", sessions)
-        self.assertEqual(unlabelled_session["labelled_windows"], frozenset())
-        self.assertEqual(
-            unlabelled_session["temporal_overlap_windows"],
-            frozenset({1}),
-        )
-
     def test_live_unlabelled_alerts_can_still_be_grouped(self):
-        # a client feed has no event_label or window_id column at all, so
-        # build_sessions fills both in rather than raising a KeyError
-        live_alerts = alerts().drop(columns=["event_label", "window_id"])
+        # a client feed has no event_label column at all, so build_sessions
+        # treats every session as unlabelled rather than raising a KeyError
+        live_alerts = alerts().drop(columns=["event_label"])
 
         sessions = build_sessions(live_alerts, "live-batch", inventory())
 
         self.assertFalse(sessions["positive"].any())
-        self.assertTrue(sessions["labelled_windows"].map(len).eq(0).all())
-        self.assertIn("temporal_overlap_windows", sessions)
-        self.assertTrue(
-            sessions["temporal_overlap_windows"].map(len).eq(0).all()
-        )
 
     def test_categorical_entity_ids_keep_inventory_roles(self):
         # normalize hands entity_id back as a category to save memory, and the
@@ -147,7 +124,6 @@ class SessionTests(unittest.TestCase):
                     "rule_groups": "",
                     "entity_in_inventory": True,
                     "event_label": "",
-                    "window_id": -1,
                 }]),
             ],
             ignore_index=True,
@@ -184,24 +160,6 @@ class FamilyTests(unittest.TestCase):
         self.assertEqual(rule_100["alert_category_count"], 2)
         self.assertEqual(rule_100["technique_count"], 1)
         self.assertEqual(rule_100["rule_group_count"], 2)
-
-    def test_family_unions_temporal_windows_from_all_children(self):
-        # coverage is scored on the family an analyst opens, so a child that
-        # only overlaps window 1 still contributes it to the parent
-        marked_alerts = alerts()
-        marked_alerts.loc[2, "window_id"] = 1
-        sessions = build_sessions(marked_alerts, "demo", inventory())
-        sessions["ranking_score"] = [0.4, 0.9, 0.7]
-
-        families = build_families(sessions)
-        rule_100 = families[families["rule_id"].eq("100")].iloc[0]
-
-        self.assertIn("temporal_overlap_windows", families)
-        self.assertEqual(rule_100["labelled_windows"], frozenset({0}))
-        self.assertEqual(
-            rule_100["temporal_overlap_windows"],
-            frozenset({0, 1}),
-        )
 
 
 def session_rows() -> pd.DataFrame:
@@ -345,6 +303,7 @@ class QueueTests(unittest.TestCase):
         # the budget is spent per day, so one loud day cannot swallow the slots
         # the next day needs and each day gets its own two picks
         families = pd.DataFrame({
+            "scenario": ["demo"] * 5,
             "day": [1, 1, 1, 2, 2],
             "ranking_score": [0.7, 0.9, 0.8, 0.2, 0.6],
             "evidence_probability": [0.8, 0.95, 0.9, 0.3, 0.7],
@@ -362,6 +321,7 @@ class QueueTests(unittest.TestCase):
         # evidence_probability is Platt output for display, so retuning the
         # calibrator can never reorder what an analyst opens first
         families = pd.DataFrame({
+            "scenario": ["demo"] * 2,
             "day": [1, 1],
             "ranking_score": [0.9, 0.8],
             "evidence_probability": [0.1, 0.99],
@@ -377,6 +337,7 @@ class QueueTests(unittest.TestCase):
         # a forest voting over 300 trees produces equal scores often, so the
         # order has to be fully determined or two runs print different queues
         families = pd.DataFrame({
+            "scenario": ["demo"] * 3,
             "day": [1, 1, 1],
             "ranking_score": [0.5, 0.5, 0.5],
             "start": [20.0, 10.0, 10.0],

@@ -1,13 +1,6 @@
-"""Turn alert sessions into numbers a classifier can learn from.
-
-Entity, rule and alert-name identity never become features, so a model trained
-on one company cannot recognise another by name.
-
-Public API:
-    standardize_severity(detector_source, severity) -> shared 0-1 scale
-    fit_session_feature_schema(sessions)            -> schema from training data
-    build_session_feature_matrix(sessions, schema)  -> numeric matrix
-"""
+# Turns sessions into the numeric matrix the forest reads. Entity and alert-name
+# identity never become features, so a model trained on one company cannot
+# recognise another by name.
 
 from __future__ import annotations
 
@@ -17,8 +10,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-# a run stores each family's re-ranker contributions as numeric columns under
-# this prefix; it lives here so the read commands find it without sklearn
+# lives here so the read commands find it without importing sklearn
 CONTRIBUTION_PREFIX = "contribution_"
 
 SESSION_NUMERIC_FEATURES = (
@@ -36,8 +28,6 @@ SESSION_NUMERIC_FEATURES = (
 SUPPORTED_DETECTOR_ORDER = ("wazuh", "suricata", "aminer")
 SCHEMA_INDEX_NAMES = ("detector_source", "rule_id")
 
-# one warning per detector name per process, so a 36k-row frame does not report
-# the same missing scale once per batch
 _UNSCALED_DETECTORS_WARNED: set[str] = set()
 
 
@@ -70,9 +60,6 @@ def standardize_severity(
     suricata = detector_source.eq("suricata")
     standardized[wazuh] = (severity[wazuh] / 15.0).clip(0, 1)
     standardized[suricata] = ((4.0 - severity[suricata]) / 3.0).clip(0, 1)
-    # the midpoint is a decision for aminer and an accident for anyone else: a
-    # client detector nobody mapped keeps every one of its alerts at 0.5, which
-    # ranks plausibly and is therefore easy to miss. Say the name once.
     unscaled = {
         str(name)
         for name in detector_source[~(wazuh | suricata)].unique()
@@ -89,8 +76,6 @@ def standardize_severity(
 
 
 def fit_session_feature_schema(sessions: pd.DataFrame) -> SessionFeatureSchema:
-    # counted over a session's actual alerts rather than its carried key, so the
-    # schema is the same whether or not the key happens to separate detectors
     counts: dict[tuple[str, str], int] = {}
     for pairs in sessions["pair_counts"]:
         for pair, count in pairs:
@@ -119,10 +104,6 @@ def build_session_feature_matrix(
     schema: SessionFeatureSchema,
 ) -> pd.DataFrame:
     X = sessions[list(SESSION_NUMERIC_FEATURES)].astype(float).copy()
-
-    # every alert votes with its own share of the session. A key that separates
-    # detectors gives one pair per session, so each of these collapses to the
-    # one-hot and the single lookup it replaces.
     known = schema.rule_counts.to_dict()
     shares = {detector: np.zeros(len(sessions)) for detector in schema.detectors}
     rarity = np.zeros(len(sessions))

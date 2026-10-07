@@ -19,6 +19,8 @@ from bench import evaluate as bench_eval
 from bench.evaluate import (
     _out_of_fold_families,
     _out_of_fold_reranker_scores,
+    _with_ground_truth,
+    add_window_ids,
     build_bundle,
     evaluate_scenarios,
     prepare_sessions,
@@ -50,7 +52,7 @@ from core.incidents import (
     unresolved_hosts,
 )
 from core.inventory import Asset, Inventory
-from core.scenario_eval import add_window_ids, refit_forest
+from core.scenario_eval import refit_forest
 from meerkat.cli import _validate_retrain_result
 
 
@@ -79,23 +81,6 @@ class ClassifierTests(unittest.TestCase):
 
         self.assertTrue(np.all(np.diff(probabilities) > 0))
         self.assertTrue(np.all((probabilities >= 0) & (probabilities <= 1)))
-
-    def test_explanation_reports_active_globally_important_features(self):
-        # a feature sitting at 0 on this row is skipped, so an all-zero column
-        # never turns up among the reasons shown beside a family
-        X = pd.DataFrame({
-            "volume": [0.0, 0.1, 0.9, 1.0],
-            "role_server": [0.0, 0.0, 1.0, 1.0],
-            "inactive": [0.0, 0.0, 0.0, 0.0],
-        })
-        model = classifier.fit_model(
-            X, pd.Series([False, False, True, True]), n_estimators=10, seed=0
-        )
-
-        explanation = classifier.explain_session(model, X.iloc[-1], top=2)
-
-        self.assertLessEqual(len(explanation), 2)
-        self.assertTrue(all(name != "inactive" for name, _, _ in explanation))
 
     def test_model_round_trip(self):
         # every read command reopens a bundle skops wrote, so a reloaded forest
@@ -441,9 +426,7 @@ class ScenarioEvaluationTests(unittest.TestCase):
     def test_prepare_sessions_keeps_scenarios_separate(self):
         # session ids are prefixed with the company, so concatenating seven
         # training tables cannot collide two companies' session 0
-        sessions = prepare_sessions(
-            self.frames, self.inventories, self.windows, gap_s=600.0
-        )
+        sessions = prepare_sessions(self.frames, self.inventories)
 
         self.assertEqual(set(sessions), {"alpha", "beta", "gamma"})
         self.assertTrue(
@@ -451,19 +434,23 @@ class ScenarioEvaluationTests(unittest.TestCase):
                 for name, table in sessions.items())
         )
 
-    def test_prepare_sessions_uses_timestamps_for_temporal_overlap(self):
+    def test_ground_truth_separates_labelled_alerts_from_time_overlap(self):
         # quiet-a fires inside the attack window with no event_label of its
         # own, so it counts as a temporal overlap and nothing stricter
-        sessions = prepare_sessions(
-            self.frames, self.inventories, self.windows, gap_s=600.0
-        )
-        quiet = sessions["alpha"].loc[
-            sessions["alpha"]["rule_id"].eq("quiet-a")
-        ].iloc[0]
+        sessions = prepare_sessions(self.frames, self.inventories)
+        marked = add_window_ids(self.frames["alpha"], self.windows["alpha"])
+        quiet = sessions["alpha"].loc[sessions["alpha"]["rule_id"].eq("quiet-a")]
+        positive = sessions["alpha"].loc[sessions["alpha"]["rule_id"].eq("positive")]
 
-        self.assertIn("temporal_overlap_windows", sessions["alpha"])
-        self.assertEqual(quiet["labelled_windows"], frozenset())
-        self.assertEqual(quiet["temporal_overlap_windows"], frozenset({0}))
+        quiet_truth = _with_ground_truth(quiet, marked).iloc[0]
+        positive_truth = _with_ground_truth(positive, marked).iloc[0]
+
+        self.assertEqual(quiet_truth["labelled_windows"], frozenset())
+        self.assertEqual(quiet_truth["temporal_overlap_windows"], frozenset({0}))
+        self.assertEqual(quiet_truth["labelled_alert_count"], 0)
+        self.assertEqual(positive_truth["labelled_windows"], frozenset({0}))
+        self.assertEqual(positive_truth["labelled_alert_count"], 1)
+        self.assertEqual(positive_truth["event_categories"], frozenset({"attack"}))
 
     def test_window_id_follows_normalized_phase_at_shared_boundary(self):
         # two attack phases can share an instant, so the alert's own
@@ -557,12 +544,10 @@ class ScenarioEvaluationTests(unittest.TestCase):
     def test_reranker_child_scores_are_out_of_fold(self):
         # the re-ranker has to see the kind of child scores it will meet at
         # inference, so no fold's forest trained on the scenario it scores
-        sessions = prepare_sessions(
-            self.frames, self.inventories, self.windows, gap_s=600.0
-        )
+        sessions = prepare_sessions(self.frames, self.inventories)
         fitted_on = []
 
-        def fake_score(fold, n_estimators, seed, pu_c=None):
+        def fake_score(fold, n_estimators, seed):
             fitted_on.append(
                 (fold.test_scenario, set(fold.training_scenarios))
             )
@@ -628,10 +613,10 @@ class ScenarioEvaluationTests(unittest.TestCase):
 class ClientRetrainingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        frames, inventories, windows = {}, {}, {}
+        frames, inventories = {}, {}
         for day, name in enumerate(("alpha", "beta", "gamma"), start=1):
-            frames[name], inventories[name], windows[name] = scenario_data(name, day)
-        cls.sessions = prepare_sessions(frames, inventories, windows, gap_s=600.0)
+            frames[name], inventories[name], _ = scenario_data(name, day)
+        cls.sessions = prepare_sessions(frames, inventories)
         cls.bundle = build_bundle(cls.sessions, n_estimators=10, seed=0)
         cls.client = cls.sessions["alpha"]
 
@@ -640,23 +625,12 @@ class ClientRetrainingTests(unittest.TestCase):
         prior.iloc[:positives] = 0.5
         return prior
 
-    def test_a_thin_label_set_is_refused_rather_than_fitted(self):
-        # two bagged sessions would still fit a forest that looks trained, so
-        # the floor of ten is checked before anything is fitted
-        with self.assertRaises(ValueError) as caught:
-            refit_forest(
-                self.bundle, self.client, self._prior(2),
-                n_estimators=10, min_positives=10,
-            )
-        self.assertIn("at least 10", str(caught.exception))
-
     def test_a_retrain_keeps_the_shipped_coefficients_and_refits_the_scaler(self):
         # those coefficients came from out-of-fold folds across eight
         # environments, which one client cannot reproduce. The scaler is the
         # part that moves, because a client forest scores lower and tighter.
         retrained = refit_forest(
-            self.bundle, self.client, self._prior(3),
-            n_estimators=10, min_positives=1,
+            self.bundle, self.client, self._prior(3), n_estimators=10,
         )
         shipped = self.bundle.reranker.model.named_steps
         refitted = retrained.reranker.model.named_steps
@@ -667,8 +641,7 @@ class ClientRetrainingTests(unittest.TestCase):
         # the calibrator is defined across environments too, so the client
         # keeps the same object and its confidence stays comparable
         retrained = refit_forest(
-            self.bundle, self.client, self._prior(3),
-            n_estimators=10, min_positives=1,
+            self.bundle, self.client, self._prior(3), n_estimators=10,
         )
         self.assertIs(retrained.calibrator, self.bundle.calibrator)
 
@@ -692,18 +665,6 @@ class ClientRetrainingTests(unittest.TestCase):
         prior = self._prior(3)
         local, positives = fit_local_reranker(self.client, prior, n_estimators=5)
         self.assertIsNone(local)
-
-    def test_pu_training_reaches_the_bundle(self):
-        # pu_c has to reach the fit rather than be accepted and dropped. This
-        # used to compare the two forests' predictions, which is not a property
-        # the code guarantees: with ten trees on this fixture they can agree,
-        # and whether they do changed between scikit-learn versions.
-        with patch.object(
-            bench_eval, "fit_model_pu", wraps=bench_eval.fit_model_pu
-        ) as pu_fit:
-            build_bundle(self.sessions, n_estimators=10, seed=0, pu_c=0.5)
-        self.assertTrue(pu_fit.called)
-        self.assertEqual(pu_fit.call_args.kwargs["c"], 0.5)
 
 
 # The client retraining path: soft labels from bags, a rescaled re-ranker and a

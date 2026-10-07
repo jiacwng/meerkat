@@ -1,36 +1,43 @@
-"""Meerkat command line: triage a company, work the queue.
-
-This one file holds the whole CLI: the run directory and review state, the
-terminal rendering, and the commands. The analyst commands are triage, queue,
-inspect and review; the support commands are check, inventory, retrain, drift,
-runs, export navigator, export queue and demo. Every command that reads a run
-prints which run it used, and none of them score data again: triage writes a run
-directory once and the rest reopen it.
-"""
+# The meerkat command line. triage scores a company's alerts into a saved run
+# directory; queue, attack, runs, inspect, review, browse and export reopen it
+# without scoring again. pull, inventory and check prepare the input, retrain
+# and drift compare the model with the client's data, demo scores the bundled
+# example, completion prints a shell script, and bare `meerkat` says where
+# things stand. Order in this file: run state, rendering, commands, parser.
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import errno
+import getpass
 import hashlib
+import html
+import io
 import json
+import math
+import os
 import pickle
 import re
+import shutil
 import sys
+import tomllib
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import cached_property
 from itertools import islice
 from pathlib import Path
+from typing import NoReturn
 
 import numpy as np
 import pandas as pd
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+from rich.terminal_theme import DIMMED_MONOKAI
 
 from core.attack_mapping import (
-    DETECTION_MAPPINGS,
     TACTIC_ORDER,
     HostChain,
     export_navigator_layer,
@@ -60,7 +67,6 @@ from core.normalize import (
     WAZUH_FAMILY,
     AlertFileError,
     iter_normalized_rows,
-    load_attack_windows,
     normalize_scenario,
     resolve_alert_files,
 )
@@ -71,35 +77,23 @@ from meerkat import __version__
 
 DEFAULT_MODEL = Path("models/meerkat_bundle.skops")
 DEFAULT_RUNS = Path("runs")
-# a plain convention a company can adopt, kept clear of data/raw so commands
-# run outside the benchmark directory
 DEFAULT_INPUT = Path("alerts")
 
-# the bundled demo is the only part of the product that knows the benchmark's
-# layout. Nothing else may use these.
 DEMO_COMPANY = "russellmitchell"
 DEMO_RAW = Path("data/raw")
-DEMO_LABELS = Path("data/labels.csv")
 DEMO_INVENTORY_DIR = Path("data/raw/inventory")
-DEMO_EVENT_CSV = Path("data/raw/alerts_csv")
 REVIEW_DECISIONS = ("escalate", "benign", "false-positive")
 DETECTOR_LABELS = {"wazuh": "Wazuh", "suricata": "Suricata", "aminer": "AMiner"}
-# what `check` calls each kind of file: a wazuh export republishes suricata too
 FAMILY_LABELS = {
     WAZUH_FAMILY: "wazuh and suricata",
     SURICATA_FAMILY: "suricata",
     AMINER_FAMILY: "log anomaly",
 }
 
-# rich parses [tags] in anything printed, and a Table cell does not strip ESC.
-# Rule names, hostnames, user agents, urls and commands are all written by whoever
-# triggered the alert, so an unescaped one can raise MarkupError and take out the
-# whole queue view, draw a live hyperlink inside evidence text, or clear the
-# analyst's terminal mid-table. Every alert-derived string goes through safe().
-# C0 and C1, plus the bidi overrides. rich strips neither, and a bidi
-# override reorders the line it lands in and knocks the table's columns out
-# of alignment. Built from code points so the pattern never has to appear as
-# literal control characters in this file.
+# Rule names, hostnames, user agents and commands are written by whoever triggered
+# the alert. rich parses [tags] in anything printed and strips no control
+# character, so every alert-derived string goes through safe(): it removes C0, C1
+# and the bidi overrides and escapes markup.
 _CONTROL_RANGES = (
     (0x00, 0x09), (0x0B, 0x20), (0x7F, 0xA0), (0x202A, 0x202F), (0x2066, 0x206A)
 )
@@ -116,62 +110,52 @@ def safe(value: object) -> str:
     return escape(_CONTROL.sub("", str(value)))
 
 
-class _Console(Console):
-    # rich exits 1 when the reader closes the pipe; `queue | head` is a normal exit
-    def on_broken_pipe(self) -> None:
-        import os
-        self.quiet = True
+def _exit_on_closed_pipe() -> NoReturn:
+    # `queue | head` closes the pipe early, which is an exit and not a crash. The
+    # interpreter flushes stdout again on exit, so point it at devnull first.
+    with contextlib.suppress(OSError, ValueError):
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        raise SystemExit(0)
+    raise SystemExit(0)
+
+
+class _Console(Console):
+    def on_broken_pipe(self) -> None:
+        self.quiet = True
+        _exit_on_closed_pipe()
 
 
 console = _Console()
 # errors go to stderr so `meerkat queue --json | jq` stays parseable when one fails
 errors = _Console(stderr=True)
 
-# 0 success, 2 argparse usage. A script has to tell a refused retrain, which is the
-# gate working, apart from a crash, so declining gets its own code.
 EXIT_ERROR = 1
 EXIT_DECLINED = 3
 EXIT_DRIFT = 4
 
 
-# --------------------------------------------------------------------------
-# run state: the run directory, display handles and the review log
-#
-# A run is one triage of one company. Its scored families, sessions and alerts
-# live in a run directory so the read commands reopen it without scoring again,
-# and a pointer file names the latest good run. Handles like F003 and S1 are
-# run-local labels an analyst can type; the canonical family_id is kept beside
-# every handle so a review or export always records which run it came from.
-# --------------------------------------------------------------------------
+def _fail(message: str) -> NoReturn:
+    errors.print(message)
+    raise SystemExit(EXIT_ERROR)
+
 
 def detector_label(detector_source: str) -> str:
     return DETECTOR_LABELS.get(str(detector_source), str(detector_source))
 
 
-def _canon_handle(text: str) -> str:
-    # F1, f1 and F001 are the same address
+def canon_handle(text: str) -> str:
     match = re.fullmatch(r"([A-Za-z])0*(\d+)", str(text).strip())
     return f"{match.group(1).upper()}{match.group(2)}" if match else str(text).upper()
 
 
-# browse's prompt loop offers its own navigation, so it switches these off
 hints_enabled = True
 
 
 def _hint(text: str) -> None:
-    # navigation help is decoration, so it goes to stderr and never into a pipe
     if hints_enabled:
         errors.print(f"[dim]{text}[/dim]")
 
 
 def _page(render, disabled: bool) -> None:
-    # long output pages on a tty when a pager exists; pipes and json never page.
-    # git's less flags: colors render, short output quits instantly, the screen
-    # is not cleared on exit so the view stays in the scrollback
-    import os
-    import shutil
     if (not disabled and sys.stdout.isatty()
             and (os.environ.get("PAGER") or shutil.which("less"))):
         os.environ.setdefault("LESS", "-FRX")
@@ -186,20 +170,13 @@ def _now_iso() -> str:
 
 
 def new_run_id(company: str) -> str:
-    stamp = f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{datetime.now(UTC).microsecond // 1000:03d}"
-    return safe_run_id(f"{company}-{stamp}")
+    now = datetime.now(UTC)
+    return safe_run_id(f"{company}-{now:%Y%m%d-%H%M%S}-{now.microsecond // 1000:03d}")
 
 
-def _family_label(alert_slice: pd.DataFrame) -> str:
-    names = alert_slice["name"].astype(str)
-    names = names[names.ne("")]
-    return str(names.mode().iloc[0]) if len(names) else ""
-
-
-def _host_label(alert_slice: pd.DataFrame, entity_id: str) -> str:
-    hosts = alert_slice["host"].astype(str)
-    hosts = hosts[hosts.ne("")]
-    return str(hosts.mode().iloc[0]) if len(hosts) else str(entity_id)
+def _most_common(values: np.ndarray, fallback: str) -> str:
+    values = values[values != ""]
+    return str(pd.Series(values).mode().iloc[0]) if len(values) else fallback
 
 
 def decorate_families(
@@ -207,20 +184,20 @@ def decorate_families(
     alerts: pd.DataFrame,
     budget: int,
 ) -> pd.DataFrame:
-    # order every scored family the way the queue orders them, then hand out
-    # F1, F2... down that list so the top-K per day keep the low numbers
     ordered = queue_order(families).reset_index(drop=True)
     ordered["handle"] = [f"F{i + 1}" for i in range(len(ordered))]
     ordered["queue_rank"] = ordered.groupby("day", sort=False).cumcount()
     ordered["in_queue"] = ordered["queue_rank"] < budget
 
-    titles, hosts = [], []
-    for rows, entity in zip(ordered["alert_rows"], ordered["entity_id"]):
-        alert_slice = alerts.iloc[list(rows)]
-        titles.append(_family_label(alert_slice))
-        hosts.append(_host_label(alert_slice, entity))
-    ordered["title"] = titles
-    ordered["host_label"] = hosts
+    names = alerts["name"].astype(str).to_numpy()
+    hosts = alerts["host"].astype(str).to_numpy()
+    ordered["title"] = [
+        _most_common(names[list(rows)], "") for rows in ordered["alert_rows"]
+    ]
+    ordered["host_label"] = [
+        _most_common(hosts[list(rows)], str(entity))
+        for rows, entity in zip(ordered["alert_rows"], ordered["entity_id"])
+    ]
     return ordered
 
 
@@ -233,28 +210,29 @@ class RunState:
     sessions: pd.DataFrame
     alerts: pd.DataFrame
 
+    def queue_families(self, show_all: bool) -> pd.DataFrame:
+        return self.families if show_all else self.families[self.families["in_queue"]]
+
     def family_by_handle(self, handle: str) -> pd.Series:
-        wanted = _canon_handle(handle)
-        stored = self.families["handle"].map(_canon_handle)
-        match = self.families[stored.eq(wanted)]
+        match = self.families[self.families["handle"].eq(canon_handle(handle))]
         if match.empty:
             raise KeyError(f"no family {handle} in run {self.run_id}")
         return match.iloc[0]
 
     def session_handles(self, family: pd.Series) -> list[tuple[str, str]]:
-        # S1 is the family's best-scoring child, in the order build_families
-        # already sorted the children
         return [
             (f"S{position + 1}", session_id)
             for position, session_id in enumerate(family["child_session_ids"])
         ]
 
+    def session_row(self, session_id: str) -> pd.Series:
+        return self.sessions[self.sessions["session_id"].eq(session_id)].iloc[0]
+
     def session_by_handle(self, family: pd.Series, handle: str) -> pd.Series:
-        pairs = dict(self.session_handles(family))
-        session_id = pairs.get(_canon_handle(handle))
+        session_id = dict(self.session_handles(family)).get(canon_handle(handle))
         if session_id is None:
             raise KeyError(f"no session {handle} under {family['handle']}")
-        return self.sessions[self.sessions["session_id"].eq(session_id)].iloc[0]
+        return self.session_row(session_id)
 
     def family_alerts(self, family: pd.Series) -> pd.DataFrame:
         return self.alerts.iloc[list(family["alert_rows"])]
@@ -287,8 +265,6 @@ class RunState:
         return found
 
     def related_families(self, family: pd.Series) -> pd.DataFrame:
-        # other families on the same host, closest in time first, so a
-        # corroborating detector on the same machine is one glance away
         same = self.families[
             self.families["entity_id"].eq(family["entity_id"])
             & self.families["handle"].ne(family["handle"])
@@ -299,9 +275,9 @@ class RunState:
         return same.sort_values("gap_s", kind="stable")
 
 
-# every (module, name) a saved run asks for under pandas 2 and 3. A whole
-# package is never trusted: numpy ships an exec wrapper and pandas a pickle
-# reader with no allowlist.
+# A run is unpickled on open, so only the (module, name) pairs a saved pandas frame
+# needs are allowed. A whole package is never trusted: numpy ships an exec wrapper
+# and pandas a pickle reader with no allowlist.
 _PICKLE_ALLOWED = frozenset({
     ("builtins", "slice"),
     ("numpy", "dtype"),
@@ -328,9 +304,6 @@ _PICKLE_ALLOWED = frozenset({
 
 
 class _RunUnpickler(pickle.Unpickler):
-    # a run holds plain pandas frames, so refuse any class outside them. A bare
-    # unpickle of a hostile run file would run its code, the way load_model
-    # refuses to for a model bundle.
     def find_class(self, module, name):
         if (module, name) in _PICKLE_ALLOWED:
             return super().find_class(module, name)
@@ -359,8 +332,6 @@ def save_run(
     alerts: pd.DataFrame,
 ) -> Path:
     directory = runs_dir / run_id
-    # each triage writes into its own directory, so two in the same millisecond
-    # stay separate
     suffix = 1
     while (directory / "run.json").exists():
         suffix += 1
@@ -373,8 +344,6 @@ def save_run(
         json.dumps({**meta, "run_id": run_id, "saved_at": _now_iso()}, indent=2),
         encoding="utf-8",
     )
-    # only now the run is complete, so the latest pointer never names a run that
-    # failed halfway through
     (runs_dir / "latest.txt").write_text(directory.name, encoding="utf-8")
     return directory
 
@@ -390,8 +359,6 @@ def load_run(runs_dir: Path, run_id: str | None = None) -> RunState:
     if run_id is None:
         run_id = latest_run_id(runs_dir)
     if run_id is None:
-        # DEFAULT_RUNS is relative to the working directory, so this finds only
-        # a run written here
         where = "" if runs_dir.is_absolute() else (
             f"\n{runs_dir} is resolved from the current directory, so a run "
             "written from somewhere else is not found here. Pass --runs-dir "
@@ -403,7 +370,7 @@ def load_run(runs_dir: Path, run_id: str | None = None) -> RunState:
     directory = runs_dir / safe_run_id(run_id)
     if not (directory / "run.json").exists():
         raise FileNotFoundError(f"run {run_id} not found in {runs_dir}")
-    state = RunState(
+    return RunState(
         run_id=run_id,
         directory=directory,
         meta=json.loads((directory / "run.json").read_text(encoding="utf-8")),
@@ -411,17 +378,11 @@ def load_run(runs_dir: Path, run_id: str | None = None) -> RunState:
         sessions=_read_run_frame(directory / "sessions.pkl"),
         alerts=_read_run_frame(directory / "alerts.pkl"),
     )
-    if "handle" in state.families.columns:
-        state.families["handle"] = state.families["handle"].map(_canon_handle)
-    return state
 
 
-# A session's identity has to survive a retrain. session_id is a row counter, the
-# S1 handles are ordered by score, and the start timestamp moves when one late
-# alert lands inside a 600 s gap and merges two bursts. Even the session's row
-# offsets move, because they are positions inside whatever range that run covered.
-# What does not move is where each alert sits in the raw detector file, so the key
-# digests those.
+# A session's identity has to survive a retrain, and its id, handle, start and row
+# offsets all move with it. Where each alert sits in the raw detector file does not,
+# so the key digests that.
 def session_label_key(session: pd.Series, alerts: pd.DataFrame) -> str:
     rows = alerts.iloc[list(session["alert_rows"])]
     origin = sorted(
@@ -448,7 +409,6 @@ def append_review(
 ) -> dict:
     _BANDS_CACHE.pop(directory.parent, None)
     if analyst is None:
-        import getpass
         try:
             analyst = getpass.getuser()
         except OSError:
@@ -461,7 +421,6 @@ def append_review(
         "handle": handle,
         "decision": decision,
         "note": note,
-        # absent means the decision covers every session in the family
         "session_key": session_key,
         "session_handle": session_handle,
     }
@@ -481,40 +440,39 @@ def review_history(directory: Path) -> list[dict]:
         try:
             entry = json.loads(line)
         except json.JSONDecodeError:
-            # a hand-edited line must not take the whole history down
             continue
-        if not isinstance(entry, dict):
-            continue
-        if isinstance(entry.get("family_id"), str) and isinstance(
-            entry.get("decision"), str
-        ):
+        if isinstance(entry, dict) and isinstance(
+            entry.get("family_id"), str
+        ) and isinstance(entry.get("decision"), str):
             entries.append(entry)
     return entries
 
 
-def current_reviews(directory: Path) -> dict[str, dict]:
-    # the last line wins, earlier lines stay as an audit trail. A session entry
-    # stands for the family only until a family-wide decision exists.
-    latest: dict[str, dict] = {}
+def replay_reviews(directory: Path) -> dict[str, dict[str, dict]]:
+    # the audit log replayed in order: per family, the last entry covering each
+    # scope. "*" is a family-wide decision, which replaces every earlier session
+    # entry; a session entry covers only its own session.
+    covered: dict[str, dict[str, dict]] = {}
     for entry in review_history(directory):
-        family_id = entry["family_id"]
-        held = latest.get(family_id)
-        if entry.get("session_handle") and held and not held.get("session_handle"):
-            continue
-        latest[family_id] = entry
-    return latest
+        scopes = covered.setdefault(entry["family_id"], {})
+        handle = entry.get("session_handle")
+        if handle:
+            scopes.pop(handle, None)
+            scopes[handle] = entry
+        else:
+            covered[entry["family_id"]] = {"*": entry}
+    return covered
 
 
-# --------------------------------------------------------------------------
-# rendering
-#
-# The queue is a table. A family or session is a summary followed by evidence
-# panels. Panels follow one fixed order borrowed from ECS/OCSF and are keyed on
-# normalized field meaning, never on the detector, so a new detector mapped into
-# the same fields needs no new panel here.
-# --------------------------------------------------------------------------
+def current_reviews(directory: Path) -> dict[str, dict]:
+    # one decision per family: the family-wide one if it exists, otherwise the
+    # latest session entry
+    return {
+        family_id: scopes.get("*") or list(scopes.values())[-1]
+        for family_id, scopes in replay_reviews(directory).items()
+    }
 
-# panel title -> normalized fields it reads, in the fixed render order
+
 EVIDENCE_PANELS = (
     ("Finding / Detection", (
         ("rule", "rule_id"),
@@ -590,8 +548,6 @@ def fmt_span(seconds: float) -> str:
 
 
 def _http_outcome(alert_slice: pd.DataFrame) -> str:
-    # the analyst is asking whether anything got through, so lead with that and
-    # keep the codes as detail. Only HTTP carries success in the schema.
     if "http_status" not in alert_slice.columns:
         return ""
     statuses = pd.to_numeric(
@@ -620,7 +576,10 @@ def _http_outcome(alert_slice: pd.DataFrame) -> str:
     )
 
 
-def _values(alert_slice: pd.DataFrame, field: str, cap: int = 6) -> str | None:
+VALUES_SHOWN = 6
+
+
+def _values(alert_slice: pd.DataFrame, field: str) -> str | None:
     if field not in alert_slice.columns:
         return None
     column = alert_slice[field]
@@ -634,7 +593,7 @@ def _values(alert_slice: pd.DataFrame, field: str, cap: int = 6) -> str | None:
         rendered = list(dict.fromkeys(column.tolist()))
     if not rendered:
         return None
-    shown = rendered[:cap]
+    shown = rendered[:VALUES_SHOWN]
     extra = len(rendered) - len(shown)
     text = ", ".join(shown)
     return text + (f"  (+{extra} more; --distinct {field})" if extra else "")
@@ -672,8 +631,6 @@ def _render_host_chain(run: RunState, family: pd.Series) -> None:
     )
 
 
-# one phrase per re-ranker input. The three child session scores share one, so
-# they merge into a single line and cannot fill every slot on their own.
 SESSION_EVIDENCE = "session evidence"
 FAMILY_FEATURE_PHRASES = {
     "child_score_max": SESSION_EVIDENCE,
@@ -696,13 +653,10 @@ TOP_CONTRIBUTIONS = 5
 def feature_phrase(name: str) -> str:
     if name.startswith("role_"):
         return f"asset role {name[len('role_'):]}"
-    # a bundle with another schema still renders, under the column's own name
     return FAMILY_FEATURE_PHRASES.get(name, name)
 
 
 def family_contributions(family: pd.Series) -> list[tuple[str, float]]:
-    # a role the host lacks still pushes through the scaler's mean, which reads
-    # as a reason about a role it does not have, so those stay out
     roles = set(family.get("asset_roles") or ())
     merged: dict[str, float] = {}
     for column, value in family.items():
@@ -740,51 +694,35 @@ def _render_why(family: pd.Series) -> None:
     console.print("  [dim]share of the total push on this family's score[/dim]\n")
 
 
-# fewer reviewed families than this in a band and no rate is shown: three
-# escalations out of four is too thin to read as a rate
 ESC_BAND_FLOOR = 5
 
 
 def escalation_bands(runs_dir: Path) -> dict[float, tuple[int, int]]:
-    # the analyst's own reviews across every run, keyed by score band. The
-    # deployed model never trained on the days it scored, so these pairs are
-    # out of sample by construction.
+    # the analyst's own reviews across every run, keyed by score band. The deployed
+    # model never trained on the days it scored, so these are out of sample.
     bands: dict[float, tuple[int, int]] = {}
     if not runs_dir.is_dir():
         return bands
     for directory in sorted(runs_dir.iterdir()):
+        families_pkl = directory / "families.pkl"
         try:
-            families_pkl = directory / "families.pkl"
             if not directory.is_dir() or not families_pkl.exists():
                 continue
-            history = review_history(directory)
-        except OSError:
-            # a directory that cannot be read is not a run
-            continue
-        if not history:
-            continue
-        state: dict[str, dict[str, str]] = {}
-        for entry in history:
-            family_id = entry["family_id"]
-            scopes = state.setdefault(family_id, {})
-            if entry.get("session_handle"):
-                scopes[entry["session_handle"]] = entry["decision"]
-            else:
-                state[family_id] = {"*": entry["decision"]}
-        try:
+            reviewed = replay_reviews(directory)
+            if not reviewed:
+                continue
             families = _read_run_frame(families_pkl)
-        except Exception:
-            # an unreadable old run must not take down the queue
+        except (OSError, ValueError):
             continue
         scores = dict(zip(families["family_id"], families["ranking_score"]))
-        for family_id, scopes in state.items():
+        for family_id, scopes in reviewed.items():
             if family_id not in scores:
                 continue
             band = round(float(scores[family_id]), 1)
-            reviewed, escalated = bands.get(band, (0, 0))
+            count, escalated = bands.get(band, (0, 0))
             bands[band] = (
-                reviewed + 1,
-                escalated + int("escalate" in scopes.values()),
+                count + 1,
+                escalated + any(e["decision"] == "escalate" for e in scopes.values()),
             )
     return bands
 
@@ -820,8 +758,6 @@ QUEUE_COLUMNS = (
     ("esc%", {"justify": "right", "no_wrap": True, "min_width": 7}),
     ("review", {"no_wrap": True, "min_width": 6}),
 )
-# a terminal too narrow for every column drops these first, then the next set;
-# each stays one `inspect` away
 QUEUE_DROPPED_WHEN_NARROW = (
     (),
     ("why", "chain", "esc%"),
@@ -879,16 +815,8 @@ def render_queue(
     console.print(table)
 
 
-def _criticality(families: pd.DataFrame) -> pd.Series:
-    # a run saved before 1.2 has no column, which reads as every asset unset
-    if "criticality" not in families.columns:
-        return pd.Series(UNSET, index=families.index)
-    return families["criticality"].astype(str)
-
-
 def _criticality_label(family: pd.Series) -> str:
-    value = str(family.get("criticality", UNSET))
-    return "" if value == UNSET else value
+    return "" if family["criticality"] == UNSET else family["criticality"]
 
 
 def family_heading(family: pd.Series) -> str:
@@ -910,7 +838,6 @@ def render_family(
     console.print("[bold cyan]Overview[/bold cyan]")
     console.print(f"  entity        : {safe(family['entity_id'])}")
     if family["asset_roles"]:
-        # canonicalize() keeps only CANONICAL_ROLES, so these are ours
         console.print(f"  asset         : {', '.join(family['asset_roles'])}")
     if _criticality_label(family):
         console.print(f"  criticality   : {family['criticality']}")
@@ -933,7 +860,6 @@ def render_family(
     if len(rule_peers) >= 3:
         median = float(rule_peers["alert_count"].median())
         ratio = int(family["alert_count"]) / median
-        # a comparison near 1x says nothing, so it only speaks when it differs
         if ratio >= 2 or ratio <= 0.5:
             ratio_text = f"{ratio:.1f}".rstrip("0").rstrip(".")
             volume_comparison = (
@@ -962,8 +888,6 @@ def render_family(
 
     _render_why(family)
 
-    # the session list always shows, so S1 is never a secret; a single session's
-    # evidence is the family's evidence, so its panels render right here too
     _render_session_list(run, family)
     if len(run.session_handles(family)) == 1:
         _render_panels(alert_slice)
@@ -981,7 +905,7 @@ def _render_session_list(run: RunState, family: pd.Series) -> None:
     table.add_column("alerts", justify="right")
     table.add_column("score", justify="right")
     for handle, session_id in run.session_handles(family):
-        session = run.sessions[run.sessions["session_id"].eq(session_id)].iloc[0]
+        session = run.session_row(session_id)
         table.add_row(
             handle,
             fmt_time(session["start"]),
@@ -1066,7 +990,6 @@ def render_session(
     _render_panels(alert_slice)
 
 
-# within a session the rule is constant, so these are where variance lives
 WHAT_DIFFERS = (
     "web_request", "http_status", "source_port", "destination_port",
     "dns_query", "tls_server_name", "command", "destination_user",
@@ -1091,7 +1014,6 @@ def _technique_text(technique_ids) -> str:
     for technique_id in sorted(technique_ids):
         name = technique_name(technique_id)
         if name != technique_id:
-            # only ids the ATT&CK lookup vets become links; alert text never does
             url = ATTACK_URL.format(technique_id.replace(".", "/"))
             parts.append(f"[link={url}]{safe(technique_id)}[/link] {safe(name)}")
         else:
@@ -1141,7 +1063,6 @@ def render_alert_rows(alert_slice: pd.DataFrame, limit: int) -> None:
 
     total = len(alert_slice)
     if total > limit + 3:
-        # a giant shows its head and its tail, so its shape is one glance
         for position in range(limit - 3):
             row(position)
         table.add_row("...", f"{total - limit} more", "", "", *([""] if differs else []), "")
@@ -1153,7 +1074,6 @@ def render_alert_rows(alert_slice: pd.DataFrame, limit: int) -> None:
     console.print(table)
 
 
-# internals of the run table, never facts about the alert itself
 ALERT_DETAIL_SKIP = ("alert_rows", "source_file", "source_position")
 
 
@@ -1201,34 +1121,25 @@ def render_distinct(alert_slice: pd.DataFrame, field: str) -> None:
     console.print(table)
 
 
-# --------------------------------------------------------------------------
-# shared command helpers
-# --------------------------------------------------------------------------
-
-# call this early, before reading alerts, so a missing bundle fails fast.
-#
-# a missing bundle has two causes that need different answers. DEFAULT_MODEL is
-# relative to the working directory, and the installed package leaves out
-# models/, so running outside a clone points at an empty path. inside a clone
-# the file is usually there, waiting on git lfs pull.
+# a missing bundle has two causes: models/ is not part of the installed package, so
+# running outside a clone points at an empty path, and inside a clone the file is
+# usually waiting on git lfs pull
 def _require_bundle(path: Path) -> None:
     if path.exists():
         return
     if path == DEFAULT_MODEL and not path.parent.exists():
-        errors.print(
+        _fail(
             f"[red]no model at {safe(path)}[/red]\n"
             f"{safe(path)} is relative to the current directory, and models/ is not "
             "part of the installed package. Run from a clone of the "
             "repository, or pass --model with the path to a bundle.\n"
         )
-    else:
-        errors.print(
-            f"[red]no model at {safe(path)}[/red]\n"
-            "if this is a clone, the bundle is stored with Git LFS:\n\n"
-            "  git lfs install\n"
-            "  git lfs pull\n"
-        )
-    raise SystemExit(EXIT_ERROR)
+    _fail(
+        f"[red]no model at {safe(path)}[/red]\n"
+        "if this is a clone, the bundle is stored with Git LFS:\n\n"
+        "  git lfs install\n"
+        "  git lfs pull\n"
+    )
 
 
 def _load_bundle(path: Path):
@@ -1236,18 +1147,12 @@ def _load_bundle(path: Path):
     # imported here so the read commands never pay for the ML stack
     from core.classifier import UntrustedBundleError, load_model, read_provenance
 
-    # sklearn warns once per estimator on a version mismatch, which is a wall of
-    # noise for one fact
-    # the refusal message is the control that tells the user what is wrong with
-    # the file, so it has to arrive as a message. An uncaught exception already
-    # exits 1, so catching it here keeps the exit code and drops the traceback.
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
             bundle = load_model(path)
         except UntrustedBundleError as error:
-            errors.print(f"[red]{safe(str(error))}[/red]")
-            raise SystemExit(EXIT_ERROR) from None
+            _fail(f"[red]{safe(str(error))}[/red]")
     mismatched = [
         w for w in caught
         if "InconsistentVersionWarning" in type(w.message).__name__
@@ -1260,9 +1165,6 @@ def _load_bundle(path: Path):
             "It loads and scores normally; retrain with `meerkat retrain` to "
             "silence this."
         )
-    # the hash says the file is unchanged since it was written. It says nothing
-    # about who wrote it, and an attacker shipping a bundle ships a matching
-    # sidecar too, so say what it does and does not prove.
     record = read_provenance(path)
     if record is None:
         errors.print(
@@ -1282,8 +1184,7 @@ def _load_run(args) -> RunState:
     try:
         return load_run(args.runs_dir, args.run)
     except (FileNotFoundError, ValueError) as error:
-        errors.print(f"[red]{safe(error)}[/red]")
-        raise SystemExit(EXIT_ERROR)
+        _fail(f"[red]{safe(error)}[/red]")
 
 
 def _announce_run(run: RunState) -> None:
@@ -1295,26 +1196,16 @@ def _announce_run(run: RunState) -> None:
     )
 
 
-def _is_lfs_pointer(path: Path) -> bool:
-    with path.open("rb") as file:
-        return file.read(64).startswith(b"version https://git-lfs")
-
-
 def _require(path: Path, what: str) -> None:
     if not path.exists():
-        errors.print(f"[red]{what} not found:[/red] {safe(path)}")
-        raise SystemExit(EXIT_ERROR)
+        _fail(f"[red]{what} not found:[/red] {safe(path)}")
 
 
 def _aminer_name(args, company: str) -> str:
-    # the miner file is absent here, so name the one that was looked for
-    named = getattr(args, "aminer_file", None)
-    return named.name if named else f"{company}_aminer.json"
+    return args.aminer_file.name if args.aminer_file else f"{company}_aminer.json"
 
 
 def _open_company(args) -> str:
-    # triage, check and drift all start on the same three questions: is the
-    # input there, what is this company called, and where is its inventory
     require_directory(args.input)
     company = resolve_company(args)
     if args.inventory is None:
@@ -1323,65 +1214,51 @@ def _open_company(args) -> str:
     return company
 
 
+def _role_problems(inventory, source: str) -> dict[str, str]:
+    problems = {}
+    unroled = inventory.assets_without_roles()
+    if unroled:
+        share = len(unroled) / max(len(set(inventory.assets_by_ip.values())), 1)
+        problems["assets_without_roles"] = (
+            f"[yellow]{len(unroled)} assets have no roles[/yellow] "
+            f"({share:.0%} of {source}). Their alerts are scored "
+            "without the role features. `meerkat inventory --list-roles` lists "
+            "the vocabulary."
+        )
+    if inventory.unknown_roles:
+        problems["unknown_roles"] = (
+            f"[yellow]unrecognised roles[/yellow] "
+            f"{', '.join(safe(role) for role in inventory.unknown_roles)} "
+            "contribute nothing to a model trained elsewhere"
+        )
+    return problems
+
+
 def _score_company(
     bundle,
     input_dir: Path,
     company: str,
     inventory_path: Path,
-    labels_path: Path | None,
-    event_csv_dir: Path | None,
-    wazuh_file: Path | None = None,
-    aminer_file: Path | None = None,
-    attack_mappings: dict = DETECTION_MAPPINGS,
+    wazuh_file: Path | None,
+    aminer_file: Path | None,
+    attack_mappings: dict,
 ):
-    from core.scenario_eval import add_window_ids, score_sessions
+    from core.scenario_eval import score_sessions
 
     inventory = load_inventory(inventory_path)
-    # an inventory scaffolded by `meerkat inventory` has empty roles until
-    # someone fills them in, and the queue shifts quietly, so report it
-    unroled = inventory.assets_without_roles()
-    if unroled:
-        share = len(unroled) / max(len(set(inventory.assets_by_ip.values())), 1)
-        console.print(
-            f"[yellow]{len(unroled)} assets have no roles[/yellow] "
-            f"({share:.0%} of {inventory_path.name}). Their alerts are scored "
-            "without the role features. `meerkat inventory --list-roles` lists "
-            "the vocabulary."
-        )
-    if inventory.unknown_roles:
-        # an unrecognised role is whatever the inventory file said, which is why
-        # `check` escapes this same value
-        console.print(
-            f"[yellow]unrecognised roles[/yellow] "
-            f"{', '.join(safe(role) for role in inventory.unknown_roles)} "
-            "contribute nothing to a model trained elsewhere"
-        )
-    windows = (
-        load_attack_windows(labels_path, company)
-        if labels_path and labels_path.exists()
-        else []
-    )
+    for message in _role_problems(inventory, inventory_path.name).values():
+        console.print(message)
     frame = normalize_scenario(
-        input_dir, labels_path, company, inventory_path, event_csv_dir,
+        input_dir, None, company, inventory_path,
         wazuh_file=wazuh_file, aminer_file=aminer_file,
     )
     if frame.empty:
-        errors.print(
-            "[red]no alerts parsed[/red]  the files resolved but held no rows"
-        )
-        raise SystemExit(EXIT_ERROR)
-    # mark the window ids once so the session alert_rows and the saved alert
-    # table share one row order and line up by position
-    marked = add_window_ids(frame, windows)
-    sessions = build_sessions(marked, company, inventory)
-    alerts = enrich_alerts(marked, attack_mappings)
+        _fail("[red]no alerts parsed[/red]  the files resolved but held no rows")
+    sessions = build_sessions(frame, company, inventory)
+    alerts = enrich_alerts(frame, attack_mappings)
     scored_sessions, families = score_sessions(bundle, sessions)
     return scored_sessions, families, alerts
 
-
-# --------------------------------------------------------------------------
-# triage
-# --------------------------------------------------------------------------
 
 def _file_record(path: Path | None) -> dict | None:
     if path is None:
@@ -1392,20 +1269,27 @@ def _file_record(path: Path | None) -> dict | None:
     }
 
 
+def _resolve_files(
+    input_dir: Path,
+    company: str,
+    wazuh_file: Path | None = None,
+    aminer_file: Path | None = None,
+):
+    try:
+        return resolve_alert_files(input_dir, company, wazuh_file, aminer_file)
+    except FileNotFoundError as error:
+        _fail(f"[red]{safe(error)}[/red]")
+
+
 def cmd_triage(args) -> None:
     _require_bundle(args.model)
     company = _open_company(args)
-    try:
-        alert_files = resolve_alert_files(
-            args.input, company, args.wazuh_file, args.aminer_file
-        )
-    except FileNotFoundError as error:
-        errors.print(f"[red]{safe(error)}[/red]")
-        raise SystemExit(EXIT_ERROR)
+    alert_files = _resolve_files(
+        args.input, company, args.wazuh_file, args.aminer_file
+    )
     bundle = _load_bundle(args.model)
     mappings = _load_or_exit(
-        with_local_mappings, getattr(args, "attack_mappings", None),
-        "the local ATT&CK mapping",
+        with_local_mappings, args.attack_mappings, "the local ATT&CK mapping"
     )
     if not any(family == AMINER_FAMILY for _, family in alert_files):
         console.print(
@@ -1416,13 +1300,10 @@ def cmd_triage(args) -> None:
     console.print(f"scoring {company} with {args.model}")
     scored_sessions, families, alerts = _score_company(
         bundle, args.input, company, args.inventory,
-        getattr(args, "labels", None), getattr(args, "event_csv_dir", None),
-        wazuh_file=args.wazuh_file, aminer_file=args.aminer_file,
-        attack_mappings=mappings,
+        args.wazuh_file, args.aminer_file, mappings,
     )
     families = decorate_families(families, alerts, args.budget)
 
-    run_id = new_run_id(company)
     meta = {
         "company": company,
         "budget": args.budget,
@@ -1432,88 +1313,94 @@ def cmd_triage(args) -> None:
         "families": int(len(families)),
         "sessions": int(len(scored_sessions)),
         "alerts": int(len(alerts)),
-        "attack_mappings": _file_record(getattr(args, "attack_mappings", None)),
+        "attack_mappings": _file_record(args.attack_mappings),
     }
     directory = save_run(
-        args.runs_dir, run_id, meta, families, scored_sessions, alerts
+        args.runs_dir, new_run_id(company), meta, families, scored_sessions, alerts
     )
     console.print(f"[green]saved run[/green] {directory}")
     _print_queue(
-        load_run(args.runs_dir, run_id), show_all=False,
-        host=None, detector=None, rule=None, review_state=None,
+        RunState(directory.name, directory, meta, families, scored_sessions, alerts),
+        QueueFilter(),
     )
 
 
-# --------------------------------------------------------------------------
-# queue
-# --------------------------------------------------------------------------
+@dataclass
+class QueueFilter:
+    show_all: bool = False
+    host: str | None = None
+    detector: str | None = None
+    rule: str | None = None
+    review_state: str | None = None
+    day: str | None = None
+    criticality: str | None = None
+    tactic: str | None = None
 
-def _select_families(
-    run, show_all, host, detector, rule, review_state, day=None,
-    criticality=None, tactic=None,
-):
-    # a filter narrows the whole run, not only the day's top-K, so "show me
-    # everything on this host" reaches families below the queue line too. --day
-    # is a different thing: it picks one day and keeps that day's top-K.
-    full_scope = show_all or any(
-        [host, detector, rule, review_state, criticality, tactic]
-    )
-    families = run.families if full_scope else run.families[run.families["in_queue"]]
-    if day:
+    @property
+    def whole_run(self) -> bool:
+        # a filter narrows the whole run, not only each day's top-K, so it reaches
+        # families below the queue line too; --day picks one day and keeps its top-K
+        return self.show_all or any((
+            self.host, self.detector, self.rule, self.review_state,
+            self.criticality, self.tactic,
+        ))
+
+
+def _select_families(run: RunState, filters: QueueFilter) -> pd.DataFrame:
+    families = run.queue_families(filters.whole_run)
+    if filters.day:
         dates = families["day"].map(fmt_date)
-        if day not in set(dates):
-            # stderr, or `queue --json | jq` gets 46 bytes of prose on stdout and
-            # fails to parse, which is the contract stated at the top of this file
-            errors.print(
-                f"[red]no day {safe(day)} in this run[/red]  available: "
+        if filters.day not in set(dates):
+            _fail(
+                f"[red]no day {safe(filters.day)} in this run[/red]  available: "
                 + ", ".join(sorted(set(run.families["day"].map(fmt_date))))
             )
-            raise SystemExit(EXIT_ERROR)
-        families = families[dates.eq(day)]
-    if host:
+        families = families[dates.eq(filters.day)]
+    if filters.host:
         families = families[
-            families["host_label"].astype(str).eq(host)
-            | families["entity_id"].astype(str).eq(host)
+            families["host_label"].astype(str).eq(filters.host)
+            | families["entity_id"].astype(str).eq(filters.host)
         ]
-    if detector:
-        families = families[families["detector_source"].astype(str).eq(detector)]
-    if rule:
+    if filters.detector:
         families = families[
-            families["rule_id"].astype(str).str.contains(rule, case=False, regex=False)
+            families["detector_source"].astype(str).eq(filters.detector)
         ]
-    if criticality:
-        families = families[_criticality(families).eq(criticality)]
-    if tactic:
-        mapped = [tactic in run.family_tactics(family) for _, family in families.iterrows()]
+    if filters.rule:
+        families = families[
+            families["rule_id"].astype(str).str.contains(
+                filters.rule, case=False, regex=False
+            )
+        ]
+    if filters.criticality:
+        families = families[families["criticality"].astype(str).eq(filters.criticality)]
+    if filters.tactic:
+        mapped = [
+            filters.tactic in run.family_tactics(family)
+            for _, family in families.iterrows()
+        ]
         families = families[pd.Series(mapped, index=families.index, dtype=bool)]
-    if review_state:
-        reviews = current_reviews(run.directory)
-        keep = {
+    if filters.review_state:
+        decided = {
             family_id
-            for family_id, entry in reviews.items()
-            if entry["decision"] == review_state
+            for family_id, entry in current_reviews(run.directory).items()
+            if entry["decision"] == filters.review_state
         }
-        families = families[families["family_id"].isin(keep)]
+        families = families[families["family_id"].isin(decided)]
     return families
 
 
-def _print_queue(
-    run, show_all, host, detector, rule, review_state, day=None,
-    criticality=None, tactic=None,
-) -> None:
+def _print_queue(run: RunState, filters: QueueFilter) -> None:
     _announce_run(run)
-    families = _select_families(
-        run, show_all, host, detector, rule, review_state, day, criticality, tactic,
+    scope = (
+        "all scored families" if filters.whole_run
+        else f"top {run.meta['budget']} per day"
     )
-    reviews = current_reviews(run.directory)
-    if show_all or any([host, detector, rule, review_state, criticality, tactic]):
-        scope = "all scored families"
-    else:
-        scope = f"top {run.meta['budget']} per day"
-    if day:
-        scope += f", {day}"
+    if filters.day:
+        scope += f", {filters.day}"
     render_queue(
-        run.with_chain(families), reviews, f"Review queue ({scope})",
+        run.with_chain(_select_families(run, filters)),
+        current_reviews(run.directory),
+        f"Review queue ({scope})",
         bands_for(run.directory.parent),
     )
 
@@ -1526,7 +1413,6 @@ QUEUE_JSON_FIELDS = (
 
 
 def _alert_record(row: pd.Series) -> dict:
-    # sets do not serialize and carry no order, so they leave as sorted lists
     return {
         field: sorted(value) if isinstance(value, (set, frozenset)) else value
         for field, value in row.items()
@@ -1561,24 +1447,17 @@ def _tactic_name(text: str) -> str:
 def cmd_queue(args) -> None:
     run = _load_run(args)
     if args.budget:
-        # K never reaches the model, so a saved run can be cut anywhere. Every
-        # family already carries its queue_rank from triage.
         run.families["in_queue"] = run.families["queue_rank"] < args.budget
         run.meta["budget"] = args.budget
+    filters = QueueFilter(
+        args.all, args.host, args.detector, args.rule, args.review_state,
+        args.day, args.criticality, args.tactic,
+    )
     if args.json:
-        families = _select_families(
-            run, args.all, args.host, args.detector, args.rule,
-            args.review_state, args.day, getattr(args, "criticality", None),
-            getattr(args, "tactic", None),
-        )
+        families = _select_families(run, filters)
         print(json.dumps(queue_records(run, families), indent=2, default=str))
         return
-    # a status table never pages: less -X repaints a scrolled table in
-    # fragments, and the terminal's own scrollback already holds long output
-    _print_queue(
-        run, args.all, args.host, args.detector, args.rule, args.review_state,
-        args.day, getattr(args, "criticality", None), getattr(args, "tactic", None),
-    )
+    _print_queue(run, filters)
     top = run.families[run.families["in_queue"]]
     if len(top):
         _hint(
@@ -1610,8 +1489,6 @@ def attack_rules(run: RunState) -> list[dict]:
             "detector": detector,
             "rule_id": rule_id,
             "alerts": len(part),
-            # one rule has one source, except native tags that only some
-            # alerts of it carry
             "source": "native" if "native" in sources else sources.pop(),
             "techniques": [
                 {"id": technique, "name": technique_name(technique)}
@@ -1690,23 +1567,21 @@ def cmd_runs(args) -> None:
     console.print(table)
 
 
-# --------------------------------------------------------------------------
-# inspect
-# --------------------------------------------------------------------------
+def _check_field(field: str, columns: set[str]) -> None:
+    if field not in columns:
+        _fail(
+            f"[red]unknown field {safe(repr(field))}[/red]  fields: "
+            f"{', '.join(sorted(columns))}"
+        )
+
 
 def _parse_pairs(pairs, columns) -> list[tuple[str, str]]:
     parsed = []
     for pair in pairs or []:
         if "=" not in pair:
-            errors.print(f"[red]expected field=value, got {safe(repr(pair))}[/red]")
-            raise SystemExit(EXIT_ERROR)
+            _fail(f"[red]expected field=value, got {safe(repr(pair))}[/red]")
         field, value = pair.split("=", 1)
-        if field not in columns:
-            errors.print(
-                f"[red]unknown field {safe(repr(field))}[/red]  fields: "
-                f"{', '.join(sorted(columns))}"
-            )
-            raise SystemExit(EXIT_ERROR)
+        _check_field(field, columns)
         parsed.append((field, value))
     return parsed
 
@@ -1737,7 +1612,6 @@ def _render_raw(alert_slice, raw_dir: Path, limit: int) -> None:
         if not path.exists():
             console.print(f"[yellow]raw source {safe(path)} not available[/yellow]")
             continue
-        # match ingest: replace invalid utf-8 bytes
         with path.open(encoding="utf-8", errors="replace") as file:
             for index, line in enumerate(file):
                 if index in wanted:
@@ -1755,6 +1629,91 @@ def _render_raw(alert_slice, raw_dir: Path, limit: int) -> None:
                 console.print(safe(line.rstrip()))
 
 
+def _find_family(run: RunState, handle: str) -> pd.Series:
+    try:
+        return run.family_by_handle(handle)
+    except KeyError as error:
+        hint = (
+            "  sessions and alerts live inside a family: `meerkat inspect F1 S1` "
+            "then `... S1 A1`"
+            if canon_handle(handle)[:1] in ("S", "A") else ""
+        )
+        _fail(f"[red]{safe(error.args[0])}[/red]{hint}")
+
+
+def _find_session(run: RunState, family: pd.Series, handle: str) -> pd.Series:
+    try:
+        return run.session_by_handle(family, handle)
+    except KeyError as error:
+        _fail(f"[red]{safe(error.args[0])}[/red]")
+
+
+def alert_position(handle: str) -> int:
+    canon = canon_handle(handle)
+    return int(canon[1:]) if canon[:1] == "A" and canon[1:].isdigit() else 0
+
+
+def _inspect_payload(
+    run: RunState, family: pd.Series, session: pd.Series | None, args
+) -> dict:
+    only_family = run.families[run.families["family_id"].eq(family["family_id"])]
+    sessions = []
+    for handle, session_id in run.session_handles(family):
+        row = run.session_row(session_id)
+        sessions.append({
+            "handle": handle,
+            "start": float(row["start"]),
+            "end": float(row["end"]),
+            "duration_s": float(row["duration_s"]),
+            "alerts": int(row["size"]),
+            "score": float(row["ranking_score"]),
+        })
+    payload = {
+        "run_id": run.run_id,
+        "family": queue_records(run, only_family)[0],
+        "sessions": sessions,
+    }
+    if session is not None:
+        alerts = [
+            {"handle": f"A{position + 1}", **_alert_record(row)}
+            for position, (_, row) in enumerate(run.session_alerts(session).iterrows())
+        ]
+        if args.alert:
+            wanted = canon_handle(args.alert)
+            alerts = [record for record in alerts if record["handle"] == wanted]
+        payload["session"] = canon_handle(args.session)
+        payload["alerts"] = alerts
+    return payload
+
+
+def _inspect_alert(
+    run: RunState, family: pd.Series, session: pd.Series | None, args
+) -> None:
+    if session is None:
+        _fail(
+            "[red]an alert handle needs its session[/red]  "
+            "e.g. `meerkat inspect F3 S1 A2`"
+        )
+    ordered = run.session_alerts(session)
+    session_handle = canon_handle(args.session)
+    position = alert_position(args.alert)
+    if not 1 <= position <= len(ordered):
+        _fail(
+            f"[red]no alert {safe(args.alert)}[/red]  "
+            f"{safe(session_handle)} holds A1..A{len(ordered)}"
+        )
+    render_alert_detail(
+        family, session_handle, f"A{position}", ordered.iloc[position - 1]
+    )
+    if args.raw:
+        _render_raw(ordered.iloc[[position - 1]], _raw_dir_for(run, args), 1)
+    else:
+        _hint(
+            f"next: `meerkat inspect {family['handle']} {session_handle} "
+            f"A{position} --raw` shows the source line as the detector wrote it"
+        )
+
+
 def cmd_inspect(args) -> None:
     run = _load_run(args)
     if not args.json:
@@ -1762,120 +1721,35 @@ def cmd_inspect(args) -> None:
     columns = set(run.alerts.columns)
     wheres = _parse_pairs(args.where, columns)
     excludes = _parse_pairs(args.exclude, columns)
-    if args.distinct and args.distinct not in columns:
-        errors.print(
-            f"[red]unknown field {safe(repr(args.distinct))}[/red]  fields: "
-            f"{', '.join(sorted(columns))}"
-        )
-        raise SystemExit(EXIT_ERROR)
+    if args.distinct:
+        _check_field(args.distinct, columns)
 
-    try:
-        family = run.family_by_handle(args.handle)
-    except KeyError as error:
-        letter = _canon_handle(args.handle)[:1]
-        if letter in ("S", "A"):
-            errors.print(
-                f"[red]{safe(error.args[0])}[/red]  sessions and alerts live inside "
-                "a family: `meerkat inspect F1 S1` then `... S1 A1`"
-            )
-        else:
-            errors.print(f"[red]{safe(error.args[0])}[/red]")
-        raise SystemExit(EXIT_ERROR)
-
-    if args.session:
-        try:
-            session = run.session_by_handle(family, args.session)
-        except KeyError as error:
-            errors.print(f"[red]{safe(error.args[0])}[/red]")
-            raise SystemExit(EXIT_ERROR)
-        alert_slice = run.session_alerts(session)
-    else:
-        session = None
-        alert_slice = run.family_alerts(family)
+    family = _find_family(run, args.handle)
+    session = _find_session(run, family, args.session) if args.session else None
+    alert_slice = (
+        run.family_alerts(family) if session is None else run.session_alerts(session)
+    )
 
     if args.json:
-        payload = {
-            "run_id": run.run_id,
-            "family": queue_records(
-                run,
-                run.families[run.families["family_id"].eq(family["family_id"])],
-            )[0],
-            "sessions": [
-                {
-                    "handle": handle,
-                    "start": float(s["start"]),
-                    "end": float(s["end"]),
-                    "duration_s": float(s["duration_s"]),
-                    "alerts": int(s["size"]),
-                    "score": float(s["ranking_score"]),
-                }
-                for handle, session_id in run.session_handles(family)
-                for s in [
-                    run.sessions[run.sessions["session_id"].eq(session_id)].iloc[0]
-                ]
-            ],
-        }
-        if session is not None:
-            payload["session"] = _canon_handle(args.session)
-            payload["alerts"] = [
-                {"handle": f"A{position + 1}", **_alert_record(row)}
-                for position, (_, row)
-                in enumerate(run.session_alerts(session).iterrows())
-            ]
-            if args.alert:
-                wanted = _canon_handle(args.alert)
-                payload["alerts"] = [
-                    record for record in payload["alerts"]
-                    if record["handle"] == wanted
-                ]
+        payload = _inspect_payload(run, family, session, args)
         print(json.dumps(payload, indent=2, default=str))
         return
-
     if args.alert:
-        if session is None:
-            errors.print(
-                "[red]an alert handle needs its session[/red]  "
-                "e.g. `meerkat inspect F3 S1 A2`"
-            )
-            raise SystemExit(EXIT_ERROR)
-        # handles address the session's own order, so filters never renumber them
-        ordered = run.session_alerts(session)
-        canon = _canon_handle(args.alert)
-        position = int(canon[1:]) if canon[:1] == "A" and canon[1:].isdigit() else 0
-        if not 1 <= position <= len(ordered):
-            errors.print(
-                f"[red]no alert {safe(args.alert)}[/red]  "
-                f"{safe(_canon_handle(args.session))} holds A1..A{len(ordered)}"
-            )
-            raise SystemExit(EXIT_ERROR)
-        alert = ordered.iloc[position - 1]
-        render_alert_detail(
-            family, _canon_handle(args.session), f"A{position}", alert
-        )
-        if args.raw:
-            _render_raw(ordered.iloc[[position - 1]], _raw_dir_for(run, args), 1)
-        else:
-            _hint(
-                f"next: `meerkat inspect {family['handle']} "
-                f"{_canon_handle(args.session)} A{position} --raw` shows the "
-                "source line as the detector wrote it"
-            )
+        _inspect_alert(run, family, session, args)
         return
 
     alert_slice = _apply_filters(alert_slice, wheres, excludes)
-    reviews = current_reviews(run.directory)
-
     if args.distinct:
         render_distinct(alert_slice, args.distinct)
         return
 
+    reviews = current_reviews(run.directory)
     wants_rows = bool(args.alerts or args.raw or wheres or excludes)
+    session_handle = canon_handle(args.session) if args.session else None
 
     def render() -> None:
         if session is not None:
-            render_session(
-                family, _canon_handle(args.session), session, alert_slice
-            )
+            render_session(family, session_handle, session, alert_slice)
         else:
             render_family(run, family, reviews)
         if wants_rows:
@@ -1888,7 +1762,6 @@ def cmd_inspect(args) -> None:
     _page(render, args.no_pager)
 
     if session is not None:
-        session_handle = _canon_handle(args.session)
         _hint(
             f"next: `meerkat inspect {family['handle']} {session_handle} A1` "
             f"opens one alert, `meerkat inspect {family['handle']}` returns to "
@@ -1902,60 +1775,38 @@ def cmd_inspect(args) -> None:
         )
 
 
-# --------------------------------------------------------------------------
-# review
-# --------------------------------------------------------------------------
-
 def cmd_review(args) -> None:
     run = _load_run(args)
-    try:
-        family = run.family_by_handle(args.handle)
-    except KeyError as error:
-        letter = _canon_handle(args.handle)[:1]
-        if letter in ("S", "A"):
-            errors.print(
-                f"[red]{safe(error.args[0])}[/red]  sessions and alerts live inside "
-                "a family: `meerkat inspect F1 S1` then `... S1 A1`"
-            )
-        else:
-            errors.print(f"[red]{safe(error.args[0])}[/red]")
-        raise SystemExit(EXIT_ERROR)
-
-    # Dismissing a family is exact: if nothing in it was an attack, nothing in any
-    # of its sessions was. Escalating one is not, because it only means at least
-    # one burst was malicious, so that direction has to name the burst.
+    family = _find_family(run, args.handle)
     handles = run.session_handles(family)
-    session = None
+    # Dismissing a family is exact: if nothing in it was an attack, nothing in any
+    # of its sessions was. Escalating one only means at least one burst was
+    # malicious, so that direction has to name the burst.
     if args.decision == "escalate" and not args.session:
-        errors.print(
+        _fail(
             f"[red]{family['handle']} holds {len(handles)} sessions[/red]  "
             "escalate needs --session S1 to say which burst was malicious, "
-            "or --session all if the whole family was"
+            "or --session all if the whole family was\n"
+            + "\n".join(f"  {handle}" for handle, _ in handles)
         )
-        for handle, _ in handles:
-            errors.print(f"  {handle}")
-        raise SystemExit(EXIT_ERROR)
 
+    session = None
+    session_handle = None
     if args.session and args.session.lower() != "all":
-        try:
-            session = run.session_by_handle(family, args.session)
-        except KeyError as error:
-            errors.print(f"[red]{safe(error.args[0])}[/red]")
-            raise SystemExit(EXIT_ERROR)
+        session = _find_session(run, family, args.session)
+        session_handle = args.session.upper()
 
     entry = append_review(
         run.directory, run.run_id, family["family_id"], family["handle"],
         args.decision, args.note or "",
-        session_key=(session_label_key(session, run.alerts) if session is not None else None),
-        session_handle=(
-            args.session.upper()
-            if args.session and args.session.lower() != "all"
-            else None
+        session_key=(
+            session_label_key(session, run.alerts) if session is not None else None
         ),
+        session_handle=session_handle,
         analyst=args.analyst,
     )
     scope = (
-        f"{family['handle']}/{args.session.upper()}" if session is not None
+        f"{family['handle']}/{session_handle}" if session is not None
         else family["handle"]
     )
     console.print(
@@ -1967,13 +1818,7 @@ def cmd_review(args) -> None:
     console.print(f"[dim]{safe(family['family_id'])}  run {run.run_id}[/dim]")
 
 
-# --------------------------------------------------------------------------
-# retrain
-# --------------------------------------------------------------------------
-
 def _incident_reach(families, incidents, inventory, budget):
-    # one boolean per incident rather than a count, because the approval test needs
-    # to know WHICH incidents the two models disagree about
     queue = families[families["queue_rank"] < budget]
     reached = []
     for row in incidents.itertuples():
@@ -1991,12 +1836,9 @@ def _incident_reach(families, incidents, inventory, budget):
 
 
 # a two-sided sign test on n same-direction pairs gives p = 2 * 0.5**n, so five
-# pairs reach 0.0625 and six reach 0.031. Below six the comparison cannot call a
-# difference real however many incidents were supplied.
+# pairs reach 0.0625 and six reach 0.031; below six no difference can be called real
 MIN_DISCORDANT = 6
 
-# the local ranking-weight fit reached parity around 15 positive families in
-# the pooled-history measurement; advisory only, never a refusal
 LOCAL_WEIGHTS_COMFORT = 15
 
 
@@ -2038,10 +1880,6 @@ def compare_models(
 ) -> dict:
     from core.scenario_eval import rescale_bundle
 
-    # A client chooses between two things they could deploy: the bundle as
-    # downloaded, or a retrained one. The rescale-only arm is measured so they can
-    # see how much of any gain needed no labels at all, and it is reported rather
-    # than gated on.
     def reach(candidate):
         return incident_reach_for(
             candidate, held, alerts, held_incidents, inventory, budget
@@ -2083,8 +1921,6 @@ def cmd_retrain(args) -> None:
     incidents = _load_or_exit(load_incidents, args.incidents, "the incident records")
     unresolved = unresolved_hosts(incidents, inventory)
     if unresolved:
-        # the host column of the incident CSV, so it is written by whoever
-        # filled in the tickets
         console.print(
             f"[yellow]{len(unresolved)} incident hosts are not in the "
             f"inventory[/yellow]  "
@@ -2140,23 +1976,18 @@ def cmd_retrain(args) -> None:
             f"{args.min_positives} are needed to retrain"
         )
     if failures:
-        # every precondition reports at once, instead of one run per failure
-        for failure in failures:
-            errors.print(f"[red]{safe(failure)}[/red]")
-        raise SystemExit(EXIT_ERROR)
+        _fail("\n".join(f"[red]{safe(failure)}[/red]" for failure in failures))
     # one forest per seed, because a single fit decides approval on a metric coarse
     # enough for seed noise to flip it
     try:
         candidates = [
             refit_forest(
-                bundle, train, prior, n_estimators=args.trees, seed=args.seed + offset,
-                min_positives=args.min_positives,
+                bundle, train, prior, n_estimators=args.trees, seed=args.seed + offset
             )
             for offset in range(args.fits)
         ]
     except ValueError as error:
-        errors.print(f"[red]{safe(error)}[/red]")
-        raise SystemExit(EXIT_ERROR)
+        _fail(f"[red]{safe(error)}[/red]")
 
     verdict = compare_models(
         bundle, candidates, held, alerts, held_incidents, inventory, args.budget
@@ -2173,7 +2004,6 @@ def cmd_retrain(args) -> None:
             f"{len(verdict['passed'])} seeds beat the shipped bundle; "
             f"{verdict['reason']}"
         )
-        # the gate did its job, so this is a decision rather than a failure
         raise SystemExit(EXIT_DECLINED)
 
     retrained = candidates[verdict["median_index"]]
@@ -2199,8 +2029,6 @@ def _contest_ranking_weights(
     retrained, candidates, verdict, train, prior, held, alerts,
     held_incidents, inventory, args,
 ):
-    from dataclasses import replace
-
     from core.scenario_eval import fit_local_reranker
 
     fits = [
@@ -2245,24 +2073,14 @@ def _contest_ranking_weights(
     )
 
 
-# --------------------------------------------------------------------------
-# check: read a bounded sample and answer "will triage work on this"
-#
-# bench/check.py answers a different question, whether the eight benchmark
-# environments are on disk, so almost nothing is shared beyond the idea.
-# --------------------------------------------------------------------------
-
 CHECK_SAMPLE = 5_000
-# above this share of distinct rule ids, the detector is probably numbering each
-# anomaly instead of naming its type, which corrupts rarity and the session key
+# above this share of distinct rule ids the detector probably numbers each anomaly
+# instead of naming its type, which corrupts rarity and the session key
 RULE_CARDINALITY_WARN = 0.5
-
-
 UNMAPPED_SHOWN = 5
 
 
 def _unmapped_rules(frame: pd.DataFrame) -> list[dict]:
-    # a suppressed rule was reviewed and maps to nothing on purpose
     plain = frame[
         ~frame["tactics"].map(bool) & frame["mapping_source"].ne("suppressed")
     ]
@@ -2280,59 +2098,63 @@ def _unmapped_rules(frame: pd.DataFrame) -> list[dict]:
     ]
 
 
-def cmd_check(args) -> None:
-    company = _open_company(args)
-    try:
-        alert_files = resolve_alert_files(
-            args.input, company, args.wazuh_file, args.aminer_file
-        )
-    except FileNotFoundError as error:
-        errors.print(f"[red]{safe(error)}[/red]")
-        raise SystemExit(EXIT_ERROR)
-
-    report: dict = {"environment": company, "files": [], "problems": []}
-    if not args.json:
-        console.print(f"reading up to {args.sample} alerts from {args.input}")
-    for path, family in alert_files:
-        size = path.stat().st_size / 1_000_000
-        label = FAMILY_LABELS[family]
-        report["files"].append(
-            {"name": path.name, "holds": label, "mb": round(size, 1)}
-        )
-        if not args.json:
-            console.print(
-                f"  [green]found[/green] {label:19} {path.name}  {size:.1f} MB"
-            )
-    if not any(family == AMINER_FAMILY for _, family in alert_files):
-        label = FAMILY_LABELS[AMINER_FAMILY]
-        report["missing_detector"] = label
-        if not args.json:
-            console.print(
-                f"  [dim]absent[/dim] {label:19} {_aminer_name(args, company)}"
-            )
-
-    inventory = _load_or_exit(load_inventory, args.inventory, "the inventory")
-    mappings = _load_or_exit(
-        with_local_mappings, getattr(args, "attack_mappings", None),
-        "the local ATT&CK mapping",
-    )
-    # one generator drains the first file before reaching the second, so a flat
-    # sample of a company with 4,056 miner and 32,302 host alerts reports the miner
-    # alone. Take a share from each file instead.
+def _sample_alerts(args, company: str, alert_files, mappings) -> pd.DataFrame:
     per_file = max(1, args.sample // len(alert_files))
     rows = []
     for entry in alert_files:
         rows.extend(islice(
             iter_normalized_rows(
-                args.input, None, company, args.inventory, files=[entry],
+                args.input, None, company, args.inventory, files=[entry]
             ),
             per_file,
         ))
     if not rows:
-        errors.print("[red]no alerts parsed[/red]  the files resolved but held no rows")
-        raise SystemExit(EXIT_ERROR)
+        _fail("[red]no alerts parsed[/red]  the files resolved but held no rows")
+    return enrich_alerts(pd.DataFrame(rows), mappings)
 
-    frame = enrich_alerts(pd.DataFrame(rows), mappings)
+
+def _check_findings(inventory, frame, source: str, report: dict) -> list[tuple[str | None, str]]:
+    findings = list(_role_problems(inventory, source).items())
+    if inventory.unknown_criticalities:
+        findings.append((
+            "unknown_criticality",
+            f"[yellow]unrecognised criticality[/yellow] "
+            f"{', '.join(safe(c) for c in inventory.unknown_criticalities)}  "
+            f"use {', '.join(CRITICALITY_LEVELS)}, or leave it blank",
+        ))
+    uncritical = inventory.assets_without_criticality()
+    report["assets_without_criticality"] = len(uncritical)
+    if uncritical:
+        findings.append((
+            None,
+            f"[yellow]{len(uncritical)} inventory assets have no criticality"
+            "[/yellow]  the queue shows them blank and `--criticality` skips them",
+        ))
+    ratio = frame["rule_id"].nunique() / len(frame)
+    report["rule_cardinality"] = round(ratio, 3)
+    if ratio > RULE_CARDINALITY_WARN and len(frame) >= 500:
+        findings.append((
+            "rule_cardinality",
+            f"[yellow]{frame['rule_id'].nunique()} distinct rule ids across "
+            f"{len(frame)} alerts[/yellow]  sessions group on rule id, so "
+            "Meerkat reads it as naming a kind of alert rather than one "
+            "occurrence. At this ratio sessions do not group and rule rarity "
+            "carries no signal.",
+        ))
+    return findings
+
+
+def _print_check(report, frame, aminer_name, outside_hosts, findings, args) -> None:
+    console.print(f"reading up to {args.sample} alerts from {args.input}")
+    for file in report["files"]:
+        console.print(
+            f"  [green]found[/green] {file['holds']:19} {file['name']}  "
+            f"{file['mb']:.1f} MB"
+        )
+    if "missing_detector" in report:
+        console.print(
+            f"  [dim]absent[/dim] {report['missing_detector']:19} {aminer_name}"
+        )
     table = Table(title=f"check ({len(frame)} alerts sampled)",
                   title_justify="left", header_style="bold")
     table.add_column("detector")
@@ -2341,213 +2163,175 @@ def cmd_check(args) -> None:
     table.add_column("in inventory", justify="right")
     table.add_column("distinct rules", justify="right")
     table.add_column("ATT&CK mapped", justify="right")
-    report["sampled"] = len(frame)
-    for detector, part in frame.groupby("detector_source", sort=True):
-        matched = int(part["entity_in_inventory"].astype(bool).sum())
-        mapped = int(part["tactics"].map(bool).sum())
-        report.setdefault("detectors", []).append({
-            "detector": str(detector), "alerts": len(part),
-            "hosts": int(part["entity_id"].nunique()),
-            "in_inventory": matched,
-            "distinct_rules": int(part["rule_id"].nunique()),
-            "attack_mapped": mapped,
-        })
+    for part in report["detectors"]:
         table.add_row(
-            detector_label(str(detector)),
-            str(len(part)),
-            str(part["entity_id"].nunique()),
-            f"{matched}/{len(part)}",
-            str(part["rule_id"].nunique()),
-            f"{mapped / len(part):.0%}",
+            detector_label(part["detector"]),
+            str(part["alerts"]),
+            str(part["hosts"]),
+            f"{part['in_inventory']}/{part['alerts']}",
+            str(part["distinct_rules"]),
+            f"{part['attack_mapped'] / part['alerts']:.0%}",
         )
-    if not args.json:
-        console.print(table)
-
-    start, end = frame["timestamp"].min(), frame["timestamp"].max()
-    report["window"] = [float(start), float(end)]
-    if not args.json:
-        console.print(f"  covering {fmt_time(start)} to {fmt_time(end)}")
-
-    unmapped = _unmapped_rules(frame)
-    report["unmapped_rules"] = unmapped
-    if unmapped and not args.json:
-        # a warning only: the chain and the tactic filter read the mapping, the
-        # score does not
+    console.print(table)
+    start, end = report["window"]
+    console.print(f"  covering {fmt_time(start)} to {fmt_time(end)}")
+    if report["unmapped_rules"]:
         console.print(
             "[yellow]busiest rules with no ATT&CK tactic[/yellow]  "
             "`meerkat attack` lists every rule; a local mapping file adds them"
         )
-        for entry in unmapped:
+        for entry in report["unmapped_rules"]:
             console.print(
                 f"  {detector_label(entry['detector'])} {safe(entry['rule_id'])}"
                 f"  {entry['alerts']} alerts"
             )
-
-    problems = 0
-    # entity_id is what the inventory is keyed on, so name the entity
-    unmatched = frame.loc[~frame["entity_in_inventory"].astype(bool), "entity_id"]
-    if len(unmatched):
-        share = len(unmatched) / len(frame)
-        names = sorted(set(unmatched.astype(str)))[:5]
-        report["outside_inventory_share"] = round(share, 3)
-        # a network alert names both ends of a connection, so internet addresses
-        # appear here and can never be in an asset inventory. Report it without
-        # failing: the exit code is for things an operator can act on.
-        if not args.json:
-            console.print(
-                f"[yellow]{share:.0%} of alerts are on hosts outside the inventory"
-                f"[/yellow]  {', '.join(safe(n) for n in names)}\n"
-                "  those alerts are scored without role features. A network alert "
-                "names both ends of a connection, so addresses outside your estate "
-                "appear here too."
-            )
-
-    unroled = inventory.assets_without_roles()
-    if unroled:
-        report["problems"].append("assets_without_roles")
-        errors.print(
-            f"[yellow]{len(unroled)} inventory assets have no roles[/yellow]  "
-            "their alerts are scored without the role features. "
-            "`meerkat inventory --list-roles` lists the vocabulary."
+    if "outside_inventory_share" in report:
+        console.print(
+            f"[yellow]{report['outside_inventory_share']:.0%} of alerts are on "
+            f"hosts outside the inventory[/yellow]  "
+            f"{', '.join(safe(name) for name in outside_hosts)}\n"
+            "  those alerts are scored without role features. A network alert "
+            "names both ends of a connection, so addresses outside your estate "
+            "appear here too."
         )
-        problems += 1
-    if inventory.unknown_roles:
-        report["problems"].append("unknown_roles")
-        errors.print(
-            f"[yellow]unrecognised roles[/yellow] "
-            f"{', '.join(safe(r) for r in inventory.unknown_roles)}  "
-            "these contribute nothing to a model trained elsewhere"
+    for _, message in findings:
+        errors.print(message)
+    if report["problems"]:
+        console.print(
+            f"[yellow]{len(report['problems'])} thing(s) to look at before "
+            "triaging[/yellow]"
         )
-        problems += 1
-    if inventory.unknown_criticalities:
-        report["problems"].append("unknown_criticality")
-        errors.print(
-            f"[yellow]unrecognised criticality[/yellow] "
-            f"{', '.join(safe(c) for c in inventory.unknown_criticalities)}  "
-            f"use {', '.join(CRITICALITY_LEVELS)}, or leave it blank"
-        )
-        problems += 1
-    uncritical = inventory.assets_without_criticality()
-    report["assets_without_criticality"] = len(uncritical)
-    if uncritical:
-        # criticality never reaches the score, so a missing tier is a warning
-        errors.print(
-            f"[yellow]{len(uncritical)} inventory assets have no criticality"
-            "[/yellow]  "
-            "the queue shows them blank and `--criticality` skips them"
-        )
-
-    # rarity and the session key both assume rule_id names a KIND of alert. A
-    # detector numbering each anomaly individually degrades the model with no
-    # error at all, so say it here rather than let it pass silently.
-    ratio = frame["rule_id"].nunique() / len(frame)
-    report["rule_cardinality"] = round(ratio, 3)
-    # under 500 alerts a high distinct-rule share is just a small sample
-    if ratio > RULE_CARDINALITY_WARN and len(frame) >= 500:
-        report["problems"].append("rule_cardinality")
-        errors.print(
-            f"[yellow]{frame['rule_id'].nunique()} distinct rule ids across "
-            f"{len(frame)} alerts[/yellow]  sessions group on rule id, so "
-            "Meerkat reads it as naming a kind of alert rather than one "
-            "occurrence. At this ratio sessions do not group and rule rarity "
-            "carries no signal."
-        )
-        problems += 1
-
-    report["ready"] = not problems
-    if args.json:
-        print(json.dumps(report, indent=2, default=str))
-    if problems:
-        if not args.json:
-            console.print(
-                f"[yellow]{problems} thing(s) to look at before triaging[/yellow]"
-            )
-        raise SystemExit(EXIT_ERROR)
-    if not args.json:
+    else:
         console.print("[green]ready to triage[/green]")
 
 
-# --------------------------------------------------------------------------
-# drift: how far the current alerts sit from what the model was trained on
-#
-# This needs no incidents. Evaluation needs confirmed
-# tickets and a client is short of those. It reports covariate shift only:
-# it can say the input moved and it cannot say the queue got worse.
-# --------------------------------------------------------------------------
+def cmd_check(args) -> None:
+    company = _open_company(args)
+    alert_files = _resolve_files(
+        args.input, company, args.wazuh_file, args.aminer_file
+    )
+    inventory = _load_or_exit(load_inventory, args.inventory, "the inventory")
+    mappings = _load_or_exit(
+        with_local_mappings, args.attack_mappings, "the local ATT&CK mapping"
+    )
+    frame = _sample_alerts(args, company, alert_files, mappings)
+
+    report: dict = {
+        "environment": company,
+        "files": [
+            {
+                "name": path.name,
+                "holds": FAMILY_LABELS[family],
+                "mb": round(path.stat().st_size / 1_000_000, 1),
+            }
+            for path, family in alert_files
+        ],
+        "problems": [],
+    }
+    if not any(family == AMINER_FAMILY for _, family in alert_files):
+        report["missing_detector"] = FAMILY_LABELS[AMINER_FAMILY]
+    report["sampled"] = len(frame)
+    report["detectors"] = [
+        {
+            "detector": str(detector),
+            "alerts": len(part),
+            "hosts": int(part["entity_id"].nunique()),
+            "in_inventory": int(part["entity_in_inventory"].astype(bool).sum()),
+            "distinct_rules": int(part["rule_id"].nunique()),
+            "attack_mapped": int(part["tactics"].map(bool).sum()),
+        }
+        for detector, part in frame.groupby("detector_source", sort=True)
+    ]
+    report["window"] = [float(frame["timestamp"].min()), float(frame["timestamp"].max())]
+    report["unmapped_rules"] = _unmapped_rules(frame)
+
+    unmatched = frame.loc[~frame["entity_in_inventory"].astype(bool), "entity_id"]
+    outside_hosts = sorted(set(unmatched.astype(str)))[:5]
+    if len(unmatched):
+        report["outside_inventory_share"] = round(len(unmatched) / len(frame), 3)
+
+    findings = _check_findings(inventory, frame, args.inventory.name, report)
+    report["problems"] = [key for key, _ in findings if key]
+    report["ready"] = not report["problems"]
+    if args.json:
+        for _, message in findings:
+            errors.print(message)
+        print(json.dumps(report, indent=2, default=str))
+    else:
+        _print_check(
+            report, frame, _aminer_name(args, company), outside_hosts, findings, args
+        )
+    if report["problems"]:
+        raise SystemExit(EXIT_ERROR)
+
 
 VERDICT_STYLE = {"stable": "green", "moderate": "yellow", "major": "red"}
-# measured: with no shift on either side, 85% of features read "major" at 10
-# training sessions and 50% at 30. By 300 it is 0%.
+# below this many sessions on either side, unmoved features read as major drift
 DRIFT_MIN_TRAINING = 300
 
 
-def cmd_drift(args) -> None:
-    from core.scenario_eval import score_sessions
-
-    company = _open_company(args)
-    bundle = _load_bundle(args.model)
-    profile = getattr(bundle, "profile", None)
-    if profile is None:
-        errors.print(
-            f"[red]{safe(args.model.name)} carries no training profile[/red]  it predates "
-            "drift reporting. Refit with `meerkat retrain` to record one."
-        )
-        raise SystemExit(EXIT_ERROR)
-
-    inventory = _load_or_exit(load_inventory, args.inventory, "the inventory")
-    alerts = normalize_scenario(
-        args.input, None, company, args.inventory,
-        wazuh_file=args.wazuh_file, aminer_file=args.aminer_file,
-    )
-    sessions = build_sessions(alerts, company, inventory)
-    X = build_session_feature_matrix(sessions, bundle.schema)
-    scored, families = score_sessions(bundle, sessions)
-
-    report: dict = {
-        "alerts": len(alerts), "sessions": len(sessions),
-        "families": len(families), "trained_sessions": profile.n_sessions,
-    }
-    if not args.json:
-        console.print(
-            f"{len(alerts)} alerts, {len(sessions)} sessions, {len(families)} families "
-            f"against a model trained on {profile.n_sessions} sessions"
-        )
-
+def _drift_report(bundle, sessions, families, drifts, alerts_count) -> dict:
+    profile = bundle.profile
     unseen = unseen_rule_share(bundle.schema, sessions["pair_counts"])
-    report["unseen_rule_share"] = round(float(unseen), 4)
-    if not args.json:
-        console.print(
-            f"  rules the model never saw: [bold]{unseen:.1%}[/bold] of alerts"
-            + ("  [red]<- the model has no rarity signal for these[/red]"
-               if unseen > UNSEEN_RULE_WARN else "")
-        )
-    outside = 1.0 - float(sessions["in_inventory"].mean())
-    report["outside_inventory_share"] = round(outside, 4)
-    if not args.json:
-        console.print(
-            f"  sessions on hosts outside the inventory: [bold]{outside:.1%}[/bold]"
-            f"  (training had {1 - profile.inventory_coverage:.1%})"
-        )
+    major = [d for d in drifts if d.verdict == "major"]
+    report: dict = {
+        "alerts": alerts_count,
+        "sessions": len(sessions),
+        "families": len(families),
+        "trained_sessions": profile.n_sessions,
+        "unseen_rule_share": round(float(unseen), 4),
+        "outside_inventory_share": round(
+            1.0 - float(sessions["in_inventory"].mean()), 4
+        ),
+        "features": [
+            {"feature": d.name, "psi": round(float(d.psi), 4), "verdict": d.verdict,
+             "training_median": float(d.training_median),
+             "current_median": float(d.current_median)}
+            for d in drifts
+        ],
+    }
+    # the queue is a top-K cut, so a shift confined to the bottom of the score
+    # distribution changes nothing an analyst sees; report the boundary separately
+    trained_edges = profile.family_score_bins[0]
+    if trained_edges:
+        boundary = float(np.quantile(families["ranking_score"].to_numpy(), 0.9))
+        report["top_decile_score"] = round(boundary, 4)
+        report["top_decile_score_at_training"] = round(float(trained_edges[-1]), 4)
+    report["major_features"] = len(major)
+    report["drifted"] = bool(major or unseen > UNSEEN_RULE_WARN)
+    return report
 
-    if profile.n_sessions < DRIFT_MIN_TRAINING and not args.json:
+
+def _print_drift(args, report, profile, drifts) -> None:
+    console.print(
+        f"{report['alerts']} alerts, {report['sessions']} sessions, "
+        f"{report['families']} families against a model trained on "
+        f"{profile.n_sessions} sessions"
+    )
+    unseen = report["unseen_rule_share"]
+    console.print(
+        f"  rules the model never saw: [bold]{unseen:.1%}[/bold] of alerts"
+        + ("  [red]<- the model has no rarity signal for these[/red]"
+           if unseen > UNSEEN_RULE_WARN else "")
+    )
+    console.print(
+        "  sessions on hosts outside the inventory: "
+        f"[bold]{report['outside_inventory_share']:.1%}[/bold]"
+        f"  (training had {1 - profile.inventory_coverage:.1%})"
+    )
+    if profile.n_sessions < DRIFT_MIN_TRAINING:
         console.print(
             f"[yellow]this model was fitted on {profile.n_sessions} sessions"
             f"[/yellow]  below about {DRIFT_MIN_TRAINING} the comparison is mostly "
             "noise: unmoved features read as major drift roughly half the time"
         )
-    if len(sessions) < DRIFT_MIN_TRAINING and not args.json:
+    if report["sessions"] < DRIFT_MIN_TRAINING:
         console.print(
-            f"[yellow]these alerts make {len(sessions)} sessions[/yellow]  below about "
-            f"{DRIFT_MIN_TRAINING} the comparison is mostly noise; compare several days at once"
+            f"[yellow]these alerts make {report['sessions']} sessions[/yellow]  "
+            f"below about {DRIFT_MIN_TRAINING} the comparison is mostly noise; "
+            "compare several days at once"
         )
 
-    drifts = compare_profile(profile, X)
-    report["features"] = [
-        {"feature": d.name, "psi": round(float(d.psi), 4), "verdict": d.verdict,
-         "training_median": float(d.training_median),
-         "current_median": float(d.current_median)}
-        for d in drifts
-    ]
     table = Table(title="feature drift, worst first", title_justify="left",
                   header_style="bold")
     table.add_column("feature")
@@ -2555,60 +2339,62 @@ def cmd_drift(args) -> None:
     table.add_column("verdict")
     table.add_column("training median", justify="right")
     table.add_column("now", justify="right")
-    if args.all:
-        shown = list(drifts)
-    else:
-        shown = [d for d in drifts if d.verdict != "stable"] or drifts[:5]
-    for d in shown if args.all else shown[:args.top]:
+    shown = drifts if args.all else (
+        [d for d in drifts if d.verdict != "stable"] or drifts[:5]
+    )[:args.top]
+    for d in shown:
         style = VERDICT_STYLE[d.verdict]
         table.add_row(
             safe(d.name), f"{d.psi:.3f}", f"[{style}]{d.verdict}[/{style}]",
             f"{d.training_median:.3f}", f"{d.current_median:.3f}",
         )
-    if not args.json:
-        console.print(table)
+    console.print(table)
+    if "top_decile_score" in report:
+        console.print(
+            f"  top-decile family score: [bold]{report['top_decile_score']:.3f}"
+            f"[/bold] now, {report['top_decile_score_at_training']:.3f} at training"
+        )
+    if report["drifted"]:
+        console.print(
+            f"[yellow]{report['major_features']} feature(s) past PSI {PSI_MAJOR}"
+            "[/yellow]  this reports that the input moved. It does not measure "
+            "whether the ranking is still right, which needs confirmed outcomes."
+        )
+    elif drifts:
+        console.print(f"[green]no major drift[/green]  worst PSI {drifts[0].psi:.3f}")
+    else:
+        console.print("[green]no comparable features[/green]")
 
-    # the queue is a top-K cut, so a shift confined to the bottom of the score
-    # distribution changes nothing an analyst sees. Report the boundary separately.
-    trained_edges = profile.family_score_bins[0]
-    if trained_edges:
-        boundary = float(np.quantile(families["ranking_score"].to_numpy(), 0.9))
-        trained_boundary = trained_edges[-1]
-        report["top_decile_score"] = round(boundary, 4)
-        report["top_decile_score_at_training"] = round(float(trained_boundary), 4)
-        if not args.json:
-            console.print(
-                f"  top-decile family score: [bold]{boundary:.3f}[/bold] now, "
-                f"{trained_boundary:.3f} at training"
-            )
 
-    major = [d for d in drifts if d.verdict == "major"]
-    report["major_features"] = len(major)
-    report["drifted"] = bool(major or unseen > UNSEEN_RULE_WARN)
+def cmd_drift(args) -> None:
+    from core.scenario_eval import score_sessions
+
+    company = _open_company(args)
+    bundle = _load_bundle(args.model)
+    inventory = _load_or_exit(load_inventory, args.inventory, "the inventory")
+    alerts = normalize_scenario(
+        args.input, None, company, args.inventory,
+        wazuh_file=args.wazuh_file, aminer_file=args.aminer_file,
+    )
+    sessions = build_sessions(alerts, company, inventory)
+    drifts = compare_profile(
+        bundle.profile, build_session_feature_matrix(sessions, bundle.schema)
+    )
+    _, families = score_sessions(bundle, sessions)
+    report = _drift_report(bundle, sessions, families, drifts, len(alerts))
     if args.json:
         print(json.dumps(report, indent=2, default=str))
-    if major or unseen > UNSEEN_RULE_WARN:
-        if not args.json:
-            console.print(
-                f"[yellow]{len(major)} feature(s) past PSI {PSI_MAJOR}[/yellow]  "
-                "this reports that the input moved. It does not measure whether the "
-                "ranking is still right, which needs confirmed outcomes."
-            )
+    else:
+        _print_drift(args, report, bundle.profile, drifts)
+    if report["drifted"]:
         raise SystemExit(EXIT_DRIFT)
-    if not args.json:
-        console.print(f"[green]no major drift[/green]  worst PSI {drifts[0].psi:.3f}"
-                      if drifts else "[green]no comparable features[/green]")
 
-
-# --------------------------------------------------------------------------
-# export navigator
-# --------------------------------------------------------------------------
 
 def cmd_export(args) -> None:
     run = _load_run(args)
     _announce_run(run)
     if args.queue_only:
-        families = run.families[run.families["in_queue"]]
+        families = run.queue_families(show_all=False)
         rows = [row for indices in families["alert_rows"] for row in indices]
         alerts = run.alerts.iloc[rows]
     else:
@@ -2625,47 +2411,27 @@ def cmd_export(args) -> None:
     )
 
 
-# Excel evaluates a cell starting with one of these. A leading tab or newline is
-# in the set because the character after it starts the cell instead; \r is not,
-# because _CONTROL has already stripped it by the time this is read.
+# Excel evaluates a cell starting with one of these; a leading tab or newline is
+# listed because the character after it then starts the cell
 _CSV_FORMULA_LEAD = frozenset("=+-@\t\n")
 
 
 def _csv_safe(value):
     if not isinstance(value, str):
         return value
-    # strip control characters first: this file is opened in a spreadsheet and
-    # cat'd in a terminal, and rule names and hostnames are attacker-written
     value = _CONTROL.sub("", value)
-    # a hostname is attacker-controlled, so quote only its leading character
     if value and value[0] in _CSV_FORMULA_LEAD:
         return "'" + value
     return value
 
 
-def effective_decisions(run) -> dict[str, dict[str, dict]]:
-    # replay the audit in order: a session entry covers that session, a family
-    # entry covers every session, and the last entry covering a session wins
-    covered: dict[str, dict[str, dict]] = {}
-    for entry in review_history(run.directory):
-        family_id = entry["family_id"]
-        scopes = covered.setdefault(family_id, {})
-        if entry.get("session_handle"):
-            scopes[entry["session_handle"]] = entry
-        else:
-            covered[family_id] = {"*": entry}
-    return covered
-
-
 def decision_rows(run, families) -> list[dict]:
-    decisions = effective_decisions(run)
+    decisions = replay_reviews(run.directory)
     rows = []
     for _, family in families.iterrows():
         scopes = decisions.get(family["family_id"], {})
         for handle, session_id in run.session_handles(family):
-            session = run.sessions[
-                run.sessions["session_id"].eq(session_id)
-            ].iloc[0]
+            session = run.session_row(session_id)
             entry = scopes.get(handle) or scopes.get("*")
             decided_by = ""
             if entry is not None:
@@ -2692,22 +2458,27 @@ def decision_rows(run, families) -> list[dict]:
     return rows
 
 
+def _suffix(fmt: str) -> str:
+    return "json" if fmt == "json" else "csv"
+
+
+def _write_rows(rows: list[dict], output: Path, fmt: str) -> None:
+    if fmt == "json":
+        output.write_text(json.dumps(rows, indent=2, default=str), encoding="utf-8")
+    else:
+        pd.DataFrame(rows).map(_csv_safe).to_csv(output, index=False)
+
+
 def cmd_export_decisions(args) -> None:
     run = _load_run(args)
-    families = run.families if args.all else run.families[run.families["in_queue"]]
+    families = run.queue_families(args.all)
     if len(families) > 100:
         errors.print(f"collecting {len(families)} families...")
     rows = decision_rows(run, families)
     if args.decided_only:
         rows = [row for row in rows if row["decision"]]
-    suffix = "json" if args.format == "json" else "csv"
-    output = args.output or (run.directory / f"decisions.{suffix}")
-    if args.format == "json":
-        output.write_text(
-            json.dumps(rows, indent=2, default=str), encoding="utf-8"
-        )
-    else:
-        pd.DataFrame(rows).map(_csv_safe).to_csv(output, index=False)
+    output = args.output or (run.directory / f"decisions.{_suffix(args.format)}")
+    _write_rows(rows, output, args.format)
     reviewed = sum(1 for row in rows if row["decision"])
     if not reviewed:
         errors.print(
@@ -2740,35 +2511,26 @@ pre {{ color:#b9bcba; font-family:Consolas,Menlo,monospace; font-size:14px;
 
 
 def _recorded_html(render, title: str) -> str:
-    # the page is the terminal render, recorded; safe() and the exporter escape
-    import io
-
-    from rich.console import Console
+    # the page is the terminal render, recorded; every render prints through the
+    # module's console, so it is swapped for a recording one while render runs
+    global console, hints_enabled
     recorder = Console(
         file=io.StringIO(), record=True, force_terminal=True, width=120,
         legacy_windows=False,
     )
-    keep_console = globals()["console"]
-    keep_hints = globals()["hints_enabled"]
-    globals()["console"] = recorder
-    globals()["hints_enabled"] = False
+    saved = console, hints_enabled
+    console, hints_enabled = recorder, False
     try:
         render()
     finally:
-        globals()["console"] = keep_console
-        globals()["hints_enabled"] = keep_hints
-    # the default export theme assumes a white page; this page is dark
-    from rich.terminal_theme import DIMMED_MONOKAI
+        console, hints_enabled = saved
     body = recorder.export_html(
-        inline_styles=True, code_format="<pre>{code}</pre>",
-        theme=DIMMED_MONOKAI,
+        inline_styles=True, code_format="<pre>{code}</pre>", theme=DIMMED_MONOKAI,
     )
-    import html as html_module
-    return HTML_PAGE.format(title=html_module.escape(title), body=body)
+    return HTML_PAGE.format(title=html.escape(title), body=body)
 
 
 def _family_entries(family, decisions) -> list[tuple[str, dict]]:
-    # family-wide first, then per-session overrides, each as (scope, entry)
     scopes = decisions.get(family["family_id"], {})
     ordered = []
     if "*" in scopes:
@@ -2794,13 +2556,9 @@ def _print_decisions(family, decisions) -> None:
 def cmd_export_html(args) -> None:
     run = _load_run(args)
     reviews = current_reviews(run.directory)
-    decisions = effective_decisions(run)
+    decisions = replay_reviews(run.directory)
     if args.handle:
-        try:
-            family = run.family_by_handle(args.handle)
-        except KeyError as error:
-            errors.print(f"[red]{safe(error.args[0])}[/red]")
-            raise SystemExit(EXIT_ERROR)
+        family = _find_family(run, args.handle)
         handle = family["handle"]
 
         def render() -> None:
@@ -2810,8 +2568,7 @@ def cmd_export_html(args) -> None:
         title = f"meerkat {run.run_id} {handle}"
         default_name = f"family-{handle.lower()}.html"
     else:
-        # escalations carry their evidence, closed take a line, rest is stated
-        queued = run.families[run.families["in_queue"]]
+        queued = run.queue_families(show_all=False)
         escalated, closed, unreviewed = [], [], []
         for _, family in queued.iterrows():
             entries = _family_entries(family, decisions)
@@ -2870,44 +2627,27 @@ def cmd_export_html(args) -> None:
 
 def cmd_export_queue(args) -> None:
     run = _load_run(args)
-    families = run.families if args.all else run.families[run.families["in_queue"]]
-    records = queue_records(run, families)
-    suffix = "json" if args.format == "json" else "csv"
-    output = args.output or (run.directory / f"queue.{suffix}")
-    if args.format == "json":
-        output.write_text(
-            json.dumps(records, indent=2, default=str), encoding="utf-8"
-        )
-    else:
-        pd.DataFrame(records).map(_csv_safe).to_csv(output, index=False)
+    records = queue_records(run, run.queue_families(args.all))
+    output = args.output or (run.directory / f"queue.{_suffix(args.format)}")
+    _write_rows(records, output, args.format)
     console.print(f"[green]exported[/green] {len(records)} families to {output}")
 
 
-# --------------------------------------------------------------------------
-# demo
-# --------------------------------------------------------------------------
-
 def cmd_demo(args) -> None:
-    wazuh = args.raw_dir / f"{DEMO_COMPANY}_wazuh.json"
-    aminer = args.raw_dir / f"{DEMO_COMPANY}_aminer.json"
-    for path in (wazuh, aminer):
-        if not path.exists() or _is_lfs_pointer(path):
-            errors.print(
+    from core.classifier import is_lfs_pointer
+
+    for detector in ("wazuh", "aminer"):
+        path = args.raw_dir / f"{DEMO_COMPANY}_{detector}.json"
+        if not path.exists() or is_lfs_pointer(path):
+            _fail(
                 f"[red]demo data missing: {safe(path)}[/red]\n"
                 "the raw AIT files are stored with Git LFS. fetch them with:\n\n"
                 "  git lfs install\n"
                 "  git lfs pull\n"
             )
-            raise SystemExit(EXIT_ERROR)
-
-    # the event-label CSVs are evaluation ground truth and are not shipped, so
-    # a clone triages without them and reports no window coverage
-    labels = DEMO_LABELS if DEMO_LABELS.exists() else None
-    event_csv = DEMO_EVENT_CSV if DEMO_EVENT_CSV.exists() else None
     cmd_triage(argparse.Namespace(
         model=args.model, input=args.raw_dir, company=DEMO_COMPANY,
         inventory=DEMO_INVENTORY_DIR / f"{DEMO_COMPANY}.json",
-        labels=labels, event_csv_dir=event_csv,
         wazuh_file=None, aminer_file=None, attack_mappings=None,
         budget=args.budget, runs_dir=args.runs_dir,
     ))
@@ -2916,10 +2656,6 @@ def cmd_demo(args) -> None:
         "`meerkat export navigator` for the ATT&CK layer[/dim]"
     )
 
-
-# --------------------------------------------------------------------------
-# argument parsing
-# --------------------------------------------------------------------------
 
 def _positive(value: str) -> int:
     number = int(value)
@@ -2930,7 +2666,7 @@ def _positive(value: str) -> int:
 
 def safe_run_id(run_id: str) -> str:
     # a run directory is unpickled on open, so the id has to be one path
-    # component. Traversal here is code execution, not a wrong directory.
+    # component; traversal here is code execution, not a wrong directory
     cleaned = str(run_id).strip()
     if not cleaned or Path(cleaned).name != cleaned or cleaned in (".", ".."):
         raise ValueError(f"{run_id!r} is not a run id")
@@ -2938,7 +2674,6 @@ def safe_run_id(run_id: str) -> str:
 
 
 def _company_label(value: str) -> str:
-    # the label becomes a run directory name, so it takes the run id rule
     try:
         return safe_run_id(value)
     except ValueError as error:
@@ -2946,13 +2681,10 @@ def _company_label(value: str) -> str:
 
 
 def _load_or_exit(load, path: Path, what: str):
-    # core raises ValueError with a message written for a person
     try:
         return load(path)
     except (ValueError, OSError) as error:
-        # the error may quote a cell containing rich markup, so escape it
-        errors.print(f"[red]{what} could not be read[/red]  {safe(error)}")
-        raise SystemExit(EXIT_ERROR)
+        _fail(f"[red]{what} could not be read[/red]  {safe(error)}")
 
 
 def _raw_dir_for(run: RunState, args) -> Path:
@@ -2961,23 +2693,19 @@ def _raw_dir_for(run: RunState, args) -> Path:
 
 def require_directory(path: Path) -> None:
     if not path.exists():
-        errors.print(
+        _fail(
             f"[red]no alert directory at {safe(path)}[/red]  create it and put your "
             "detector exports inside, or point --input at the folder that "
             "already holds them."
         )
-        raise SystemExit(EXIT_ERROR)
     if not path.is_dir():
-        errors.print(
+        _fail(
             f"[red]--input must be a directory[/red]  {safe(path)} is a file. Point it "
             "at the folder holding your alert exports."
         )
-        raise SystemExit(EXIT_ERROR)
 
 
-# a flag the user did not pass, so the environment or meerkat.toml may fill it
 _UNSET = object()
-# what config may fill; flags always win, and `demo` stays pinned to its defaults
 _CONFIGURABLE = (
     ("company", "MEERKAT_ENVIRONMENT", "environment"),
     ("input", "MEERKAT_INPUT", "input"),
@@ -2989,8 +2717,6 @@ _CONFIGURABLE = (
 
 
 def _load_config() -> tuple[dict, str]:
-    # nearest file wins: the working directory, then the user's config
-    import tomllib
     candidates = (
         Path("meerkat.toml"),
         Path.home() / ".config" / "meerkat" / "config.toml",
@@ -3002,14 +2728,11 @@ def _load_config() -> tuple[dict, str]:
             with path.open("rb") as handle:
                 return tomllib.load(handle), str(path)
         except tomllib.TOMLDecodeError as error:
-            errors.print(f"[red]{safe(path)} is not valid TOML[/red]  {safe(error)}")
-            raise SystemExit(EXIT_ERROR)
+            _fail(f"[red]{safe(path)} is not valid TOML[/red]  {safe(error)}")
     return {}, ""
 
 
 def _apply_config(args) -> None:
-    # flags beat MEERKAT_* variables, variables beat meerkat.toml
-    import os
     config, source = _load_config()
     hard = {
         "input": DEFAULT_INPUT, "model": DEFAULT_MODEL, "runs_dir": DEFAULT_RUNS,
@@ -3027,8 +2750,7 @@ def _apply_config(args) -> None:
             value = _company_label(raw) if attribute == "company" else Path(raw)
         except argparse.ArgumentTypeError as error:
             where = variable if os.environ.get(variable) else source
-            errors.print(f"[red]bad {key} in {safe(where)}[/red]  {safe(error)}")
-            raise SystemExit(EXIT_ERROR)
+            _fail(f"[red]bad {key} in {safe(where)}[/red]  {safe(error)}")
         setattr(args, attribute, value)
 
 
@@ -3040,7 +2762,6 @@ def cmd_browse(args) -> None:
 
 
 def cmd_completion(args) -> None:
-    # a static script harvested from the parser, so it never drifts from it
     parser = build_parser()
     subparsers = next(
         action for action in parser._actions
@@ -3073,7 +2794,6 @@ def cmd_completion(args) -> None:
 
 
 def cmd_orientation(args) -> None:
-    # the reception desk: where things stand, and what makes sense next
     latest = latest_run_id(args.runs_dir)
     if latest is None:
         console.print("no runs yet")
@@ -3105,33 +2825,50 @@ def cmd_orientation(args) -> None:
 
 
 def resolve_company(args) -> str:
-    # only a run label now; the input directory names it, so a single-site
-    # user rarely passes it
-    if getattr(args, "company", None):
+    if args.company:
         return args.company
-    # a drive or filesystem root resolves to an empty name, and there is nothing
-    # there to label the run with
     try:
         return safe_run_id(args.input.resolve().name)
     except ValueError:
-        errors.print(
+        _fail(
             f"[red]cannot name a run after {safe(args.input)}[/red]  a filesystem "
             "root has no directory name to use. Pass --environment with a "
             "label, or point --input at a named directory."
         )
-        raise SystemExit(EXIT_ERROR)
 
 
 def _positive_float(value: str) -> float:
     number = float(value)
-    if not number > 0 or number != number or number in (float("inf"),):
+    if not (math.isfinite(number) and number > 0):
         raise argparse.ArgumentTypeError("must be a finite number above 0")
     return number
 
 
+def _add_environment(parser) -> None:
+    parser.add_argument("--environment", dest="company", type=_company_label,
+                        default=_UNSET, metavar="NAME",
+                        help="run label; defaults to the input directory's name")
+
+
+def _add_input(parser, help="directory holding the alert files") -> None:
+    parser.add_argument("--input", type=Path, default=_UNSET, help=help)
+
+
+def _add_inventory(parser) -> None:
+    parser.add_argument("--inventory", type=Path, default=_UNSET,
+                        help="asset inventory JSON; defaults to where "
+                             "`meerkat inventory` writes it")
+
+
+def _add_model(parser, help=None) -> None:
+    parser.add_argument("--model", type=Path, default=_UNSET, help=help)
+
+
+def _add_runs_dir(parser) -> None:
+    parser.add_argument("--runs-dir", type=Path, default=_UNSET)
+
+
 def _add_alert_files(parser) -> None:
-    # --input plus AIT's <company>_wazuh.json naming stays the default, and either
-    # file can be named outright when the export is called something else
     parser.add_argument("--wazuh-file", type=Path, default=None,
                         help="wazuh alert JSON, if it is not "
                              "<input>/<company>_wazuh.json")
@@ -3149,7 +2886,7 @@ def _add_attack_mappings(parser) -> None:
 
 def _add_run_selector(parser) -> None:
     parser.add_argument("--run", help="run id (default: latest successful)")
-    parser.add_argument("--runs-dir", type=Path, default=_UNSET)
+    _add_runs_dir(parser)
 
 
 PULL_SOURCES = ("indexer", "file")
@@ -3159,33 +2896,26 @@ def _pull_window(args):
     from meerkat import connectors
     if args.day:
         if args.from_time or args.to_time:
-            errors.print("[red]give --day, or --from with --to[/red]")
-            raise SystemExit(EXIT_ERROR)
+            _fail("[red]give --day, or --from with --to[/red]")
         try:
             return connectors.day_window(args.day)
         except (ValueError, OverflowError):
-            errors.print(f"[red]--day is not a date: {safe(args.day)}[/red]")
-            raise SystemExit(EXIT_ERROR)
+            _fail(f"[red]--day is not a date: {safe(args.day)}[/red]")
     if not (args.from_time and args.to_time):
-        errors.print("[red]a window is required: --day, or both --from and --to[/red]")
-        raise SystemExit(EXIT_ERROR)
+        _fail("[red]a window is required: --day, or both --from and --to[/red]")
     try:
         start = connectors.parse_moment(args.from_time)
         end = connectors.parse_moment(args.to_time)
         datetime.fromtimestamp(start, UTC)
         datetime.fromtimestamp(end, UTC)
     except (ValueError, OverflowError, OSError):
-        errors.print("[red]--from and --to take a date or epoch seconds[/red]")
-        raise SystemExit(EXIT_ERROR)
+        _fail("[red]--from and --to take a date or epoch seconds[/red]")
     if end <= start:
-        errors.print("[red]--to must be after --from[/red]")
-        raise SystemExit(EXIT_ERROR)
+        _fail("[red]--to must be after --from[/red]")
     return connectors.Window(start, end)
 
 
 def _indexer_config(args):
-    import os
-
     from meerkat import connectors
     config, _ = _load_config()
     raw = config.get("pull")
@@ -3207,24 +2937,25 @@ def _indexer_config(args):
 
     host = pick(args.host, "MEERKAT_INDEXER_HOST", "host")
     if not host:
-        errors.print("[red]indexer mode needs a host[/red]  pass --host, set "
-                     "MEERKAT_INDEXER_HOST, or set host under \\[pull] in meerkat.toml")
-        raise SystemExit(EXIT_ERROR)
+        _fail(
+            "[red]indexer mode needs a host[/red]  pass --host, set "
+            "MEERKAT_INDEXER_HOST, or set host under \\[pull] in meerkat.toml"
+        )
     verify = True
     if args.insecure:
         verify = False
     elif "verify_tls" in section:
         verify = section["verify_tls"]
         if not isinstance(verify, bool):
-            errors.print("[red]verify_tls under \\[pull] must be true or false[/red]  "
-                         f"got {safe(repr(verify))}")
-            raise SystemExit(EXIT_ERROR)
+            _fail(
+                "[red]verify_tls under \\[pull] must be true or false[/red]  "
+                f"got {safe(repr(verify))}"
+            )
     port_raw = pick(None, "MEERKAT_INDEXER_PORT", "port", 9200)
     try:
         port = int(port_raw)
     except (TypeError, ValueError):
-        errors.print(f"[red]indexer port is not a number: {safe(port_raw)}[/red]")
-        raise SystemExit(EXIT_ERROR)
+        _fail(f"[red]indexer port is not a number: {safe(port_raw)}[/red]")
     return connectors.IndexerConfig(
         host=str(host),
         port=port,
@@ -3248,16 +2979,18 @@ def cmd_pull(args) -> None:
         targets.append(eve_out)
     for path in targets:
         if path.exists():
-            errors.print(f"[red]{safe(path)} already exists[/red]  pull stops at an "
-                         "existing file; move or delete it first")
-            raise SystemExit(EXIT_ERROR)
+            _fail(
+                f"[red]{safe(path)} already exists[/red]  pull stops at an "
+                "existing file; move or delete it first"
+            )
 
     eve_records: list[dict] = []
     if args.source == "file":
         if not args.alerts_file:
-            errors.print("[red]file mode needs --alerts-file[/red]  the wazuh "
-                         "alerts.json to read from")
-            raise SystemExit(EXIT_ERROR)
+            _fail(
+                "[red]file mode needs --alerts-file[/red]  the wazuh "
+                "alerts.json to read from"
+            )
         records = connectors.read_window_file(args.alerts_file, window)
         if args.eve_file:
             eve_records = connectors.read_window_file(args.eve_file, window)
@@ -3269,8 +3002,7 @@ def cmd_pull(args) -> None:
         try:
             records = connectors.query_window(config, window)
         except connectors.ConnectorError as error:
-            errors.print(f"[red]{safe(error)}[/red]")
-            raise SystemExit(EXIT_ERROR)
+            _fail(f"[red]{safe(error)}[/red]")
 
     total = len(records) + len(eve_records)
     if total == 0:
@@ -3295,8 +3027,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="meerkat",
         description=(
             "Triage a SOC alert queue.\n\n"
-            "analyst commands: triage, queue, inspect, review\n"
-            "support commands: check, inventory, retrain, drift, export, demo"
+            "analyst commands: triage, queue, inspect, review, browse\n"
+            "input commands: pull, inventory, check\n"
+            "run commands: attack, runs, export\n"
+            "model commands: retrain, drift\n"
+            "other: demo, completion; bare `meerkat` says where things stand"
         ),
         epilog=(
             "first run:\n"
@@ -3319,7 +3054,7 @@ def build_parser() -> argparse.ArgumentParser:
             "\n"
             "defaults come from flags, then MEERKAT_* variables, then\n"
             "meerkat.toml (working directory, then ~/.config/meerkat/):\n"
-            "  environment, input, inventory, model, runs_dir\n"
+            "  environment, input, inventory, attack_mappings, model, runs_dir\n"
             "\n"
             "exit codes: 0 ok, 1 error, 2 bad arguments, 3 retrain declined,\n"
             "            4 major drift found\n"
@@ -3335,31 +3070,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=False)
 
-
     triage = sub.add_parser("triage", help="score one environment into a run queue")
-    triage.add_argument("--environment", dest="company", type=_company_label,
-                        default=_UNSET, metavar="NAME",
-                        help="run label; defaults to the input directory's name")
-    triage.add_argument("--input", type=Path, default=_UNSET,
-                        help="directory holding the alert files")
-    triage.add_argument("--inventory", type=Path, default=_UNSET,
-                        help="asset inventory JSON; defaults to where "
-                             "`meerkat inventory` writes it")
+    _add_environment(triage)
+    _add_input(triage)
+    _add_inventory(triage)
     _add_alert_files(triage)
     _add_attack_mappings(triage)
     triage.add_argument("--budget", type=_positive, default=10)
-    triage.add_argument("--model", type=Path, default=_UNSET)
-    triage.add_argument("--runs-dir", type=Path, default=_UNSET)
+    _add_model(triage)
+    _add_runs_dir(triage)
     triage.set_defaults(func=cmd_triage)
 
     pull = sub.add_parser(
         "pull", help="fetch a window of Wazuh alerts into the input directory"
     )
-    pull.add_argument("--environment", dest="company", type=_company_label,
-                      default=_UNSET, metavar="NAME",
-                      help="run label; defaults to the input directory's name")
-    pull.add_argument("--input", type=Path, default=_UNSET,
-                      help="directory the alerts are written to; default ./alerts")
+    _add_environment(pull)
+    _add_input(pull, help="directory the alerts are written to; default ./alerts")
     pull.add_argument("--source", choices=PULL_SOURCES, default="indexer",
                       help="indexer queries the Wazuh indexer; file reads a "
                            "local alerts.json")
@@ -3411,7 +3137,7 @@ def build_parser() -> argparse.ArgumentParser:
     attack.set_defaults(func=cmd_attack)
 
     runs = sub.add_parser("runs", help="list saved runs")
-    runs.add_argument("--runs-dir", type=Path, default=_UNSET)
+    _add_runs_dir(runs)
     runs.add_argument("--json", action="store_true",
                       help="emit the run list as JSON instead of a table")
     runs.set_defaults(func=cmd_runs)
@@ -3503,18 +3229,18 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_selector(decisions)
     decisions.set_defaults(func=cmd_export_decisions)
 
-    html = export_sub.add_parser(
+    html_export = export_sub.add_parser(
         "html",
         help="a static, self-contained page of the run or one family",
         description="Writes the queue and every queued family's view (or one "
                     "family with a handle) as a single HTML file: shareable, "
                     "attachable to a ticket, no server involved.",
     )
-    html.add_argument("handle", nargs="?", default=None,
+    html_export.add_argument("handle", nargs="?", default=None,
                       help="one family, e.g. F3; omit for the whole run")
-    html.add_argument("--output", type=Path, default=None)
-    _add_run_selector(html)
-    html.set_defaults(func=cmd_export_html)
+    html_export.add_argument("--output", type=Path, default=None)
+    _add_run_selector(html_export)
+    html_export.set_defaults(func=cmd_export_html)
 
     browse = sub.add_parser(
         "browse",
@@ -3545,7 +3271,7 @@ def build_parser() -> argparse.ArgumentParser:
     inventory.add_argument("company", nargs="?", type=_company_label, default=None,
                            metavar="environment",
                            help="defaults to the input directory's name")
-    inventory.add_argument("--input", type=Path, default=_UNSET)
+    _add_input(inventory)
     inventory.add_argument("--out", type=Path, help="default <input>/inventory/<company>.json")
     inventory.add_argument(
         "--limit", type=_positive, default=500_000,
@@ -3560,11 +3286,9 @@ def build_parser() -> argparse.ArgumentParser:
     check = sub.add_parser(
         "check", help="read a sample of your alerts and report what triage will see"
     )
-    check.add_argument("--environment", dest="company", type=_company_label,
-                       default=_UNSET, metavar="NAME",
-                       help="run label; defaults to the input directory's name")
-    check.add_argument("--input", type=Path, default=_UNSET)
-    check.add_argument("--inventory", type=Path, default=_UNSET)
+    _add_environment(check)
+    _add_input(check)
+    _add_inventory(check)
     _add_attack_mappings(check)
     check.add_argument("--sample", type=_positive, default=CHECK_SAMPLE,
                        help="how many alerts to read")
@@ -3576,11 +3300,10 @@ def build_parser() -> argparse.ArgumentParser:
     drift = sub.add_parser(
         "drift", help="how far your alerts sit from what the model was trained on"
     )
-    drift.add_argument("--environment", dest="company", type=_company_label,
-                       default=_UNSET, metavar="NAME")
-    drift.add_argument("--input", type=Path, default=_UNSET)
-    drift.add_argument("--inventory", type=Path, default=_UNSET)
-    drift.add_argument("--model", type=Path, default=_UNSET)
+    _add_environment(drift)
+    _add_input(drift)
+    _add_inventory(drift)
+    _add_model(drift)
     drift.add_argument("--top", type=_positive, default=10,
                        help="how many features to list")
     drift.add_argument("--all", action="store_true",
@@ -3593,19 +3316,16 @@ def build_parser() -> argparse.ArgumentParser:
     retrain = sub.add_parser(
         "retrain", help="refit the forest on your own alerts and incident records"
     )
-    retrain.add_argument("--environment", dest="company", type=_company_label,
-                         default=_UNSET, metavar="NAME",
-                         help="run label; defaults to the input directory's name")
+    _add_environment(retrain)
     retrain.add_argument("--incidents", type=Path, required=True)
     retrain.add_argument(
         "--reviewed-periods", type=Path,
         help="CSV of start,end periods whose alerts were fully reviewed",
     )
-    retrain.add_argument("--inventory", type=Path, default=_UNSET)
-    retrain.add_argument("--input", type=Path, default=_UNSET)
+    _add_inventory(retrain)
+    _add_input(retrain)
     _add_alert_files(retrain)
-    retrain.add_argument("--model", type=Path, default=_UNSET,
-                         help="bundle to start from; its re-ranker is kept")
+    _add_model(retrain, help="bundle to start from; its re-ranker is kept")
     retrain.add_argument("--out", type=Path, default=Path("models/retrained.skops"))
     retrain.add_argument("--holdout-days", type=_positive, default=7)
     retrain.add_argument("--budget", type=_positive, default=10)
@@ -3631,42 +3351,28 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-# wazuh alerts carry agent.name and agent.ip but not agent groups, so roles are
-# the one part a human still has to fill in
 def cmd_inventory(args) -> None:
-    if getattr(args, "list_roles", False):
+    if args.list_roles:
         for role, origin in role_sources().items():
             console.print(f"  {role:20} {origin}")
         return
     require_directory(args.input)
     company = resolve_company(args)
-    # scaffolding reads the same file triage will, so a differently named export
-    # scaffolds as readily as the benchmark's convention
-    try:
-        alert_files = resolve_alert_files(args.input, company)
-    except FileNotFoundError as error:
-        errors.print(f"[red]{safe(error)}[/red]")
-        raise SystemExit(EXIT_ERROR)
-    # an asset is one agent address, and only a wazuh export carries agent.ip
+    alert_files = _resolve_files(args.input, company)
     source = next(
         (path for path, family in alert_files if family == WAZUH_FAMILY), None
     )
     if source is None:
-        errors.print(f"[red]wazuh alerts not found in:[/red] {safe(args.input)}")
-        raise SystemExit(EXIT_ERROR)
+        _fail(f"[red]wazuh alerts not found in:[/red] {safe(args.input)}")
     out = args.out or (args.input / "inventory" / f"{company}.json")
 
-    # One asset per agent address, because that is what the pipeline keys a
-    # session on. Grouping by agent.name instead collapsed every machine behind a
-    # manager reporting one name into a single asset, and they then shared one set
-    # of roles: on the bundled data that turned ten machines into one.
+    # One asset per agent address, because that is what the pipeline keys a session
+    # on. A wazuh alert carries agent.name and agent.ip but no roles, so roles are
+    # the one part a person still fills in.
     names: dict[str, str] = {}
     read = 0
     with source.open(encoding="utf-8-sig") as handle:
-        for line in handle:
-            if read >= args.limit:
-                break
-            read += 1
+        for read, line in enumerate(islice(handle, args.limit), start=1):
             try:
                 record = json.loads(line)
             except (json.JSONDecodeError, RecursionError):
@@ -3675,16 +3381,11 @@ def cmd_inventory(args) -> None:
             address = str(agent.get("ip") or "").strip()
             if not address:
                 continue
-            # predecoder.hostname is what the machine calls itself. Falling back
-            # to the address rather than the agent name matches how
-            # extract_wazuh_fields labels a host, and avoids three machines all
-            # being called after the collector.
             hostname = str((record.get("predecoder") or {}).get("hostname") or "")
             names.setdefault(address, hostname.strip() or address)
 
     if not names:
-        errors.print(f"[red]no agent addresses found in {safe(source.name)}[/red]")
-        raise SystemExit(EXIT_ERROR)
+        _fail(f"[red]no agent addresses found in {safe(source.name)}[/red]")
 
     assets = [
         {
@@ -3702,8 +3403,6 @@ def cmd_inventory(args) -> None:
     )
 
     console.print(f"wrote {out}  {len(assets)} assets from {read} alert lines")
-    # say what the model does with roles, not what filling them in is worth:
-    # that was measured on one benchmark and does not transfer
     console.print(
         "[yellow]roles are empty[/yellow]  the model reads asset role as a "
         "feature; assets left without one are scored without it"
@@ -3716,28 +3415,14 @@ def cmd_inventory(args) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    # rich prints box characters and ellipses, so keep stdout on utf-8 even when
-    # a Windows console defaults to a legacy code page
+    # rich prints box characters and ellipses, so keep the streams on utf-8 even
+    # when a Windows console defaults to a legacy code page
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    # `queue | head` closes the pipe early; that is an exit, not a crash
-    import contextlib
-
-    def _quiet_pipe_exit() -> None:
-        # the interpreter flushes stdout again on exit and fails on the closed
-        # pipe, so point the descriptor at devnull first (the Python docs recipe)
-        import os
-        with contextlib.suppress(OSError, ValueError):
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        raise SystemExit(0)
-
+    args = build_parser().parse_args(argv)
     if args.no_color:
-        # the module globals are what every renderer prints through
-        globals()["console"] = _Console(no_color=True)
-        globals()["errors"] = _Console(stderr=True, no_color=True)
+        console.no_color = errors.no_color = True
     # bare `meerkat` orients instead of erroring, and needs a runs dir to look in
     if args.command is None:
         args.runs_dir = _UNSET
@@ -3746,24 +3431,16 @@ def main(argv: list[str] | None = None) -> None:
         if args.command is None:
             cmd_orientation(args)
             return
-        try:
-            args.func(args)
-            sys.stdout.flush()
-        except (BrokenPipeError, OSError) as error:
-            import errno
-            if isinstance(error, BrokenPipeError) or error.errno in (
-                errno.EPIPE, errno.EINVAL
-            ):
-                _quiet_pipe_exit()
-            # a path the OS refuses is the user's to fix, not a crash
-            errors.print(f"[red]{safe(error)}[/red]")
-            raise SystemExit(EXIT_ERROR)
+        args.func(args)
+        sys.stdout.flush()
+    except OSError as error:
+        if isinstance(error, BrokenPipeError) or error.errno in (
+            errno.EPIPE, errno.EINVAL
+        ):
+            _exit_on_closed_pipe()
+        _fail(f"[red]{safe(error)}[/red]")
     except AlertFileError as error:
-        # the message already names the file and the line, which is the whole
-        # point: one bad record in a 45 MB export should not print a traceback.
-        # It names a file the operator may not have chosen, so it is escaped too.
-        errors.print(f"[red]{safe(error)}[/red]")
-        raise SystemExit(EXIT_ERROR)
+        _fail(f"[red]{safe(error)}[/red]")
 
 
 if __name__ == "__main__":

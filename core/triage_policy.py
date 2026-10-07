@@ -1,9 +1,5 @@
-"""Select a bounded daily queue of scored review families.
-
-Public API:
-    daily_queue(families, k) -> the k families an analyst reviews that day
-    enrich_alerts(frame, mappings) -> alerts with ATT&CK mapping columns
-"""
+# The queue order and the ATT&CK mapping of alerts. queue_order is the one place
+# that decides which family comes first, so every consumer goes through it.
 
 from __future__ import annotations
 
@@ -13,29 +9,12 @@ from core.attack_mapping import DETECTION_MAPPINGS, map_alert
 
 
 def queue_order(families: pd.DataFrame) -> pd.DataFrame:
-    # the queue is ordered by the raw ranking score, never by the calibrated
-    # probability, so display changes cannot reorder an analyst's day. Scores
-    # tie often, so the start/id tie-break is part of the contract: every
-    # consumer of this order must go through this function.
-    group_columns = ["day"]
-    if "scenario" in families.columns:
-        group_columns.insert(0, "scenario")
+    # raw ranking score, never the calibrated probability, so display changes
+    # cannot reorder an analyst's day; ties break on start and id
     return families.sort_values(
-        group_columns + ["ranking_score", "start", "representative_session_id"],
-        ascending=[True] * len(group_columns) + [False, True, True],
+        ["scenario", "day", "ranking_score", "start", "representative_session_id"],
+        ascending=[True, True, False, True, True],
         kind="stable",
-    )
-
-
-def daily_queue(families: pd.DataFrame, k: int = 25) -> pd.DataFrame:
-    group_columns = ["day"]
-    if "scenario" in families.columns:
-        group_columns.insert(0, "scenario")
-    return (
-        queue_order(families)
-        .groupby(group_columns, sort=False, observed=True)
-        .head(k)
-        .reset_index(drop=True)
     )
 
 
@@ -43,14 +22,12 @@ def enrich_alerts(
     frame: pd.DataFrame,
     mappings: dict[str, dict[str, list[str]]] = DETECTION_MAPPINGS,
 ) -> pd.DataFrame:
-    mapped = [
-        map_alert(
-            row.detector_source, row.rule_id, row.native_technique_ids, mappings
-        )
-        for row in frame.itertuples(index=False)
-    ]
+    keys = list(zip(
+        frame["detector_source"], frame["rule_id"], frame["native_technique_ids"]
+    ))
+    mapped = {key: map_alert(*key, mappings) for key in set(keys)}
     enriched = frame.copy()
-    enriched["technique_ids"] = [mapping.technique_ids for mapping in mapped]
-    enriched["tactics"] = [mapping.tactics for mapping in mapped]
-    enriched["mapping_source"] = [mapping.source for mapping in mapped]
+    enriched["technique_ids"] = [mapped[key].technique_ids for key in keys]
+    enriched["tactics"] = [mapped[key].tactics for key in keys]
+    enriched["mapping_source"] = [mapped[key].source for key in keys]
     return enriched
