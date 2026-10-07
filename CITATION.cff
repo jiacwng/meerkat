@@ -3,7 +3,7 @@ message: If you use meerkat or its results, please cite it as below.
 title: Meerkat
 type: software
 abstract: >-
-  Meerkat is a triage tool for multi-detector SOC alert data. It groups Wazuh,
+  Meerkat is an end-of-day triage tool for Wazuh. It groups Wazuh,
   Suricata and log-anomaly alerts into sessions and same-day families, then ranks
   the families so that one day of review covers as many distinct attack steps as
   possible. Under leave-one-environment-out evaluation on the AIT Alert Data Set,
