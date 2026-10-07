@@ -36,6 +36,10 @@
 - `inspect` replaces "Related ATT&CK observations" with "ATT&CK chain on this
   host", computed over the whole host and day.
 
+### Changed
+
+- The shipped model is retrained under scikit-learn 1.9 with 200 trees.
+
 ### Security
 
 - Opening a run no longer unpickles its files without limits. Only the pandas
