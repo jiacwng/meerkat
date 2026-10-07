@@ -16,7 +16,7 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
-from core.classifier import provenance_path
+from core.classifier import is_lfs_pointer, provenance_path
 from core.drift import PSI_MAJOR
 from meerkat import cli
 from meerkat.cli import (
@@ -65,9 +65,9 @@ class HandleTests(unittest.TestCase):
             {"name": "zzz flood", "host": "zzz-host"},
         ])
         families = pd.DataFrame([{
-            "day": 0, "entity_id": "10.0.0.5", "ranking_score": 0.9,
-            "start": 100.0, "representative_session_id": "acme#0",
-            "alert_rows": [0, 1, 2, 3],
+            "scenario": "acme", "day": 0, "entity_id": "10.0.0.5",
+            "ranking_score": 0.9, "start": 100.0,
+            "representative_session_id": "acme#0", "alert_rows": [0, 1, 2, 3],
         }])
         top = cli.decorate_families(families, alerts, budget=2).iloc[0]
         self.assertEqual(top["host_label"], "mmm-host")
@@ -78,9 +78,9 @@ class HandleTests(unittest.TestCase):
         # label left when every covered alert has an empty host field
         alerts = pd.DataFrame([{"name": "", "host": ""}])
         families = pd.DataFrame([{
-            "day": 0, "entity_id": "10.0.0.5", "ranking_score": 0.9,
-            "start": 100.0, "representative_session_id": "acme#0",
-            "alert_rows": [0],
+            "scenario": "acme", "day": 0, "entity_id": "10.0.0.5",
+            "ranking_score": 0.9, "start": 100.0,
+            "representative_session_id": "acme#0", "alert_rows": [0],
         }])
         top = cli.decorate_families(families, alerts, budget=1).iloc[0]
         self.assertEqual(top["host_label"], "10.0.0.5")
@@ -442,19 +442,6 @@ class HtmlExportTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
 
 
-class FilterTests(unittest.TestCase):
-    def test_match_handles_float_and_string_fields(self):
-        # an analyst types --where http_status=400 as text against a float
-        # column, so 400 and 400.0 have to compare as the same value
-        alerts = make_alerts()
-        kept = cli._apply_filters(alerts, [("http_status", "400")], [])
-        self.assertEqual(len(kept), 2)
-        dropped = cli._apply_filters(alerts, [], [("http_status", "404")])
-        self.assertNotIn(404.0, dropped["http_status"].tolist())
-        by_rule = cli._apply_filters(alerts, [("rule_id", "2001")], [])
-        self.assertEqual(len(by_rule), 1)
-
-
 class PanelTests(unittest.TestCase):
     def _capture(self, call) -> str:
         # the CLI renders through its module-level rich console, which resolves
@@ -651,10 +638,10 @@ class QueueSelectionTests(unittest.TestCase):
         # queue line, so any filter widens the scope to the whole run
         with tempfile.TemporaryDirectory() as tmp:
             run = self._run(Path(tmp))
-            default = cli._select_families(run, False, None, None, None, None)
+            default = cli._select_families(run, cli.QueueFilter())
             self.assertEqual(len(default), 1)  # budget 1, one family in queue
             by_detector = cli._select_families(
-                run, False, None, "suricata", None, None
+                run, cli.QueueFilter(detector="suricata")
             )
             # F002 is suricata and below the queue line, a filter still finds it
             self.assertEqual(list(by_detector["handle"]), ["F2"])
@@ -665,7 +652,7 @@ class QueueSelectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run = self._run(Path(tmp))
             same_day = cli._select_families(
-                run, False, None, None, None, None, cli.fmt_date(0)
+                run, cli.QueueFilter(day=cli.fmt_date(0))
             )
             # --day narrows to one day without widening past the budget
             self.assertEqual(len(same_day), 1)
@@ -676,9 +663,7 @@ class QueueSelectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run = self._run(Path(tmp))
             with self.assertRaises(SystemExit):
-                cli._select_families(
-                    run, False, None, None, None, None, "1999-01-01"
-                )
+                cli._select_families(run, cli.QueueFilter(day="1999-01-01"))
 
     def test_review_state_filter_matches_recorded_decision(self):
         # decisions live in reviews.jsonl beside the run, so --review-state
@@ -690,7 +675,7 @@ class QueueSelectionTests(unittest.TestCase):
                 "acme#0#10.0.0.5#suricata#2001", "F002", "escalate", "",
             )
             escalated = cli._select_families(
-                run, False, None, None, None, "escalate"
+                run, cli.QueueFilter(review_state="escalate")
             )
             self.assertEqual(list(escalated["handle"]), ["F2"])
 
@@ -704,10 +689,10 @@ class LfsTests(unittest.TestCase):
             pointer.write_text(
                 "version https://git-lfs.github.com/spec/v1\noid sha256:abc\n"
             )
-            self.assertTrue(cli._is_lfs_pointer(pointer))
+            self.assertTrue(is_lfs_pointer(pointer))
             real = Path(tmp) / "real.json"
             real.write_text('{"detector_source": "wazuh"}\n')
-            self.assertFalse(cli._is_lfs_pointer(real))
+            self.assertFalse(is_lfs_pointer(real))
 
 
 # Each of these reached the user as a traceback, a message naming the wrong
@@ -745,7 +730,7 @@ class EmptyInputTests(unittest.TestCase):
         ):
             cli._score_company(
                 None, temporary_directory(), "acme", Path("inventory.json"),
-                None, None,
+                None, None, {},
             )
         self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
         self.assertIn("no alerts parsed", errors.getvalue())
@@ -820,6 +805,7 @@ class CheckReportsTheTestedValueTests(unittest.TestCase):
             cli.cmd_check(argparse.Namespace(
                 company="acme", input=directory, inventory=inventory,
                 sample=100, wazuh_file=None, aminer_file=None, json=False,
+                attack_mappings=None,
             ))
         printed = squashed(output.getvalue())
         self.assertIn("outsidetheinventory", printed)
@@ -847,6 +833,7 @@ class CheckReadsEveryAlertFileTests(unittest.TestCase):
             cli.cmd_check(argparse.Namespace(
                 company="acme", input=directory, inventory=inventory,
                 sample=100, wazuh_file=None, aminer_file=None, json=False,
+                attack_mappings=None,
             ))
         printed = squashed(output.getvalue())
         self.assertIn("alerts.json", printed)
@@ -975,6 +962,9 @@ class RealExitCodeTests(unittest.TestCase):
         reported = io.StringIO()
         with (
             mock.patch.object(cli, "compare_models", return_value=refused),
+            mock.patch.multiple(
+                cli, RETRAIN_TREES=5, RETRAIN_FITS=2, MIN_BAGGED_SESSIONS=1
+            ),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(reported),
             self.assertRaises(SystemExit) as caught,
@@ -983,9 +973,7 @@ class RealExitCodeTests(unittest.TestCase):
                 model=SHIPPED_BUNDLE, input=directory, company="acme",
                 inventory=directory / "inventory" / "acme.json",
                 incidents=incidents, wazuh_file=None, aminer_file=None,
-                reviewed_periods=None, holdout_days=1, prior_k=1.0, budget=10,
-                min_positives=1, trees=5, seed=0, fits=2, out=written,
-                refit_ranking_weights=False,
+                holdout_days=1, budget=10, out=written,
             ))
         self.assertEqual(caught.exception.code, EXIT_DECLINED)
         self.assertNotEqual(EXIT_DECLINED, EXIT_ERROR)
@@ -1022,70 +1010,6 @@ class RealExitCodeTests(unittest.TestCase):
             report,
         )
         self.assertIn("compare several days at once", report)
-
-
-class RankingWeightContestTests(unittest.TestCase):
-    # the adopt path cannot be reached on single-campaign data, so it is
-    # exercised with stand-ins: only the contest's own decision is real
-    def _bundle(self, reranker="shipped"):
-        from core.scenario_eval import TriageBundle
-        return TriageBundle(
-            forest=None, schema=None, reranker=reranker, calibrator=None,
-            training_scenarios=(), n_estimators=2, seed=0,
-        )
-
-    def _contest(self, shipped_reach, local_reach, positives=20, fit=object()):
-        candidates = [self._bundle() for _ in shipped_reach]
-        verdict = {"candidates": shipped_reach, "median_index": 0}
-        args = argparse.Namespace(trees=2, seed=0, fits=len(candidates), budget=5)
-        with (
-            mock.patch(
-                "core.scenario_eval.fit_local_reranker",
-                return_value=(fit, positives),
-            ),
-            mock.patch.object(
-                cli, "incident_reach_for", side_effect=list(local_reach)
-            ),
-            cli.console.capture() as captured,
-        ):
-            bundle, note = cli._contest_ranking_weights(
-                candidates[0], candidates, verdict, None, None, None, None,
-                None, None, args,
-            )
-        return bundle, note, captured.get()
-
-    def test_a_winning_local_fit_is_adopted_and_says_so(self):
-        shipped = [np.array([True, False, False])] * 3
-        local = [np.array([True, True, False])] * 3
-        bundle, note, out = self._contest(shipped, local)
-        self.assertEqual(bundle.ranking_weights, "local")
-        self.assertIn("adopted: local ranking weights (won 3 of 3 seeds)", note)
-
-    def test_a_losing_local_fit_keeps_shipped_with_the_score(self):
-        shipped = [np.array([True, True, False])] * 3
-        local = [np.array([True, False, False])] * 3
-        bundle, note, out = self._contest(shipped, local)
-        self.assertEqual(bundle.reranker, "shipped")
-        self.assertIn("shipped won 3 of 3 seeds", note)
-
-    def test_a_tie_keeps_shipped(self):
-        reach = [np.array([True, False])] * 3
-        bundle, note, out = self._contest(reach, reach)
-        self.assertIn("shipped won", note)
-
-    def test_the_notification_translates_families_to_incidents(self):
-        shipped = [np.array([True])] * 3
-        local = [np.array([False])] * 3
-        _, _, out = self._contest(shipped, local, positives=8)
-        self.assertIn("8 positive families", out)
-        self.assertIn("~15", out)
-        self.assertIn("15 recorded incidents", out)
-
-    def test_an_impossible_fit_is_named_and_nothing_contested(self):
-        _, note, out = self._contest(
-            [np.array([True])] * 3, [np.array([True])] * 3, fit=None,
-        )
-        self.assertIn("could not be attempted", note)
 
 
 class TrackRecordTests(unittest.TestCase):
@@ -1223,15 +1147,13 @@ class BundleGuardTests(unittest.TestCase):
         commands = {
             "triage": argparse.Namespace(
                 model=absent, input=directory, company="acme", inventory=inventory,
-                labels=None, event_csv_dir=None, wazuh_file=None, aminer_file=None,
+                wazuh_file=None, aminer_file=None, attack_mappings=None,
                 budget=10, runs_dir=temporary_directory(),
             ),
             "retrain": argparse.Namespace(
                 model=absent, input=directory, company="acme", inventory=inventory,
                 incidents=incidents, wazuh_file=None, aminer_file=None,
-                reviewed_periods=None, holdout_days=1, prior_k=1.0, budget=10,
-                min_positives=1, trees=10, seed=0, fits=1, out=absent,
-                refit_ranking_weights=False,
+                holdout_days=1, budget=10, out=absent,
             ),
             "drift": argparse.Namespace(
                 model=absent, input=directory, company="acme", inventory=inventory,
@@ -1345,6 +1267,7 @@ class TestRuleCardinality(unittest.TestCase):
             cli.cmd_check(argparse.Namespace(
                 company="acme", input=directory, inventory=inventory,
                 sample=len(rule_ids) * 2, wazuh_file=None, aminer_file=None, json=False,
+                attack_mappings=None,
             ))
         return squashed(reported.getvalue())
 
@@ -1373,6 +1296,7 @@ class TestQueueBudget(unittest.TestCase):
                 "rule_id": "31101", "ranking_score": 1.0 - rank / 100,
                 "start": float(rank), "representative_session_id": f"acme#{rank}",
                 "alert_rows": [0], "family_id": f"acme#{day}#{rank}",
+                "scenario": "acme", "criticality": "unset",
             }
             for day in range(days)
             for rank in range(per_day)
@@ -1383,6 +1307,7 @@ class TestQueueBudget(unittest.TestCase):
         args = argparse.Namespace(
             runs_dir=runs, run=None, budget=budget, json=True, all=False,
             host=None, detector=None, rule=None, review_state=None, day=None,
+            criticality=None, tactic=None,
         )
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
@@ -1543,7 +1468,7 @@ class TestQueueRendering(unittest.TestCase):
             "day": 19013, "host_label": "web-01", "detector_source": "wazuh",
             "title": "Web server 400 error", "rule_id": "31101",
             "alert_count": 3, "ranking_score": 0.9,
-            "evidence_probability": 0.8, "start": 100.0,
+            "evidence_probability": 0.8, "start": 100.0, "criticality": "unset",
         }
         row.update(overrides)
         return pd.DataFrame([row])

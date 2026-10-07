@@ -1,22 +1,9 @@
-# Turn a client's incident records into training labels.
-#
-# A SOC can say "an incident ran on this host between these times". It cannot say
-# which of the alerts inside that window were the attack, and neither can we, so
-# nothing is asserted positive. Every session inside an incident joins a bag and
-# carries k/n of the ticket's weight; sessions in no bag are clean negatives.
-# Measured on AIT: labels are 93.9% pure at bag level against 75.5% at session
-# level.
-#
-# k/n is a bag-size discount rather than a probability, and the distinction is measured
-# rather than stylistic. The true witness rate is 0.755 pooled with a median of
-# 1.000, so most bags are entirely positive; using that measured rate as the weight
-# scores 41.33 at K=5, the same as no weighting at all. What k/n actually does is
-# equalise how much each ticket influences the fit: without it one vague all-day
-# ticket contributes as many training rows as twenty precise ones, and in the worst
-# AIT environment a single window carried 48.5% of the positive signal. k=1 keeps
-# every ticket's total weight at exactly 1.0 whatever its width. k=1 to k=5 differ
-# by less than seed noise (paired over ten seeds, p = 0.34), so k=1 is chosen for
-# having a reason rather than a score.
+# Turns a client's incident records into training labels. A ticket says an incident
+# ran on a host between two times, not which alerts were the attack, so nothing is
+# asserted positive: every session inside an incident joins a bag and carries k/n
+# of the ticket's weight, and sessions in no bag are negatives. k/n is a bag-size
+# discount, not a probability: it keeps each ticket's total weight at k, whatever
+# its width.
 
 from __future__ import annotations
 
@@ -27,14 +14,13 @@ import pandas as pd
 
 from core.inventory import Inventory
 
-# OCSF Incident Finding verdict names that mean an attack happened. "test" is
-# there because a purple team or Atomic Red Team run is known-good supervision.
+# OCSF Incident Finding verdicts that mean an attack happened; "test" is a purple
+# team run, which is known-good supervision
 POSITIVE_VERDICTS = frozenset({
     "true_positive", "security_risk", "test", "malicious",
 })
 BAG_SIZE_DISCOUNT = 1.0
 REQUIRED_COLUMNS = ("start", "end", "host", "verdict")
-REVIEWED_COLUMNS = ("start", "end")
 
 
 def _epoch_seconds(values: pd.Series, column: str, path: Path) -> pd.Series:
@@ -88,44 +74,11 @@ def load_incidents(path: Path) -> pd.DataFrame:
 
     kept = frame[frame["verdict"].isin(POSITIVE_VERDICTS)].reset_index(drop=True)
     if kept.empty:
-        # otherwise this surfaces much later as "0 sessions fall inside an incident"
         raise ValueError(
             f"{path} has {len(frame)} rows and none carry a verdict meaning an "
             f"attack happened; expected one of {', '.join(sorted(POSITIVE_VERDICTS))}"
         )
     return kept
-
-
-def load_reviewed_periods(path: Path) -> pd.DataFrame:
-    with path.open(encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        rows = list(reader)
-    missing = [c for c in REVIEWED_COLUMNS if c not in (reader.fieldnames or [])]
-    if missing:
-        raise ValueError(
-            f"{path} is missing {', '.join(missing)}; "
-            f"expected columns {', '.join(REVIEWED_COLUMNS)}"
-        )
-    frame = pd.DataFrame(rows, columns=REVIEWED_COLUMNS)
-    frame["start"] = _epoch_seconds(frame["start"], "start", path)
-    frame["end"] = _epoch_seconds(frame["end"], "end", path)
-    return frame
-
-
-def assign_reviewed(
-    sessions: pd.DataFrame,
-    periods: pd.DataFrame | None,
-) -> pd.Series:
-    if periods is None:
-        return pd.Series(True, index=sessions.index, dtype=bool)
-
-    reviewed = pd.Series(False, index=sessions.index, dtype=bool)
-    for period in periods.itertuples():
-        reviewed |= (
-            sessions["start"].ge(period.start)
-            & sessions["end"].le(period.end)
-        )
-    return reviewed
 
 
 def entity_for(host: str, inventory: Inventory) -> str:
@@ -139,7 +92,6 @@ def assign_bag_priors(
     sessions: pd.DataFrame,
     incidents: pd.DataFrame,
     inventory: Inventory,
-    numerator: float = BAG_SIZE_DISCOUNT,
 ) -> pd.Series:
     prior = pd.Series(0.0, index=sessions.index, dtype=float)
     entities = sessions["entity_id"].astype(str)
@@ -147,8 +99,8 @@ def assign_bag_priors(
         entity = entity_for(row.host, inventory)
         if not entity:
             continue
-        # a session belongs to the incident if it overlaps the reported window at
-        # all, since a burst rarely starts and ends inside it
+        # a burst rarely starts and ends inside the reported window, so any overlap
+        # puts a session in the bag
         overlap = (
             entities.eq(entity)
             & sessions["start"].le(row.end)
@@ -156,7 +108,7 @@ def assign_bag_priors(
         )
         count = int(overlap.sum())
         if count:
-            candidate = numerator / count
+            candidate = BAG_SIZE_DISCOUNT / count
             prior.loc[overlap] = prior.loc[overlap].clip(lower=candidate)
     return prior.clip(upper=1.0)
 

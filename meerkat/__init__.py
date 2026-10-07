@@ -1,3 +1,3 @@
-"""Meerkat: a SOC alert-triage command line over the frozen ranking core."""
+# Meerkat: a SOC alert-triage command line.
 
 __version__ = "1.1.0"

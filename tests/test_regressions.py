@@ -101,7 +101,7 @@ class TestDegeneratePrior(unittest.TestCase):
         # meaningless. The mirror case was already refused.
         X = pd.DataFrame({"signal": np.linspace(0, 1, 20), "noise": np.zeros(20)})
         with self.assertRaises(ValueError) as caught:
-            classifier.fit_soft_labels(X, np.ones(20), None, n_estimators=5)
+            classifier.fit_soft_labels(X, np.ones(20), n_estimators=5)
         self.assertIn("nothing to", str(caught.exception))
 
 
@@ -152,17 +152,6 @@ class TestCliRobustness(unittest.TestCase):
         inventory = load_inventory(directory / "inventory" / f"{directory.name}.json")
         self.assertEqual(inventory.assets_by_ip["10.0.0.1"].groups, ("server",))
 
-    def test_a_bundle_without_the_median_field_still_reports_drift(self):
-        # skops restores a field a stored profile never had as absent, so a
-        # bundle written before feature_medians existed crashed every drift run
-        from core.drift import TrainingProfile, compare_profile
-        profile = TrainingProfile()
-        profile.feature_bins = {"log_size": ((1.0,), (0.5, 0.5))}
-        del profile.__dict__["feature_medians"]
-        drift = compare_profile(profile, pd.DataFrame({"log_size": [1.0, 2.0]}))
-        self.assertEqual(len(drift), 1)
-        self.assertTrue(np.isnan(drift[0].training_median))
-
 
 class TestBoundaryValues(unittest.TestCase):
     # each of these was accepted silently and produced a wrong or unreachable
@@ -184,17 +173,6 @@ class TestBoundaryValues(unittest.TestCase):
                 with self.subTest(command=command[0], value=value):
                     with self.assertRaises(SystemExit):
                         self.parser().parse_args([*command, "--budget", value])
-
-    def test_prior_k_must_be_finite_and_positive(self):
-        # a negative or NaN k left every prior at zero, and the error then
-        # blamed the user's incident records for a tuning flag
-        base = ["retrain", "--incidents", "i.csv", "--inventory", "v.json"]
-        for value in ("-1", "0", "nan", "inf"):
-            with self.subTest(value=value), self.assertRaises(SystemExit):
-                self.parser().parse_args([*base, "--prior-k", value])
-        self.assertEqual(
-            self.parser().parse_args([*base, "--prior-k", "2.5"]).prior_k, 2.5
-        )
 
     def test_a_bidi_override_is_stripped_like_any_control_character(self):
         # rich strips neither C1 nor the bidi overrides, and one reorders the
@@ -405,6 +383,7 @@ def one_family_run():
         "technique_id_set": frozenset({f"T1059 {BREAKS_MARKUP}"}),
         "child_session_ids": ("s1",),
         "alert_rows": (0,),
+        "criticality": "unset",
     })
     alerts = pd.DataFrame([{
         "timestamp": 0.0,
@@ -483,7 +462,7 @@ class MarkupInAlertTextTests(unittest.TestCase):
             # no alert files in the directory, so it stops just after the warning
             with self.assertRaises(FileNotFoundError):
                 cli._score_company(
-                    None, directory, "acme", inventory_path, None, None
+                    None, directory, "acme", inventory_path, None, None, {}
                 )
         self.assertIn("unrecognised roles", buffer.getvalue())
         self.assertNotIn(OSC8, buffer.getvalue())

@@ -1,6 +1,6 @@
-# Fit the model bundle that the product ships. This is a research entry point:
-# it reads all eight benchmark environments, seven of which are not in the
-# repository, so it only runs after the download described in bench/README.md.
+# Fits the model bundle the product ships. It reads all eight benchmark
+# environments, seven of which are not in the repository, so it only runs after
+# the download described in bench/README.md.
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from bench.evaluate import (
     prepare_sessions,
 )
 from core.classifier import save_model
-from core.normalize import load_attack_windows
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -32,15 +31,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--event-csv-dir", type=Path, default=Path("data/raw/alerts_csv")
     )
-    # 200 is where added trees stopped improving coverage
     parser.add_argument("--trees", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--model", type=Path, default=Path("models/meerkat_bundle.skops")
-    )
-    parser.add_argument(
-        "--pu-c", type=float, default=None,
-        help="share of real attacks the labels record; enables PU training",
     )
     args = parser.parse_args(argv)
 
@@ -54,15 +48,8 @@ def main(argv: list[str] | None = None) -> None:
         args.event_csv_dir,
     )
     inventories = load_inventories(args.inventory_dir, scenarios)
-    windows = {
-        scenario: load_attack_windows(args.labels, scenario)
-        for scenario in scenarios
-    }
-    sessions = prepare_sessions(frames, inventories, windows)
-    bundle = build_bundle(
-        sessions, holdout=None, n_estimators=args.trees, seed=args.seed,
-        pu_c=args.pu_c,
-    )
+    sessions = prepare_sessions(frames, inventories)
+    bundle = build_bundle(sessions, n_estimators=args.trees, seed=args.seed)
     save_model(bundle, args.model)
     print(f"saved {args.model} ({args.trees} trees, seed {args.seed})")
 

@@ -1,19 +1,6 @@
-"""Leave-one-environment-out evaluation over the AIT-ADS benchmark.
-
-This is the research half of Meerkat. It needs the dataset described in
-bench/README.md, which is a 3.6 GB download the product never touches. Nothing
-under meerkat/ may import this module.
-
-Public API:
-    load_scenarios / load_inventories       -> read the benchmark environments
-    prepare_sessions(...)                   -> one session table per environment
-    prepare_fold(session_tables, test)      -> one leave-one-out split
-    score_fold(fold, ...)                   -> that split's sessions, scored
-    build_bundle(session_tables, ...)       -> the shipped model
-    evaluate_scenarios(...)                 -> the published results table
-    sign_tests(per_fold, ...)               -> paired sign test against a ranker
-    parse_budgets(text)                     -> "5,10,25" or "1-25" to budgets
-"""
+# Leave-one-environment-out evaluation over the AIT-ADS benchmark, and the fit of
+# the shipped model bundle. It needs the dataset described in bench/README.md and
+# nothing under meerkat/ may import it.
 
 from __future__ import annotations
 
@@ -29,7 +16,6 @@ from core.classifier import (
     fit_calibrator,
     fit_family_reranker,
     fit_model,
-    fit_model_pu,
     predict_scores,
 )
 from core.drift import build_profile
@@ -40,14 +26,9 @@ from core.features import (
 )
 from core.inventory import Inventory, load_inventory
 from core.normalize import load_attack_windows, normalize_scenario
-from core.scenario_eval import TriageBundle, add_window_ids
-from core.sessions import (
-    FAMILY_KEY,
-    SESSION_GAP_S,
-    build_families,
-    build_sessions,
-)
-from core.triage_policy import daily_queue
+from core.scenario_eval import TriageBundle
+from core.sessions import FAMILY_KEY, build_families, build_sessions
+from core.triage_policy import queue_order
 
 SCENARIOS = (
     "fox",
@@ -105,20 +86,55 @@ def load_inventories(
         for scenario in scenarios
     }
 
+
+def add_window_ids(
+    frame: pd.DataFrame,
+    windows: list[tuple[float, float, str]],
+) -> pd.DataFrame:
+    marked = frame.copy()
+    marked["window_id"] = -1
+    for window_id, (start, end, attack) in enumerate(windows):
+        inside = marked["timestamp"].between(start, end)
+        marked.loc[
+            inside & marked["attack_window"].eq(attack),
+            "window_id",
+        ] = window_id
+    return marked
+
+
+def _window_set(window_ids: np.ndarray) -> frozenset[int]:
+    return frozenset(int(window_id) for window_id in window_ids if window_id >= 0)
+
+
+def _with_ground_truth(families: pd.DataFrame, marked: pd.DataFrame) -> pd.DataFrame:
+    label = marked["event_label"].fillna("").astype(str).to_numpy()
+    window = marked["window_id"].to_numpy()
+    is_event = label != ""
+    in_event = np.where(is_event, window, -1)
+    rows = [np.asarray(indices) for indices in families["alert_rows"]]
+    return families.assign(
+        labelled_alert_count=[int(is_event[r].sum()) for r in rows],
+        labelled_windows=[_window_set(in_event[r]) for r in rows],
+        temporal_overlap_windows=[_window_set(window[r]) for r in rows],
+        event_categories=[frozenset(label[r][is_event[r]]) for r in rows],
+    )
+
+
+def daily_queue(families: pd.DataFrame, k: int) -> pd.DataFrame:
+    return (
+        queue_order(families)
+        .groupby(["scenario", "day"], sort=False, observed=True)
+        .head(k)
+        .reset_index(drop=True)
+    )
+
+
 def prepare_sessions(
     frames: dict[str, pd.DataFrame],
     inventories: dict[str, Inventory],
-    windows_by_scenario: dict[str, list[tuple[float, float, str]]],
-    gap_s: float = SESSION_GAP_S,
 ) -> dict[str, pd.DataFrame]:
-    # built once and reused, so every fold ranks the same review objects
     return {
-        scenario: build_sessions(
-            add_window_ids(frame, windows_by_scenario[scenario]),
-            scenario,
-            inventories[scenario],
-            gap_s,
-        )
+        scenario: build_sessions(frame, scenario, inventories[scenario])
         for scenario, frame in frames.items()
     }
 
@@ -145,28 +161,18 @@ def score_fold(
     fold: PreparedFold,
     n_estimators: int,
     seed: int,
-    pu_c: float | None = None,
 ) -> tuple[pd.DataFrame, object, SessionFeatureSchema]:
     # the schema is fitted on training scenarios only, then applied unchanged to
     # the test one, so a rule seen for the first time there stays unseen
     schema = fit_session_feature_schema(fold.train)
     X_train = build_session_feature_matrix(fold.train, schema)
     X_test = build_session_feature_matrix(fold.test, schema)
-    if pu_c is None:
-        model = fit_model(
-            X_train,
-            fold.train["positive"],
-            n_estimators=n_estimators,
-            seed=seed,
-        )
-    else:
-        model = fit_model_pu(
-            X_train,
-            fold.train["positive"],
-            c=pu_c,
-            n_estimators=n_estimators,
-            seed=seed,
-        )
+    model = fit_model(
+        X_train,
+        fold.train["positive"],
+        n_estimators=n_estimators,
+        seed=seed,
+    )
     scored = fold.test.copy()
     scored["ranking_score"] = predict_scores(model, X_test)
     return scored, model, schema
@@ -176,7 +182,6 @@ def _out_of_fold_families(
     training_scenarios: tuple[str, ...],
     n_estimators: int,
     seed: int,
-    pu_c: float | None = None,
 ) -> pd.DataFrame:
     parts = []
     training_tables = {
@@ -185,7 +190,7 @@ def _out_of_fold_families(
     }
     for calibration_scenario in training_scenarios:
         fold = prepare_fold(training_tables, calibration_scenario)
-        scored, _, _ = score_fold(fold, n_estimators, seed, pu_c)
+        scored, _, _ = score_fold(fold, n_estimators, seed)
         parts.append(build_families(scored))
     return pd.concat(parts, ignore_index=True)
 
@@ -254,8 +259,6 @@ def _queue_metrics(
         duplicate_rates.append(1.0 - len(unique) / len(day_queue))
         distinct_entities.append(day_queue["entity_id"].nunique())
 
-    # coverage alone rewards big items, so every row carries what the queue
-    # costs to read: the alerts inside it, and their share of each day
     day_volume = families.groupby("day", observed=True)["alert_count"].sum()
     day_shares = [
         queued_alerts / day_volume[day]
@@ -289,8 +292,6 @@ def _brier(probability: np.ndarray, target: pd.Series) -> float:
     return float(np.mean((probability - target.astype(float).to_numpy()) ** 2))
 
 
-# the four baselines the results table compares against. Only the ordering
-# signal changes.
 def _ranker_signals(families, learned, severity, rng):
     return {
         "family re-ranker": learned,
@@ -301,8 +302,6 @@ def _ranker_signals(families, learned, severity, rng):
     }
 
 
-# severity lives on sessions, and adding it to build_families would put a
-# benchmark-only column in the product
 def _family_severity(scored, families):
     per_family = scored.groupby(list(FAMILY_KEY), observed=True)["severity_max"].max()
     keys = pd.MultiIndex.from_frame(families[list(FAMILY_KEY)])
@@ -344,7 +343,6 @@ def _floor_metrics(
 
 
 def _exact_sign_p(deltas: list[int]) -> tuple[float, int]:
-    # ties carry no direction, so they drop out and the test runs on what is left
     nonzero = [delta for delta in deltas if delta != 0]
     n_eff = len(nonzero)
     if n_eff == 0:
@@ -354,13 +352,8 @@ def _exact_sign_p(deltas: list[int]) -> tuple[float, int]:
     return min(1.0, 2 * tail / 2 ** n_eff), n_eff
 
 
-# seeds are replicates of the same experiment, so each is tested on its own and
-# never averaged into the others first
-def sign_tests(
-    per_fold: pd.DataFrame,
-    reference: str = "family re-ranker",
-    metric: str = "strict_windows",
-) -> pd.DataFrame:
+def sign_tests(per_fold: pd.DataFrame, metric: str) -> pd.DataFrame:
+    reference = "family re-ranker"
     rows = []
     rankers = [
         ranker for ranker in per_fold["ranker"].unique()
@@ -454,12 +447,12 @@ def evaluate_scenarios(
     budgets: tuple[int, ...] = DEFAULT_BUDGETS,
     n_estimators: int = 200,
     seeds: tuple[int, ...] = (0,),
-    gap_s: float = SESSION_GAP_S,
-    pu_c: float | None = None,
 ) -> CrossScenarioReport:
-    sessions = prepare_sessions(
-        frames, inventories, windows_by_scenario, gap_s
-    )
+    sessions = prepare_sessions(frames, inventories)
+    marked = {
+        scenario: add_window_ids(frame, windows_by_scenario[scenario])
+        for scenario, frame in frames.items()
+    }
     total_labelled = {
         scenario: int(frame["event_label"].fillna("").astype(str).ne("").sum())
         for scenario, frame in frames.items()
@@ -475,7 +468,6 @@ def evaluate_scenarios(
                 fold.training_scenarios,
                 n_estimators,
                 seed,
-                pu_c,
             )
             calibration_families = _out_of_fold_reranker_scores(
                 training_families
@@ -486,8 +478,10 @@ def evaluate_scenarios(
             )
             reranker = fit_family_reranker(training_families)
 
-            scored, _, _ = score_fold(fold, n_estimators, seed, pu_c)
-            families = build_families(scored)
+            scored, _, _ = score_fold(fold, n_estimators, seed)
+            families = _with_ground_truth(
+                build_families(scored), marked[test_scenario]
+            )
             families["ranking_score"] = reranker.predict(families)
             families["evidence_probability"] = calibrator.predict(
                 families["ranking_score"].to_numpy()
@@ -543,7 +537,6 @@ def evaluate_scenarios(
         per_fold=per_fold,
         calibration=calibration,
         calibration_summary=_summarize_calibration(calibration),
-        # the claim is cheaper at equal coverage, so both sides are tested
         sign_tests=pd.concat(
             [
                 sign_tests(per_fold, metric="strict_windows"),
@@ -555,30 +548,21 @@ def evaluate_scenarios(
 
 def build_bundle(
     session_tables: dict[str, pd.DataFrame],
-    holdout: str | None = None,
     n_estimators: int = 200,
     seed: int = 0,
-    pu_c: float | None = None,
 ) -> TriageBundle:
-    training_scenarios = tuple(
-        scenario for scenario in session_tables if scenario != holdout
-    )
+    training_scenarios = tuple(session_tables)
     train = pd.concat(
         [session_tables[scenario] for scenario in training_scenarios],
         ignore_index=True,
     )
     schema = fit_session_feature_schema(train)
     X = build_session_feature_matrix(train, schema)
-    if pu_c is None:
-        forest = fit_model(X, train["positive"], n_estimators=n_estimators, seed=seed)
-    else:
-        forest = fit_model_pu(
-            X, train["positive"], c=pu_c, n_estimators=n_estimators, seed=seed
-        )
+    forest = fit_model(X, train["positive"], n_estimators=n_estimators, seed=seed)
     # the reranker sees the same kind of child scores it will see at inference,
     # so the out-of-fold folds train the same way the shipped forest did
     training_families = _out_of_fold_families(
-        session_tables, training_scenarios, n_estimators, seed, pu_c
+        session_tables, training_scenarios, n_estimators, seed
     )
     calibration_families = _out_of_fold_reranker_scores(training_families)
     calibrator = fit_calibrator(
@@ -594,16 +578,10 @@ def build_bundle(
         training_scenarios=training_scenarios,
         n_estimators=n_estimators,
         seed=seed,
-        # what the shipped model saw, so a client can be told how far their own
-        # alerts have moved from it without labelling anything
-        profile=build_profile(
-            X, predict_scores(forest, X), training_families,
-            reranker.predict(training_families),
-        ),
+        profile=build_profile(X, reranker.predict(training_families)),
     )
 
 def parse_budgets(text: str) -> tuple[int, ...]:
-    # "5,10,25" or "1-25", so the coverage curve does not need 25 flags
     budgets: list[int] = []
     for part in text.split(","):
         part = part.strip()
@@ -629,8 +607,6 @@ def main() -> None:
     parser.add_argument(
         "--event-csv-dir", type=Path, default=Path("data/raw/alerts_csv")
     )
-    # 200 is where added trees stopped improving coverage, and it is what
-    # the published table is measured at
     parser.add_argument("--trees", type=int, default=200)
     parser.add_argument("--seeds", default="0")
     parser.add_argument(

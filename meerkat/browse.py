@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import os
+
 from meerkat import cli
 
 
 def _show_queue(run, show_all: bool) -> None:
-    families = run.families if show_all else run.families[run.families["in_queue"]]
+    families = run.queue_families(show_all)
     reviews = cli.current_reviews(run.directory)
     title = "all families" if show_all else "Review queue"
     cli.render_queue(run.with_chain(families), reviews, title,
@@ -25,7 +27,6 @@ def _prompt_line(family, session_handle) -> str:
 
 
 def browse_loop(run, input_line=input) -> None:
-    import os
     # an exported COLUMNS freezes rich's width; drop it so resizes apply live
     os.environ.pop("COLUMNS", None)
     os.environ.pop("LINES", None)
@@ -44,7 +45,7 @@ def browse_loop(run, input_line=input) -> None:
             if not line:
                 continue
             word, _, rest = line.partition(" ")
-            canon = cli._canon_handle(word)
+            canon = cli.canon_handle(word)
 
             if canon in ("Q", "QUIT", "EXIT"):
                 return
@@ -128,7 +129,7 @@ def browse_loop(run, input_line=input) -> None:
                     continue
                 session = run.session_by_handle(family, session_handle)
                 alerts = run.session_alerts(session)
-                position = int(canon[1:]) if canon[1:].isdigit() else 0
+                position = cli.alert_position(canon)
                 if not 1 <= position <= len(alerts):
                     cli.errors.print(
                         f"[red]no alert {cli.safe(word)}[/red]  "

@@ -1,9 +1,5 @@
-"""Load the company assets available before alert processing.
-
-Public API:
-    load_inventory(path)                        -> Inventory
-    import_ait_inventory(source_path, out_path) -> convert one AIT YAML file
-"""
+# Loads the asset inventory: which hosts a company has, what role each plays and
+# how critical it is. Roles feed the model; criticality is shown and filtered on.
 
 from __future__ import annotations
 
@@ -13,8 +9,8 @@ from pathlib import Path
 
 from core.roles import canonicalize
 
-# Splunk ES asset priority, with "unset" for its "unknown". The queue shows and
-# filters on it; nothing that scores reads it.
+# Splunk ES asset priority, with "unset" for its "unknown". Nothing that scores
+# reads it.
 CRITICALITY_LEVELS = ("critical", "high", "medium", "low")
 UNSET = "unset"
 
@@ -32,7 +28,6 @@ class Inventory:
     company: str
     assets_by_ip: dict[str, Asset]
     ip_by_hostname: dict[str, str]
-    # names outside CANONICAL_ROLES, reported rather than fatal
     unknown_roles: tuple[str, ...] = ()
     unknown_criticalities: tuple[str, ...] = ()
 
@@ -68,8 +63,6 @@ def _read_criticality(value: object) -> tuple[str, str | None]:
 
 
 def load_inventory(path: Path) -> Inventory:
-    # this is the one file the tool asks a person to hand-edit, so a trailing
-    # comma or a dropped key is the expected failure and must not be a traceback
     try:
         config = json.loads(path.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as error:
@@ -81,7 +74,6 @@ def load_inventory(path: Path) -> Inventory:
         )
     assets_by_ip = {}
     ip_by_hostname = {}
-
     unknown_roles: set[str] = set()
     unknown_criticalities: set[str] = set()
     for item in config["assets"]:
@@ -94,7 +86,6 @@ def load_inventory(path: Path) -> Inventory:
                 raise ValueError(
                     f"{path.name}: an asset is missing \"{required}\""
                 )
-        # "roles" is the documented key; AIT and Wazuh use "groups"
         declared = item.get("roles") or item.get("groups") or []
         if isinstance(declared, str):
             declared = [declared]
@@ -104,8 +95,6 @@ def load_inventory(path: Path) -> Inventory:
         if "attacker" in raw_groups:
             continue
 
-        # only names the model was trained on can score, so translate and keep
-        # track of anything unplaced
         groups, unplaced = canonicalize(raw_groups)
         unknown_roles.update(unplaced)
         criticality, unknown = _read_criticality(item.get("criticality"))
@@ -120,60 +109,13 @@ def load_inventory(path: Path) -> Inventory:
         )
         for ip in asset.ip_addresses:
             assets_by_ip[ip] = asset
-        # this file is hand-edited, so an asset with its addresses deleted is an
-        # ordinary typo rather than something the scaffolder writes; without the
-        # guard it is an IndexError on load
         if asset.ip_addresses:
             ip_by_hostname[asset.hostname.casefold()] = asset.ip_addresses[0]
 
     return Inventory(
-        # the company name is only a label, so a file without one still loads
         company=str(config.get("company", path.stem)),
         assets_by_ip=assets_by_ip,
         ip_by_hostname=ip_by_hostname,
         unknown_roles=tuple(sorted(unknown_roles)),
         unknown_criticalities=tuple(sorted(unknown_criticalities)),
     )
-
-
-def import_ait_inventory(source_path: Path, output_path: Path) -> None:
-    # PyYAML is only needed to read the AIT files, so it stays out of the
-    # runtime path and out of requirements.txt
-    import yaml
-
-    source = yaml.safe_load(source_path.read_text(encoding="utf-8"))
-    assets = []
-    for item in source.values():
-        groups = [str(group) for group in item.get("groups", [])]
-        if "attacker" in groups:
-            continue
-        assets.append({
-            "hostname": str(item["hostname"]),
-            "ip_addresses": [str(ip) for ip in item["ipv4_addresses"]],
-            "groups": groups,
-        })
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps({"company": source_path.stem, "assets": assets}, indent=2),
-        encoding="utf-8",
-    )
-
-
-def main() -> None:
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Convert official AIT inventories")
-    parser.add_argument("source_dir", type=Path)
-    parser.add_argument("output_dir", type=Path)
-    args = parser.parse_args()
-
-    for source_path in sorted(args.source_dir.glob("*.yaml")):
-        import_ait_inventory(
-            source_path,
-            args.output_dir / f"{source_path.stem}.json",
-        )
-
-
-if __name__ == "__main__":
-    main()

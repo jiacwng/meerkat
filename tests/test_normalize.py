@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from core import event_labels, normalize
+from core import normalize
 from core.normalize import (
     AMINER_FAMILY,
     SNIFF_LINES,
@@ -116,41 +116,6 @@ class InventoryTests(unittest.TestCase):
 
             with self.assertRaises(FileNotFoundError):
                 inventory.load_inventory(path)
-
-    @unittest.skipUnless(
-        importlib.util.find_spec("yaml"),
-        "AIT importer requires PyYAML",
-    )
-    def test_ait_importer_writes_runtime_json_without_attacker(self):
-        # the testbed YAML is converted once into the runtime JSON, so the
-        # attacker filter has to survive that conversion too
-        source = (
-            "server_a:\n"
-            "  hostname: server-a\n"
-            "  groups:\n"
-            "    - servers\n"
-            "  ipv4_addresses:\n"
-            "    - 10.0.0.1\n"
-            "attacker_0:\n"
-            "  hostname: attacker-0\n"
-            "  groups:\n"
-            "    - attacker\n"
-            "  ipv4_addresses:\n"
-            "    - 192.0.2.10\n"
-        )
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            yaml_path = root / "demo.yaml"
-            json_path = root / "demo.json"
-            yaml_path.write_text(source, encoding="utf-8")
-
-            inventory.import_ait_inventory(yaml_path, json_path)
-            loaded = inventory.load_inventory(json_path)
-
-        self.assertEqual(loaded.company, "demo")
-        self.assertIn("10.0.0.1", loaded)
-        self.assertNotIn("192.0.2.10", loaded)
 
 
 class EntityAttributionTests(unittest.TestCase):
@@ -694,71 +659,6 @@ class RawScenarioTests(unittest.TestCase):
         ))
 
         self.assertEqual(list(result["host"]), ["server-a", "server-a"])
-
-    def test_label_audit_rejects_shift_hidden_by_repeated_names(self):
-        # labels attach to raw records by position, and a repeated alert name
-        # lets a one-row shift pass the name check, so times are compared too
-        first = {
-            "@timestamp": "1970-01-01T00:00:01+00:00",
-            "decoder": {"name": "sshd"},
-            "rule": {"description": "Repeated alert", "level": 5, "id": "1"},
-            "predecoder": {"hostname": "mail"},
-            "agent": {"name": "mail"},
-        }
-        second = dict(first, **{"@timestamp": "1970-01-01T00:00:02+00:00"})
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            raw = root / "raw"
-            csv_dir = root / "csv"
-            raw.mkdir()
-            csv_dir.mkdir()
-            labels = root / "labels.csv"
-            labels.write_text("scenario,attack,start,end\n", encoding="utf-8")
-            (raw / "demo_aminer.json").write_text("", encoding="utf-8")
-            (raw / "demo_wazuh.json").write_text(
-                json.dumps(first) + "\n" + json.dumps(second) + "\n",
-                encoding="utf-8",
-            )
-            (csv_dir / "demo_alerts.txt").write_text(
-                "time,name,ip,host,short,time_label,event_label\n"
-                "2,Wazuh: Repeated alert,10.0.0.1,mail,W-Test,false_positive,-\n"
-                "1,Wazuh: Repeated alert,10.0.0.1,mail,W-Test,false_positive,-\n",
-                encoding="utf-8",
-            )
-
-            with self.assertRaisesRegex(AssertionError, "positional fields disagree"):
-                event_labels.audit_scenario(raw, csv_dir, labels, "demo")
-
-    def test_label_audit_rejects_unexplained_time_label_mismatch(self):
-        # a mismatch within a second of a window edge is a rounding artefact,
-        # so only one 40 s outside the 0-10 window counts as a disagreement
-        record = {
-            "@timestamp": "1970-01-01T00:00:50+00:00",
-            "decoder": {"name": "sshd"},
-            "rule": {"description": "Login", "level": 5, "id": "1"},
-            "predecoder": {"hostname": "mail"},
-            "agent": {"name": "mail"},
-        }
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            raw = root / "raw"
-            csv_dir = root / "csv"
-            raw.mkdir()
-            csv_dir.mkdir()
-            labels = root / "labels.csv"
-            labels.write_text("scenario,attack,start,end\ndemo,scan,0,10\n", encoding="utf-8")
-            (raw / "demo_aminer.json").write_text("", encoding="utf-8")
-            (raw / "demo_wazuh.json").write_text(json.dumps(record) + "\n", encoding="utf-8")
-            (csv_dir / "demo_alerts.txt").write_text(
-                "time,name,ip,host,short,time_label,event_label\n"
-                "50,Wazuh: Login,10.0.0.1,mail,W-Test,scan,-\n",
-                encoding="utf-8",
-            )
-
-            with self.assertRaisesRegex(AssertionError, "unexplained time labels"):
-                event_labels.audit_scenario(raw, csv_dir, labels, "demo")
 
 
 # Alert files are found by what is inside them, not by what they are called, so

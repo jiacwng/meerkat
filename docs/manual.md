@@ -412,8 +412,7 @@ largest contributions to the score as shares, and the ATT&CK chain of its host
 that day: the longest time-ordered run of the host's tactics that never goes
 back in matrix order, after RapSheet (Hassan et al., IEEE S&P 2020).
 
-    meerkat inspect HANDLE [SESSION] [ALERT] [--where FIELD=VALUE]
-                    [--exclude FIELD=VALUE] [--distinct FIELD] [--alerts N]
+    meerkat inspect HANDLE [SESSION] [ALERT] [--distinct FIELD] [--alerts N]
                     [--raw] [--raw-dir DIR] [--json] [--no-pager]
                     [--run RUN] [--runs-dir DIR]
 
@@ -422,8 +421,6 @@ back in matrix order, after RapSheet (Hassan et al., IEEE S&P 2020).
 | `HANDLE` | a family, e.g. `F3` |
 | `SESSION` | a session inside it, e.g. `S1` |
 | `ALERT` | one alert, e.g. `A2`; shows its full record |
-| `--where FIELD=VALUE` | keep alerts matching a field; repeatable |
-| `--exclude FIELD=VALUE` | drop alerts matching a field; repeatable |
 | `--distinct FIELD` | count the distinct values of one field |
 | `--alerts N` | show up to N alert rows |
 | `--raw` | print the source lines as the detector wrote them |
@@ -537,10 +534,8 @@ records every setting.
 
     meerkat retrain --incidents FILE [--input DIR] [--inventory FILE]
                     [--environment NAME] [--out FILE] [--holdout-days N]
-                    [--budget K] [--model FILE] [--reviewed-periods FILE]
-                    [--refit-ranking-weights] [--prior-k K] [--min-positives N]
-                    [--trees N] [--seed N] [--fits N]
-                    [--wazuh-file FILE] [--aminer-file FILE]
+                    [--budget K] [--model FILE] [--wazuh-file FILE]
+                    [--aminer-file FILE]
 
 | option | description |
 | --- | --- |
@@ -549,14 +544,7 @@ records every setting.
 | `--out FILE` | where the new bundle is written |
 | `--holdout-days N` | days held out for the comparison, default 7 |
 | `--budget K` | budget the comparison scores at, default 10 |
-| `--model FILE` | bundle to start from; `--refit-ranking-weights` can replace its ranking weights |
-| `--reviewed-periods FILE` | CSV of `start,end` periods whose alerts were fully reviewed; only sessions inside them can count as negatives |
-| `--refit-ranking-weights` | also fit the family ranking weights on your incidents; adopted only if they beat the shipped ones on the held-out days. Below about 15 positive families the run warns and continues |
-| `--prior-k K` | bag-size discount; a ticket contributes k/n per session, default 1 |
-| `--min-positives N` | bagged sessions needed before any fit, default 10 |
-| `--trees N` | trees per forest, default 200, matching the shipped model |
-| `--seed N` | base random seed, default 0 |
-| `--fits N` | forests fitted; a majority must beat the shipped one, default 5 |
+| `--model FILE` | bundle to start from; its re-ranker is kept |
 
 ---
 
@@ -644,14 +632,6 @@ newest successful run is what every other command opens by default.
 A run is a directory under `runs/`; deleting the directory deletes the run
 and its reviews.
 
----
-
-### meerkat completion
-
-Print a bash completion script generated from the argument parser, so it always matches the real flags. Covers command names, flags, and the `export` subcommands.
-
-    meerkat completion >> ~/.bashrc
-
 ## The model
 
 Four stages run between the raw files and the queue. **Normalise**: one table
@@ -665,8 +645,7 @@ scores become the day's queue.
 The forest, the inventory, the drift baseline and the `esc%` statistics come
 from your environment. The family ranking weights ship pre-trained, fitted
 across several environments, because a single campaign of incidents is too
-small a sample for a stable fit; `retrain --refit-ranking-weights` refits
-them on your own incidents and keeps whichever set scores better. The `esc%` column comes from your own review
+small a sample for a stable fit. The `esc%` column comes from your own review
 history, counted per score band.
 
 Retraining learns from incident windows, because that is what a SOC can write down: sessions inside a reported
