@@ -12,7 +12,7 @@ Meerkat is an open-source triage tool built as a research project.
 
 ## Install
 
-Python 3.11 or newer. Meerkat is pure Python, so the same install works on
+Python 3.12 or newer. Meerkat is pure Python, so the same install works on
 Linux, macOS and Windows.
 
 From a clone, the full experience: the trained model, one campaign of example

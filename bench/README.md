@@ -58,6 +58,9 @@ python -m bench.train --holdout russellmitchell
 python -m bench.evaluate --trees 200 --seeds 53,52,51
 ```
 
+The table was measured with the versions in `.github/constraints.txt`; install
+them with `pip install -e . -c .github/constraints.txt`.
+
 `bench.check` runs first. It walks `data/raw/`, reports what it can see per
 environment, and names every missing or unreadable file by path. Run it until all
 eight environments come back clean. `train` and `evaluate` on a half-placed
@@ -110,18 +113,19 @@ alerts.
 
 | Ranker | windows K=5 | K=10 | K=25 | alerts/day@10 |
 |---|---:|---:|---:|---:|
-| **Family re-ranker (ours)** | **51** | **58** | **58** | **5,775** |
-| Best child session | 44 | 54 | 58 | 42,830 |
+| **Family re-ranker (ours)** | **53** | **58** | **58** | **14,660** |
+| Best child session | 43 | 51 | 58 | 38,487 |
 | Family size | 29 | 30 | 39 | 55,531 |
 | Native detector severity | 19 | 33 | 46 | 4,542 |
-| Random | 22 | 32 | 44 | 9,125 |
+| Random | 24 | 38 | 49 | 2,803 |
 | Floor: one item per day | 60 | 60 | 60 | 57,295 |
 
 `python -m bench.evaluate` regenerates every row and writes `sign_tests.csv`,
 exact sign tests per seed over the eight folds. Against family size, severity
 and random order the re-ranker separates on every seed (p 0.008 to 0.031).
-Against best child session it does not: identical windows at K=25, 3 of 8
-folds differ at K=10. The difference between those two is the cost column.
+Against best child session it separates at K=5 on every seed (p 0.031) and
+not above: 3 to 5 of 8 folds differ at K=10, and the windows are identical at
+K=25. The difference between those two is the cost column.
 Seeds are tested one by one before any averaging.
 
 The floor row is why the cost column exists. Merging items can only raise
@@ -138,7 +142,7 @@ and Alert Fatigue Mitigation in SOCs* proposes, is the other end of one family:
 alpha-nDCG (Clarke et al., SIGIR 2008) pays a repeated subtopic (1-alpha) less
 each time, alpha=0 is plain nDCG, and this table is the alpha=1 end without the
 position discount. By nDCG best child session wins every budget while reaching
-seven fewer windows at K=5. Both columns are in the output.
+ten fewer windows at K=5. Both columns are in the output.
 
 Detector ceilings bound every row above. Read a low number against its ceiling
 before reading it as a ranking failure:
