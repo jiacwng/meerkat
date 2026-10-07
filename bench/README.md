@@ -89,8 +89,7 @@ with, and the sidecar in the repository lists the seven environments that
 remain. russellmitchell drives the demo, so keeping it out of training means the
 demo scores an environment the model never saw. Without the flag, `bench.train`
 trains on all eight and produces a different bundle. It defaults to 200 trees,
-the count past which coverage stopped improving. The shipped sidecar records 300,
-because the bundle was built before that default changed.
+the count past which coverage stopped improving.
 
 `bench.evaluate` runs the leave-one-environment-out protocol and prints the
 results table. It defaults to 200 trees, matching the table below, and to seed 0.

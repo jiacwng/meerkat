@@ -369,21 +369,21 @@ terminal the queue drops `why`, `chain` and `esc%`, then `start` and `crit`.
 Recorded output:
 
 ```text
-run russellmitchell-20261005-234757-963  |  company russellmitchell  |  budget 10  |  326 families
+run russellmitchell-20261007-134440-786  |  company russellmitchell  |  budget 10  |  326 families
 Review queue (top 10 per day, 2022-01-21)  |  F1 = top priority
 ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━┓
 ┃ handle ┃ date       ┃ start ┃ host            ┃ crit     ┃ detector ┃ finding                                  ┃ why                         ┃ alerts ┃ chain ┃ score ┃    esc% ┃ review ┃
 ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━━━╇━━━━━━━━┩
 │ F1     │ 2022-01-21 │ 06:33 │ inet-firewall   │ critical │ AMiner   │ AMiner: Unusual occurrence frequencies o │ asset role firewall         │      6 │     2 │  1.00 │         │        │
-│ F2     │ 2022-01-21 │ 11:27 │ inet-firewall   │ critical │ AMiner   │ AMiner: New service_start parameter comb │ asset role firewall         │      1 │     2 │  0.97 │         │        │
-│ F3     │ 2022-01-21 │ 11:27 │ inet-firewall   │ critical │ AMiner   │ AMiner: New service_stop parameter combi │ asset role firewall         │      1 │     2 │  0.97 │         │        │
-│ F4     │ 2022-01-21 │ 00:00 │ inet-firewall   │ critical │ AMiner   │ AMiner: New ip address in DNS logs.      │ asset role firewall         │     16 │     2 │  0.74 │         │        │
-│ F5     │ 2022-01-21 │ 16:10 │ inet-firewall   │ critical │ Suricata │ SURICATA HTTP gzip decompression failed  │ asset role firewall         │      1 │       │  0.26 │         │        │
-│ F6     │ 2022-01-21 │ 00:02 │ inet-firewall   │ critical │ AMiner   │ AMiner: New event type.                  │ asset role firewall         │      2 │     2 │  0.22 │         │        │
-│ F7     │ 2022-01-21 │ 16:06 │ inet-firewall   │ critical │ Suricata │ SURICATA HTTP unable to match response t │ asset role firewall         │      8 │       │  0.17 │         │        │
-│ F8     │ 2022-01-21 │ 06:37 │ webserver       │ high     │ Suricata │ SURICATA TLS invalid record/traffic      │ detectors within 10 minutes │    105 │     1 │  0.17 │         │        │
-│ F9     │ 2022-01-21 │ 06:33 │ intranet-server │ high     │ Suricata │ ET POLICY GNU/Linux APT User-Agent Outbo │ detectors within 10 minutes │      7 │     2 │  0.16 │         │        │
-│ F10    │ 2022-01-21 │ 06:37 │ webserver       │ high     │ Suricata │ SURICATA TLS invalid handshake message   │ detectors within 10 minutes │    105 │     1 │  0.16 │         │        │
+│ F2     │ 2022-01-21 │ 11:27 │ inet-firewall   │ critical │ AMiner   │ AMiner: New service_start parameter comb │ asset role firewall         │      1 │     2 │  0.96 │         │        │
+│ F3     │ 2022-01-21 │ 11:27 │ inet-firewall   │ critical │ AMiner   │ AMiner: New service_stop parameter combi │ asset role firewall         │      1 │     2 │  0.96 │         │        │
+│ F4     │ 2022-01-21 │ 00:00 │ inet-firewall   │ critical │ AMiner   │ AMiner: New ip address in DNS logs.      │ asset role firewall         │     16 │     2 │  0.65 │         │        │
+│ F5     │ 2022-01-21 │ 16:10 │ inet-firewall   │ critical │ Suricata │ SURICATA HTTP gzip decompression failed  │ asset role firewall         │      1 │       │  0.50 │         │        │
+│ F6     │ 2022-01-21 │ 06:37 │ webserver       │ high     │ Suricata │ SURICATA TLS invalid record/traffic      │ detectors within 10 minutes │    105 │     1 │  0.20 │         │        │
+│ F7     │ 2022-01-21 │ 06:37 │ webserver       │ high     │ Suricata │ SURICATA TLS invalid handshake message   │ detectors within 10 minutes │    105 │     1 │  0.18 │         │        │
+│ F8     │ 2022-01-21 │ 06:33 │ intranet-server │ high     │ Suricata │ ET POLICY GNU/Linux APT User-Agent Outbo │ detectors within 10 minutes │      7 │     2 │  0.16 │         │        │
+│ F9     │ 2022-01-21 │ 16:06 │ inet-firewall   │ critical │ Suricata │ SURICATA HTTP unable to match response t │ asset role firewall         │      8 │       │  0.16 │         │        │
+│ F10    │ 2022-01-21 │ 06:37 │ mail            │ high     │ Suricata │ SURICATA TLS invalid record/traffic      │ detectors within 10 minutes │    105 │     1 │  0.15 │         │        │
 └────────┴────────────┴───────┴─────────────────┴──────────┴──────────┴──────────────────────────────────────────┴─────────────────────────────┴────────┴───────┴───────┴─────────┴────────┘
 ```
 
@@ -435,45 +435,35 @@ Long output pages on a terminal that has a pager. A wrong field name prints
 the fields that exist. Recorded output:
 
 ```text
-run russellmitchell-20261005-234757-963  |  company russellmitchell  |  budget 10  |  326 families
+run russellmitchell-20261007-134440-786  |  company russellmitchell  |  budget 10  |  326 families
 
-F212  intranet-server / AMiner / AMiner: New characters in Apache Access request.
+F212  intranet-server / AMiner / AMiner: High entropy in Apache Access request.
 
 Overview
   entity        : 10.143.2.4
   asset         : server, internal, monitoring_agent
   criticality   : high
-  rule          : AMiner: New characters in Apache Access request.
-  window        : 2022-01-24 03:57:26  ->  2022-01-24 03:58:08  (42s)
+  rule          : AMiner: High entropy in Apache Access request.
+  window        : 2022-01-24 03:59:14  ->  2022-01-24 04:37:25  (38m11s)
   ranking score : 1.000
-  volume        : 29 alerts, 1 session, 14.5x the median for this rule in this run
+  volume        : 4 alerts, 2 sessions, 4x the median for this rule in this run
 
 Ranking signals, largest contributions
-  raises  session evidence                     69%
-  raises  detectors within 10 minutes           7%
+  raises  session evidence                     67%
+  raises  detectors within 10 minutes           9%
+  raises  asset role internal                   5%
+  raises  asset role monitoring_agent           5%
   raises  alert volume on this host that day    4%
-  raises  asset role internal                   4%
-  raises  asset role monitoring_agent           4%
   share of the total push on this family's score
 
 Sessions  |  S1 = strongest
 ┏━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━┳━━━━━━━┓
 ┃ handle ┃ start               ┃ span ┃ alerts ┃ score ┃
 ┡━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━╇━━━━━━━┩
-│ S1     │ 2022-01-24 03:57:26 │ 42s  │     29 │  0.99 │
+│ S1     │ 2022-01-24 03:59:14 │ 34s  │      3 │  1.00 │
+│ S2     │ 2022-01-24 04:37:25 │ 0s   │      1 │  0.85 │
 └────────┴─────────────────────┴──────┴────────┴───────┘
 drill into one with `meerkat inspect F212 S1`
-
-Finding / Detection
-  rule : AMiner: New characters in Apache Access request.
-
-Network / HTTP
-  request : /@, /~adm, /~admin, /~administrator, /~amanda, /~apache  (+23 more; --distinct web_request)
-
-Provenance
-         detector : aminer
-      source file : russellmitchell_aminer.json
-  source position : 631, 632, 633, 634, 635, 636  (+23 more; --distinct source_position)
 
 ATT&CK chain on this host
   1. Reconnaissance        03:56:47
@@ -485,12 +475,12 @@ ATT&CK chain on this host
   tactics mapped per alert; the chain orders them by time only
 
 Related families on this host
+  F227  Wazuh / Web server 500 error code (Internal Error).  score 1.00  other detector
+  F228  Wazuh / Apache: Attempt to access forbidden directory index.  score 1.00  other detector
+  F210  AMiner / AMiner: New request method in Apache Access log.  score 1.00
+  F225  Wazuh / Apache: Attempt to access forbidden file or directory.  score 1.00  other detector
+  F211  AMiner / AMiner: New characters in Apache Access request.  score 1.00
   F214  AMiner / AMiner: New status code in Apache Access log.  score 1.00
-  F221  Wazuh / Multiple web server 400 error codes from same source ip.  score 1.00  other detector
-  F223  Wazuh / Suspicious URL access.  score 1.00  other detector
-  F234  Wazuh / Common web attack.  score 1.00  other detector
-  F219  Wazuh / Apache: Attempt to access forbidden file or directory.  score 1.00  other detector
-  F213  Suricata / ET SCAN Possible Nmap User-Agent Observed  score 1.00  other detector
 ```
 
 ---

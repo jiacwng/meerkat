@@ -1,8 +1,8 @@
 {
-  "sha256": "6af62bde11c9aee83c52ff78dc763865e0cafb926335e2bc822b8c8e7da09327",
-  "sklearn_version": "1.6.0",
-  "python_version": "3.13.1",
-  "written_at": "2026-07-26T17:41:35+00:00",
+  "sha256": "ddd80c77c1fa06ed0f9e598b0d04f7bfa5bc2cc2ceae4aae4b0bfc875b1b3abf",
+  "sklearn_version": "1.9.0",
+  "python_version": "3.12.3",
+  "written_at": "2026-10-07T13:31:59+00:00",
   "training_scenarios": [
     "fox",
     "harrison",
@@ -12,7 +12,7 @@
     "wheeler",
     "wilson"
   ],
-  "n_estimators": 300,
+  "n_estimators": 200,
   "seed": 0,
   "roles": [
     "behind_proxy",
@@ -31,5 +31,9 @@
     "nat_forwarded",
     "remote_employee",
     "server"
-  ]
+  ],
+  "max_depth": null,
+  "min_samples_leaf": 1,
+  "class_weight": "balanced",
+  "ranking_weights": "shipped"
 }
