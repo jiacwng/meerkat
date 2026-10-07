@@ -964,12 +964,13 @@ class RawSourceEncodingTests(unittest.TestCase):
 
 
 class PandasPinTests(unittest.TestCase):
-    def test_the_declared_pandas_is_new_enough_for_dataframe_map(self):
-        # the csv export sanitises every cell with DataFrame.map, added in 2.1.
-        # It fails closed rather than writing unsanitised output, but it fails.
+    def test_the_declared_floors_are_the_numpy_2_releases(self):
+        # the run allowlist names numpy 2 paths only, and the csv export
+        # sanitises every cell with DataFrame.map, added in pandas 2.1
         root = Path(__file__).resolve().parent.parent
         text = (root / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn('"pandas>=2.1"', text)
+        for floor in ('"numpy>=2.0"', '"pandas>=2.2.2"', '"scikit-learn>=1.4.2"'):
+            self.assertIn(floor, text)
         self.assertTrue(hasattr(pd.DataFrame, "map"))
 
 

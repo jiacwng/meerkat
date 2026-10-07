@@ -299,15 +299,13 @@ class RunState:
         return same.sort_values("gap_s", kind="stable")
 
 
-# every (module, name) a saved run asks for under pandas 2 and 3, plus numpy 1's
-# path to the same two functions. A whole package is never trusted: numpy ships
-# an exec wrapper and pandas a pickle reader with no allowlist.
+# every (module, name) a saved run asks for under pandas 2 and 3. A whole
+# package is never trusted: numpy ships an exec wrapper and pandas a pickle
+# reader with no allowlist.
 _PICKLE_ALLOWED = frozenset({
     ("builtins", "slice"),
     ("numpy", "dtype"),
     ("numpy", "ndarray"),
-    ("numpy.core.multiarray", "_reconstruct"),
-    ("numpy.core.numeric", "_frombuffer"),
     ("numpy._core.multiarray", "_reconstruct"),
     ("numpy._core.numeric", "_frombuffer"),
     ("pandas", "Categorical"),

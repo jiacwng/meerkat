@@ -14,9 +14,9 @@ license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Wang Jiacheng", email = "jiacheng.wang@eurecom.fr" }]
 dependencies = [
-    # the csv export sanitises every cell with DataFrame.map, which is 2.1
-    "pandas>=2.1",
-    "scikit-learn>=1.3",
+    "numpy>=2.0",
+    "pandas>=2.2.2",
+    "scikit-learn>=1.4.2",
     "rich>=13.0",
     "skops>=0.11",
 ]
