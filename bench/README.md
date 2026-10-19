@@ -168,6 +168,12 @@ tuning and asset roles all sit outside the sample. The eight folds are eight
 draws from one generator, so treat the spread across folds as sensitivity to the
 environment rather than as a confidence interval for the field.
 
+The design was chosen on these same folds. The 200 trees, the family re-ranker
+and the counting rule were kept because they did best on the eight
+environments, so the table is a tuning result on AIT. The ten minute session
+gap is the one choice made by nested validation, inside the training
+environments only.
+
 ## Kept out of the product
 
 `core/` and `meerkat/` never import `bench`, and the installable package leaves
