@@ -73,7 +73,7 @@ def make_families() -> pd.DataFrame:
         {
             "day": 0, "entity_id": "10.0.0.5", "detector_source": "wazuh",
             "rule_id": "31101", "ranking_score": 0.9,
-            "evidence_probability": 0.8, "start": 100.0, "end": 900.0,
+            "start": 100.0, "end": 900.0,
             "family_span_s": 800.0, "representative_session_id": "acme#0",
             "alert_rows": [0, 1, 2], "alert_count": 3, "n_child_sessions": 2,
             "child_session_ids": ["acme#0", "acme#1"], "child_score_max": 0.9,
@@ -85,7 +85,7 @@ def make_families() -> pd.DataFrame:
         {
             "day": 0, "entity_id": "10.0.0.5", "detector_source": "suricata",
             "rule_id": "2001", "ranking_score": 0.4,
-            "evidence_probability": 0.3, "start": 500.0, "end": 500.0,
+            "start": 500.0, "end": 500.0,
             "family_span_s": 0.0, "representative_session_id": "acme#2",
             "alert_rows": [3], "alert_count": 1, "n_child_sessions": 1,
             "child_session_ids": ["acme#2"], "child_score_max": 0.4,
@@ -154,7 +154,7 @@ def write_company_inventory(
     config = {
         "company": "demo",
         "assets": [
-            {"hostname": hostname, "ip_addresses": [ip], "groups": list(groups)}
+            {"hostname": hostname, "ip_addresses": [ip], "roles": list(groups)}
             for hostname, ip, groups in assets
         ],
     }

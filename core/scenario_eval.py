@@ -1,6 +1,6 @@
 # Scores sessions with a trained bundle, and refits one on a client's own data.
 # A client has one environment, so only the forest and its feature schema are
-# refitted; the re-ranker is rescaled and the calibrator travels unchanged.
+# refitted and the re-ranker is rescaled.
 
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ class TriageBundle:
     forest: object
     schema: SessionFeatureSchema
     reranker: object
-    calibrator: object
     training_scenarios: tuple[str, ...]
     n_estimators: int
     seed: int
@@ -48,9 +47,6 @@ def score_sessions(
     families["ranking_score"] = bundle.reranker.predict(families)
     pushes, _ = bundle.reranker.contributions(families)
     families = families.join(pushes.add_prefix(CONTRIBUTION_PREFIX))
-    families["evidence_probability"] = bundle.calibrator.predict(
-        families["ranking_score"].to_numpy()
-    )
     return scored, families
 
 
@@ -73,7 +69,6 @@ def refit_forest(
         forest=forest,
         schema=schema,
         reranker=reranker,
-        calibrator=bundle.calibrator,
         training_scenarios=bundle.training_scenarios,
         n_estimators=n_estimators,
         seed=seed,

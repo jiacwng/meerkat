@@ -10,6 +10,22 @@ from pathlib import Path
 
 import yaml
 
+# AIT group names, one-to-one onto the role vocabulary; merging two would drop a
+# distinction the forest uses
+AIT_ROLES = {
+    "internet": "internet_facing",
+    "intranet": "internal",
+    "servers": "server",
+    "mailserver": "mail_server",
+    "dnsservers": "dns_server",
+    "share": "file_share",
+    "proxied": "behind_proxy",
+    "dnat": "nat_forwarded",
+    "ext_user": "external_user",
+    "ext_mail": "external_mail",
+    "beatservers": "monitoring_agent",
+}
+
 
 def import_ait_inventory(source_path: Path, output_path: Path) -> None:
     source = yaml.safe_load(source_path.read_text(encoding="utf-8"))
@@ -21,7 +37,7 @@ def import_ait_inventory(source_path: Path, output_path: Path) -> None:
         assets.append({
             "hostname": str(item["hostname"]),
             "ip_addresses": [str(ip) for ip in item["ipv4_addresses"]],
-            "groups": groups,
+            "roles": [AIT_ROLES.get(group, group) for group in groups],
         })
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

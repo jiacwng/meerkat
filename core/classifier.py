@@ -1,6 +1,6 @@
-# The models: a random forest that scores sessions, a logistic re-ranker that
-# scores families, and a calibrator that turns that score into a probability. Also
-# saves a model bundle and refuses to load one that is not ours.
+# The models: a random forest that scores sessions and a logistic re-ranker that
+# scores families. Also saves a model bundle and refuses to load one that is not
+# ours.
 
 from __future__ import annotations
 
@@ -38,15 +38,6 @@ FAMILY_NUMERIC_FEATURES = (
     "technique_count",
     "rule_group_count",
 )
-
-
-@dataclass
-class EvidenceCalibrator:
-    model: LogisticRegression   # Platt scaling, one variable
-
-    def predict(self, ranking_scores: np.ndarray) -> np.ndarray:
-        scores = np.asarray(ranking_scores, dtype=float).reshape(-1, 1)
-        return self.model.predict_proba(scores)[:, 1]
 
 
 @dataclass
@@ -166,19 +157,9 @@ def fit_soft_labels(
     return model
 
 
-def fit_calibrator(
-    family_scores: np.ndarray,
-    family_positive: np.ndarray,
-) -> EvidenceCalibrator:
-    scores = np.asarray(family_scores, dtype=float).reshape(-1, 1)
-    target = np.asarray(family_positive, dtype=int)
-    return EvidenceCalibrator(LogisticRegression(max_iter=1000).fit(scores, target))
-
-
 # skops rebuilds nothing outside this list, so an edited bundle cannot smuggle in
 # a type that runs on load
 TRUSTED_TYPES = (
-    "core.classifier.EvidenceCalibrator",
     "core.classifier.FamilyReranker",
     "core.drift.TrainingProfile",
     "core.features.SessionFeatureSchema",

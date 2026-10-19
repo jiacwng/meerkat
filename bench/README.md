@@ -99,8 +99,8 @@ long step. The largest single input is `wilson_wazuh.json` at 673 MB.
 ## Expected results
 
 For each of the eight folds, seven environments train and the eighth is scored
-unseen. The family re-ranker and the confidence calibrator are fitted out-of-fold
-across environments, so the held-out environment feeds neither. Each cell counts
+unseen. The family re-ranker is fitted out-of-fold across environments, so the
+held-out environment never feeds it. Each cell counts
 how many labelled attack windows the daily queue reaches at a review budget of K
 families per day, averaged over seeds 53, 52 and 51 with 200 trees.
 

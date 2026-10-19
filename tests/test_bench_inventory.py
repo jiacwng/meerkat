@@ -43,6 +43,15 @@ class AitInventoryTests(unittest.TestCase):
         self.assertEqual(loaded.company, "demo")
         self.assertIn("10.0.0.1", loaded)
         self.assertNotIn("192.0.2.10", loaded)
+        self.assertEqual(loaded.assets_by_ip["10.0.0.1"].groups, ("server",))
+
+    def test_ait_names_map_one_to_one_into_the_role_vocabulary(self):
+        from bench.ait_inventory import AIT_ROLES
+        from core.roles import CANONICAL_ROLES
+
+        targets = list(AIT_ROLES.values())
+        self.assertEqual(len(targets), len(set(targets)))
+        self.assertLessEqual(set(targets), set(CANONICAL_ROLES))
 
 
 if __name__ == "__main__":

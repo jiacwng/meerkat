@@ -9,7 +9,7 @@ from pathlib import Path
 
 from core import attack_mapping
 from core.inventory import load_inventory
-from core.roles import CANONICAL_ROLES, LEGACY_ROLE_ALIASES, canonicalize
+from core.roles import canonicalize
 
 
 class TechniqueLookupTests(unittest.TestCase):
@@ -114,24 +114,6 @@ class DetectionMappingConfigTests(unittest.TestCase):
 
 
 class TestCanonicalize(unittest.TestCase):
-    def test_the_alias_table_is_one_to_one_closed_and_disjoint_from_the_vocabulary(self):
-        # two aliases sharing a target would merge two role columns into one and
-        # change the feature width a shipped model expects. A target outside
-        # CANONICAL_ROLES drops that asset's role, and an alias that is itself
-        # canonical would be rewritten before the canonical lookup saw it.
-        targets = list(LEGACY_ROLE_ALIASES.values())
-        self.assertEqual(len(targets), len(set(targets)), "an alias merges two roles")
-        for alias, target in LEGACY_ROLE_ALIASES.items():
-            self.assertIn(target, CANONICAL_ROLES, f"{alias} maps outside the vocabulary")
-            self.assertNotIn(alias, CANONICAL_ROLES)
-
-    def test_testbed_names_translate(self):
-        # the AIT inventories say servers, internet and beatservers, and those
-        # have to reach the same columns a client's OCSF names do
-        roles, unknown = canonicalize(["servers", "internet", "beatservers"])
-        self.assertEqual(roles, ("server", "internet_facing", "monitoring_agent"))
-        self.assertEqual(unknown, ())
-
     def test_canonical_names_pass_through(self):
         # an inventory already written in the canonical vocabulary has to
         # survive untouched, so the alias table leaves server and dmz alone
@@ -168,15 +150,6 @@ class TestInventoryContract(unittest.TestCase):
             json.dumps({"company": "acme", "assets": assets}), encoding="utf-8"
         )
         return path
-
-    def test_legacy_groups_key_still_works(self):
-        # the AIT inventories and every file written before the rename use
-        # groups, and re-editing them by hand is a migration nobody wants
-        path = self._write(
-            [{"hostname": "web", "ip_addresses": ["10.0.0.1"], "groups": ["servers"]}]
-        )
-        inventory = load_inventory(path)
-        self.assertEqual(inventory.assets_by_ip["10.0.0.1"].groups, ("server",))
 
     def test_unknown_roles_surface_on_the_inventory(self):
         # `meerkat triage` warns about names contributing nothing to a model

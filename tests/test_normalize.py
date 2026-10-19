@@ -77,36 +77,6 @@ def normalized_tree(raw: Path) -> pd.DataFrame:
 
 
 class InventoryTests(unittest.TestCase):
-    def test_loader_excludes_attacker_assets(self):
-        # the AIT testbed lists the attacker machine in the same inventory, and
-        # scoring it would teach the forest to rank the attack host itself
-        self.assertIsNotNone(inventory)
-        config = {
-            "company": "demo",
-            "assets": [
-                {
-                    "hostname": "server-a",
-                    "ip_addresses": ["10.0.0.1"],
-                    "groups": ["servers"],
-                },
-                {
-                    "hostname": "attacker-0",
-                    "ip_addresses": ["192.0.2.10"],
-                    "groups": ["attacker"],
-                },
-            ],
-        }
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "company.json"
-            path.write_text(json.dumps(config), encoding="utf-8")
-            loaded = inventory.load_inventory(path)
-
-        self.assertIn("10.0.0.1", loaded)
-        self.assertEqual(loaded.ip_by_hostname["server-a"], "10.0.0.1")
-        self.assertNotIn("192.0.2.10", loaded)
-        self.assertNotIn("attacker-0", loaded.ip_by_hostname)
-
     def test_loader_requires_an_inventory_file(self):
         # asset role is the largest feature block, so a missing inventory stops
         # the run rather than quietly scoring every host as roleless

@@ -13,7 +13,6 @@ import numpy as np
 import pandas as pd
 
 from core.classifier import (
-    fit_calibrator,
     fit_family_reranker,
     fit_model,
     predict_scores,
@@ -54,8 +53,6 @@ class PreparedFold:
 class CrossScenarioReport:
     summary: pd.DataFrame
     per_fold: pd.DataFrame
-    calibration: pd.DataFrame
-    calibration_summary: pd.DataFrame
     sign_tests: pd.DataFrame
 
 def load_scenarios(
@@ -188,23 +185,10 @@ def _out_of_fold_families(
         scenario: session_tables[scenario]
         for scenario in training_scenarios
     }
-    for calibration_scenario in training_scenarios:
-        fold = prepare_fold(training_tables, calibration_scenario)
+    for held_out in training_scenarios:
+        fold = prepare_fold(training_tables, held_out)
         scored, _, _ = score_fold(fold, n_estimators, seed)
         parts.append(build_families(scored))
-    return pd.concat(parts, ignore_index=True)
-
-
-def _out_of_fold_reranker_scores(
-    families: pd.DataFrame,
-) -> pd.DataFrame:
-    parts = []
-    for scenario in families["scenario"].drop_duplicates():
-        train = families[~families["scenario"].eq(scenario)]
-        test = families[families["scenario"].eq(scenario)].copy()
-        reranker = fit_family_reranker(train)
-        test["ranking_score"] = reranker.predict(test)
-        parts.append(test)
     return pd.concat(parts, ignore_index=True)
 
 
@@ -286,10 +270,6 @@ def _queue_metrics(
         "median_child_sessions": float(queue["n_child_sessions"].median()),
         "p90_child_sessions": float(queue["n_child_sessions"].quantile(0.9)),
     }
-
-
-def _brier(probability: np.ndarray, target: pd.Series) -> float:
-    return float(np.mean((probability - target.astype(float).to_numpy()) ** 2))
 
 
 def _ranker_signals(families, learned, severity, rng):
@@ -420,26 +400,6 @@ def _summarize(per_fold: pd.DataFrame) -> pd.DataFrame:
     return window_summary.merge(averages, on=["ranker", "budget"])
 
 
-def _summarize_calibration(calibration: pd.DataFrame) -> pd.DataFrame:
-    total_families = calibration["families"].sum()
-    raw = float(
-        (calibration["raw_brier"] * calibration["families"]).sum()
-        / total_families
-    )
-    calibrated = float(
-        (calibration["calibrated_brier"] * calibration["families"]).sum()
-        / total_families
-    )
-    improved = calibration["calibrated_brier"] < calibration["raw_brier"]
-    worsened = calibration["calibrated_brier"] > calibration["raw_brier"]
-    return pd.DataFrame([{
-        "pooled_raw_brier": raw,
-        "pooled_calibrated_brier": calibrated,
-        "wins": int(improved.sum()),
-        "ties": int((~improved & ~worsened).sum()),
-        "losses": int(worsened.sum()),
-    }])
-
 def evaluate_scenarios(
     frames: dict[str, pd.DataFrame],
     inventories: dict[str, Inventory],
@@ -458,7 +418,6 @@ def evaluate_scenarios(
         for scenario, frame in frames.items()
     }
     metric_rows = []
-    calibration_rows = []
 
     for seed in seeds:
         for test_scenario in sessions:
@@ -469,13 +428,6 @@ def evaluate_scenarios(
                 n_estimators,
                 seed,
             )
-            calibration_families = _out_of_fold_reranker_scores(
-                training_families
-            )
-            calibrator = fit_calibrator(
-                calibration_families["ranking_score"].to_numpy(),
-                calibration_families["family_positive"].to_numpy(),
-            )
             reranker = fit_family_reranker(training_families)
 
             scored, _, _ = score_fold(fold, n_estimators, seed)
@@ -483,22 +435,6 @@ def evaluate_scenarios(
                 build_families(scored), marked[test_scenario]
             )
             families["ranking_score"] = reranker.predict(families)
-            families["evidence_probability"] = calibrator.predict(
-                families["ranking_score"].to_numpy()
-            )
-            calibration_rows.append({
-                "seed": seed,
-                "scenario": test_scenario,
-                "families": len(families),
-                "raw_brier": _brier(
-                    families["ranking_score"].to_numpy(),
-                    families["family_positive"],
-                ),
-                "calibrated_brier": _brier(
-                    families["evidence_probability"].to_numpy(),
-                    families["family_positive"],
-                ),
-            })
 
             rng = np.random.default_rng(seed)
             learned = families["ranking_score"].copy()
@@ -531,12 +467,9 @@ def evaluate_scenarios(
             families["ranking_score"] = learned
 
     per_fold = pd.DataFrame(metric_rows)
-    calibration = pd.DataFrame(calibration_rows)
     return CrossScenarioReport(
         summary=_summarize(per_fold),
         per_fold=per_fold,
-        calibration=calibration,
-        calibration_summary=_summarize_calibration(calibration),
         sign_tests=pd.concat(
             [
                 sign_tests(per_fold, metric="strict_windows"),
@@ -564,17 +497,11 @@ def build_bundle(
     training_families = _out_of_fold_families(
         session_tables, training_scenarios, n_estimators, seed
     )
-    calibration_families = _out_of_fold_reranker_scores(training_families)
-    calibrator = fit_calibrator(
-        calibration_families["ranking_score"].to_numpy(),
-        calibration_families["family_positive"].to_numpy(),
-    )
     reranker = fit_family_reranker(training_families)
     return TriageBundle(
         forest=forest,
         schema=schema,
         reranker=reranker,
-        calibrator=calibrator,
         training_scenarios=training_scenarios,
         n_estimators=n_estimators,
         seed=seed,
@@ -640,18 +567,12 @@ def main() -> None:
     print(report.summary.to_string(index=False))
     print("\nSign tests against the re-ranker, per seed")
     print(report.sign_tests.to_string(index=False))
-    print("\nCalibration")
-    print(report.calibration_summary.to_string(index=False))
 
     if args.output_dir:
         args.output_dir.mkdir(parents=True, exist_ok=True)
         report.summary.to_csv(args.output_dir / "summary.csv", index=False)
         report.per_fold.to_csv(args.output_dir / "per_fold.csv", index=False)
         report.sign_tests.to_csv(args.output_dir / "sign_tests.csv", index=False)
-        report.calibration.to_csv(args.output_dir / "calibration.csv", index=False)
-        report.calibration_summary.to_csv(
-            args.output_dir / "calibration_summary.csv", index=False
-        )
 
 
 if __name__ == "__main__":
