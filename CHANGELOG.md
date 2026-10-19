@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A malformed alert field, an empty alert file or a malformed inventory now
+  stops triage, check, drift and retrain with the file and line named.
+- A session decision typed in lowercase (`--session s01`) now reaches
+  `export decisions`.
+- The alert table compares the target user field.
+
 ## 1.2.0 - 2026-10-07
 
 ### Added

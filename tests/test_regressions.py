@@ -152,6 +152,35 @@ class TestCliRobustness(unittest.TestCase):
         inventory = load_inventory(directory / "inventory" / f"{directory.name}.json")
         self.assertEqual(inventory.assets_by_ip["10.0.0.1"].groups, ("server",))
 
+    def test_ip_addresses_given_as_a_string_is_refused(self):
+        directory = self.client("", json.dumps({"company": "x", "assets": [
+            {"hostname": "h", "ip_addresses": "10.0.0.5"}]}))
+        with self.assertRaises(ValueError) as caught:
+            load_inventory(directory / "inventory" / f"{directory.name}.json")
+        self.assertIn("must be a list", str(caught.exception))
+
+    def test_an_alert_with_a_missing_or_bad_field_names_its_file_and_line(self):
+        from core.normalize import AlertFileError, normalize_scenario
+        good = {
+            "timestamp": "2022-01-21T06:33:00+00:00",
+            "rule": {"id": "5710", "description": "sshd", "level": 5},
+            "agent": {"ip": "10.0.0.1", "name": "h1"},
+        }
+        broken = (
+            {**good, "rule": {"id": "5710", "description": "sshd"}},
+            {**good, "timestamp": "yesterday"},
+        )
+        for record in broken:
+            with self.subTest(record=record):
+                lines = "\n".join(json.dumps(one) for one in (good, record))
+                directory = self.client(lines, self.GOOD_INVENTORY)
+                with self.assertRaises(AlertFileError) as caught:
+                    normalize_scenario(
+                        directory, None, directory.name,
+                        directory / "inventory" / f"{directory.name}.json",
+                    )
+                self.assertIn(f"{directory.name}_wazuh.json line 2", str(caught.exception))
+
 
 class TestBoundaryValues(unittest.TestCase):
     # each of these was accepted silently and produced a wrong or unreachable
