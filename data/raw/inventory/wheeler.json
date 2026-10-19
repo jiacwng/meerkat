@@ -6,10 +6,10 @@
       "ip_addresses": [
         "172.27.183.191"
       ],
-      "groups": [
-        "ext_mail",
-        "internet",
-        "mailserver"
+      "roles": [
+        "external_mail",
+        "internet_facing",
+        "mail_server"
       ]
     },
     {
@@ -17,9 +17,9 @@
       "ip_addresses": [
         "172.27.180.248"
       ],
-      "groups": [
+      "roles": [
         "employee",
-        "internet",
+        "internet_facing",
         "remote_employee"
       ]
     },
@@ -28,9 +28,9 @@
       "ip_addresses": [
         "172.27.180.13"
       ],
-      "groups": [
+      "roles": [
         "employee",
-        "internet",
+        "internet_facing",
         "remote_employee"
       ]
     },
@@ -39,9 +39,9 @@
       "ip_addresses": [
         "172.27.182.90"
       ],
-      "groups": [
+      "roles": [
         "employee",
-        "internet",
+        "internet_facing",
         "remote_employee"
       ]
     },
@@ -50,9 +50,9 @@
       "ip_addresses": [
         "172.27.182.172"
       ],
-      "groups": [
+      "roles": [
         "employee",
-        "internet",
+        "internet_facing",
         "remote_employee"
       ]
     },
@@ -61,9 +61,9 @@
       "ip_addresses": [
         "172.27.182.162"
       ],
-      "groups": [
+      "roles": [
         "employee",
-        "internet",
+        "internet_facing",
         "remote_employee"
       ]
     },
@@ -72,9 +72,9 @@
       "ip_addresses": [
         "172.27.181.43"
       ],
-      "groups": [
+      "roles": [
         "employee",
-        "internet",
+        "internet_facing",
         "remote_employee"
       ]
     },
@@ -83,10 +83,10 @@
       "ip_addresses": [
         "192.168.0.242"
       ],
-      "groups": [
+      "roles": [
         "employee",
         "internal_employee",
-        "intranet"
+        "internal"
       ]
     },
     {
@@ -94,10 +94,10 @@
       "ip_addresses": [
         "192.168.0.133"
       ],
-      "groups": [
+      "roles": [
         "employee",
         "internal_employee",
-        "intranet"
+        "internal"
       ]
     },
     {
@@ -105,10 +105,10 @@
       "ip_addresses": [
         "192.168.2.157"
       ],
-      "groups": [
+      "roles": [
         "employee",
         "internal_employee",
-        "intranet"
+        "internal"
       ]
     },
     {
@@ -116,10 +116,10 @@
       "ip_addresses": [
         "192.168.2.226"
       ],
-      "groups": [
+      "roles": [
         "employee",
         "internal_employee",
-        "intranet"
+        "internal"
       ]
     },
     {
@@ -127,10 +127,10 @@
       "ip_addresses": [
         "10.38.243.24"
       ],
-      "groups": [
+      "roles": [
         "dmz",
-        "dnat",
-        "servers"
+        "nat_forwarded",
+        "server"
       ]
     },
     {
@@ -138,10 +138,10 @@
       "ip_addresses": [
         "192.168.0.91"
       ],
-      "groups": [
+      "roles": [
         "employee",
         "internal_employee",
-        "intranet"
+        "internal"
       ]
     },
     {
@@ -149,10 +149,10 @@
       "ip_addresses": [
         "192.168.1.213"
       ],
-      "groups": [
+      "roles": [
         "employee",
         "internal_employee",
-        "intranet"
+        "internal"
       ]
     },
     {
@@ -160,10 +160,10 @@
       "ip_addresses": [
         "192.168.3.138"
       ],
-      "groups": [
+      "roles": [
         "employee",
         "internal_employee",
-        "intranet"
+        "internal"
       ]
     },
     {
@@ -171,10 +171,10 @@
       "ip_addresses": [
         "192.168.0.60"
       ],
-      "groups": [
+      "roles": [
         "employee",
         "internal_employee",
-        "intranet"
+        "internal"
       ]
     },
     {
@@ -182,9 +182,9 @@
       "ip_addresses": [
         "172.27.182.236"
       ],
-      "groups": [
-        "ext_user",
-        "internet"
+      "roles": [
+        "external_user",
+        "internet_facing"
       ]
     },
     {
@@ -192,11 +192,11 @@
       "ip_addresses": [
         "192.168.3.116"
       ],
-      "groups": [
-        "beatservers",
-        "intranet",
-        "servers",
-        "share"
+      "roles": [
+        "monitoring_agent",
+        "internal",
+        "server",
+        "file_share"
       ]
     },
     {
@@ -204,9 +204,9 @@
       "ip_addresses": [
         "172.27.180.42"
       ],
-      "groups": [
-        "ext_user",
-        "internet"
+      "roles": [
+        "external_user",
+        "internet_facing"
       ]
     },
     {
@@ -214,9 +214,9 @@
       "ip_addresses": [
         "172.27.183.160"
       ],
-      "groups": [
-        "ext_user",
-        "internet"
+      "roles": [
+        "external_user",
+        "internet_facing"
       ]
     },
     {
@@ -224,9 +224,9 @@
       "ip_addresses": [
         "172.27.182.207"
       ],
-      "groups": [
-        "ext_user",
-        "internet"
+      "roles": [
+        "external_user",
+        "internet_facing"
       ]
     },
     {
@@ -234,9 +234,9 @@
       "ip_addresses": [
         "172.27.183.104"
       ],
-      "groups": [
-        "ext_user",
-        "internet"
+      "roles": [
+        "external_user",
+        "internet_facing"
       ]
     },
     {
@@ -244,9 +244,9 @@
       "ip_addresses": [
         "172.27.183.56"
       ],
-      "groups": [
-        "ext_user",
-        "internet"
+      "roles": [
+        "external_user",
+        "internet_facing"
       ]
     },
     {
@@ -254,9 +254,9 @@
       "ip_addresses": [
         "172.27.182.155"
       ],
-      "groups": [
-        "ext_user",
-        "internet"
+      "roles": [
+        "external_user",
+        "internet_facing"
       ]
     },
     {
@@ -264,9 +264,9 @@
       "ip_addresses": [
         "172.27.183.131"
       ],
-      "groups": [
-        "ext_user",
-        "internet"
+      "roles": [
+        "external_user",
+        "internet_facing"
       ]
     },
     {
@@ -274,10 +274,10 @@
       "ip_addresses": [
         "172.27.181.253"
       ],
-      "groups": [
-        "ext_mail",
-        "internet",
-        "mailserver"
+      "roles": [
+        "external_mail",
+        "internet_facing",
+        "mail_server"
       ]
     },
     {
@@ -285,10 +285,10 @@
       "ip_addresses": [
         "172.27.181.174"
       ],
-      "groups": [
-        "ext_mail",
-        "internet",
-        "mailserver"
+      "roles": [
+        "external_mail",
+        "internet_facing",
+        "mail_server"
       ]
     },
     {
@@ -296,10 +296,10 @@
       "ip_addresses": [
         "172.27.182.4"
       ],
-      "groups": [
-        "ext_mail",
-        "internet",
-        "mailserver"
+      "roles": [
+        "external_mail",
+        "internet_facing",
+        "mail_server"
       ]
     },
     {
@@ -307,10 +307,10 @@
       "ip_addresses": [
         "10.38.243.125"
       ],
-      "groups": [
+      "roles": [
         "dmz",
-        "dnat",
-        "servers"
+        "nat_forwarded",
+        "server"
       ]
     },
     {
@@ -318,12 +318,12 @@
       "ip_addresses": [
         "10.38.242.195"
       ],
-      "groups": [
+      "roles": [
         "dmz",
-        "dnat",
-        "mailserver",
-        "proxied",
-        "servers"
+        "nat_forwarded",
+        "mail_server",
+        "behind_proxy",
+        "server"
       ]
     },
     {
@@ -331,10 +331,10 @@
       "ip_addresses": [
         "192.168.2.114"
       ],
-      "groups": [
-        "beatservers",
-        "intranet",
-        "servers"
+      "roles": [
+        "monitoring_agent",
+        "internal",
+        "server"
       ]
     },
     {
@@ -342,9 +342,9 @@
       "ip_addresses": [
         "192.168.1.116"
       ],
-      "groups": [
-        "intranet",
-        "servers"
+      "roles": [
+        "internal",
+        "server"
       ]
     },
     {
@@ -352,10 +352,10 @@
       "ip_addresses": [
         "10.38.242.230"
       ],
-      "groups": [
+      "roles": [
         "dmz",
-        "proxied",
-        "servers"
+        "behind_proxy",
+        "server"
       ]
     },
     {
@@ -363,9 +363,9 @@
       "ip_addresses": [
         "172.27.183.254"
       ],
-      "groups": [
-        "dnsservers",
-        "internet"
+      "roles": [
+        "dns_server",
+        "internet_facing"
       ]
     },
     {
@@ -375,10 +375,10 @@
         "192.168.0.1",
         "10.38.242.1"
       ],
-      "groups": [
-        "dnsservers",
+      "roles": [
+        "dns_server",
         "firewall",
-        "servers"
+        "server"
       ]
     }
   ]

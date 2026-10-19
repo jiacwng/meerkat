@@ -974,7 +974,6 @@ class EndToEndTriageTests(unittest.TestCase):
         families = self.saved.families
         self.assertEqual(list(families["handle"]), [f"F{i}" for i in range(1, 7)])
         self.assertTrue(families["ranking_score"].between(0, 1).all())
-        self.assertTrue(families["evidence_probability"].between(0, 1).all())
         self.assertEqual(set(families["host_label"]), {"web01"})
         self.assertEqual(set(families["title"]), {"sshd auth failure"})
 
@@ -1563,7 +1562,7 @@ class TestQueueRendering(unittest.TestCase):
             "day": 19013, "host_label": "web-01", "detector_source": "wazuh",
             "title": "Web server 400 error", "rule_id": "31101",
             "alert_count": 3, "ranking_score": 0.9,
-            "evidence_probability": 0.8, "start": 100.0, "criticality": "unset",
+            "start": 100.0, "criticality": "unset",
         }
         row.update(overrides)
         return pd.DataFrame([row])

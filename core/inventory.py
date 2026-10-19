@@ -90,14 +90,10 @@ def load_inventory(path: Path) -> Inventory:
             raise ValueError(
                 f"{path.name}: \"ip_addresses\" of {item['hostname']} must be a list"
             )
-        declared = item.get("roles") or item.get("groups") or []
+        declared = item.get("roles") or []
         if isinstance(declared, str):
             declared = [declared]
         raw_groups = tuple(str(group) for group in declared)
-        # the attacker machine never enters the inventory, grouping alerts on it
-        # would be reading the answer
-        if "attacker" in raw_groups:
-            continue
 
         groups, unplaced = canonicalize(raw_groups)
         unknown_roles.update(unplaced)

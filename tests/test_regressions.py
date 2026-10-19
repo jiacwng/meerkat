@@ -402,7 +402,6 @@ def one_family_run():
         "end": 60.0,
         "family_span_s": 60.0,
         "ranking_score": 0.9,
-        "evidence_probability": 0.5,
         "alert_count": 1,
         "n_child_sessions": 1,
         "child_score_max": 0.9,

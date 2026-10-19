@@ -1988,7 +1988,7 @@ def cmd_retrain(args) -> None:
     )
     console.print(
         "[dim]refit: forest (your sessions)  rescaled: re-ranker scale "
-        "(your families)  kept: ranking weights (shipped), calibrator[/dim]"
+        "(your families)  kept: ranking weights (shipped)[/dim]"
     )
 
 

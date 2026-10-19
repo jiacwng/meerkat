@@ -306,7 +306,6 @@ class QueueTests(unittest.TestCase):
             "scenario": ["demo"] * 5,
             "day": [1, 1, 1, 2, 2],
             "ranking_score": [0.7, 0.9, 0.8, 0.2, 0.6],
-            "evidence_probability": [0.8, 0.95, 0.9, 0.3, 0.7],
             "start": [10.0, 20.0, 30.0, 86410.0, 86420.0],
             "representative_session_id": ["a", "b", "c", "d", "e"],
         })
@@ -316,22 +315,6 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(
             list(queue["representative_session_id"]), ["b", "c", "e", "d"]
         )
-
-    def test_display_probability_does_not_control_queue_order(self):
-        # evidence_probability is Platt output for display, so retuning the
-        # calibrator can never reorder what an analyst opens first
-        families = pd.DataFrame({
-            "scenario": ["demo"] * 2,
-            "day": [1, 1],
-            "ranking_score": [0.9, 0.8],
-            "evidence_probability": [0.1, 0.99],
-            "start": [10.0, 20.0],
-            "representative_session_id": ["raw-first", "display-first"],
-        })
-
-        queue = daily_queue(families, k=1)
-
-        self.assertEqual(queue.iloc[0]["representative_session_id"], "raw-first")
 
     def test_ties_use_start_then_session_id(self):
         # a forest voting over 300 trees produces equal scores often, so the

@@ -1,4 +1,4 @@
-# the scoring model: forest, calibration, drift, benchmark folds, retraining
+# the scoring model: forest, re-ranker, drift, benchmark folds, retraining
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from skops import io as sio
 from bench import evaluate as bench_eval
 from bench.evaluate import (
     _out_of_fold_families,
-    _out_of_fold_reranker_scores,
     _with_ground_truth,
     add_window_ids,
     build_bundle,
@@ -67,18 +66,6 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(set(model.classes_), {False, True})
         self.assertEqual(scores.shape, (4,))
         self.assertGreater(scores[3], scores[0])
-
-    def test_sigmoid_calibrator_returns_increasing_probabilities(self):
-        # the confidence percentage is display only, so it has to stay monotone
-        # in the ranking score or the queue order and the number disagree
-        scores = np.array([0.0, 0.1, 0.2, 0.8, 0.9, 1.0])
-        target = np.array([0, 0, 0, 1, 1, 1])
-
-        calibrator = classifier.fit_calibrator(scores, target)
-        probabilities = calibrator.predict(scores)
-
-        self.assertTrue(np.all(np.diff(probabilities) > 0))
-        self.assertTrue(np.all((probabilities >= 0) & (probabilities <= 1)))
 
     def test_model_round_trip(self):
         # every read command reopens a bundle skops wrote, so a reloaded forest
@@ -467,7 +454,7 @@ class ScenarioEvaluationTests(unittest.TestCase):
 
     def test_evaluation_uses_unseen_scenarios_and_returns_queue_metrics(self):
         # every company takes a turn as the held-out one, so three folds come
-        # back carrying both window counts and the calibration Brier scores
+        # back carrying the window counts
         report = evaluate_scenarios(
             self.frames,
             self.inventories,
@@ -483,9 +470,6 @@ class ScenarioEvaluationTests(unittest.TestCase):
         self.assertEqual(len(report.per_fold), 3 * len(rankers))
         self.assertEqual(set(report.summary["budget"]), {1})
         self.assertEqual(len(report.summary), len(rankers))
-        self.assertEqual(len(report.calibration), 3)
-        self.assertEqual(len(report.calibration_summary), 1)
-        self.assertIn("pooled_calibrated_brier", report.calibration_summary)
         # the floor row is one whole day per item, so per-queue columns are NaN
         ranked = report.per_fold[
             ~report.per_fold["ranker"].str.startswith("floor")
@@ -498,45 +482,6 @@ class ScenarioEvaluationTests(unittest.TestCase):
         self.assertIn("temporal_overlap_windows", report.per_fold)
         self.assertIn("strict_windows_mean", report.summary)
         self.assertIn("temporal_overlap_windows_mean", report.summary)
-
-    def test_family_calibration_scores_each_scenario_out_of_fold(self):
-        # a calibrator fed scores from families its re-ranker trained on
-        # learns an overconfident mapping, so alpha is scored by beta+gamma
-        rows = []
-        for scenario in ("alpha", "beta", "gamma"):
-            for positive in (False, True):
-                row = {
-                    feature: float(positive)
-                    for feature in FAMILY_NUMERIC_FEATURES
-                }
-                row["scenario"] = scenario
-                row["asset_roles"] = ("servers",)
-                row["family_positive"] = positive
-                rows.append(row)
-        families = pd.DataFrame(rows)
-        fitted_on = []
-
-        class FakeReranker:
-            def predict(self, test):
-                return np.full(len(test), 0.5)
-
-        def fake_fit(train):
-            fitted_on.append(set(train["scenario"]))
-            return FakeReranker()
-
-        with patch.object(
-            bench_eval,
-            "fit_family_reranker",
-            side_effect=fake_fit,
-        ):
-            scored = _out_of_fold_reranker_scores(families)
-
-        self.assertEqual(len(scored), len(families))
-        for scenario, training_scenarios in zip(
-            ("alpha", "beta", "gamma"),
-            fitted_on,
-        ):
-            self.assertNotIn(scenario, training_scenarios)
 
     def test_reranker_child_scores_are_out_of_fold(self):
         # the re-ranker has to see the kind of child scores it will meet at
@@ -633,14 +578,6 @@ class ClientRetrainingTests(unittest.TestCase):
         refitted = retrained.reranker.model.named_steps
         np.testing.assert_array_equal(shipped["model"].coef_, refitted["model"].coef_)
         self.assertFalse(np.array_equal(shipped["scale"].mean_, refitted["scale"].mean_))
-
-    def test_the_calibrator_is_carried_over_untouched(self):
-        # the calibrator is defined across environments too, so the client
-        # keeps the same object and its confidence stays comparable
-        retrained = refit_forest(
-            self.bundle, self.client, self._prior(3), n_estimators=10,
-        )
-        self.assertIs(retrained.calibrator, self.bundle.calibrator)
 
 
 # The client retraining path: soft labels from bags, a rescaled re-ranker and a

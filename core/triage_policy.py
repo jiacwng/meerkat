@@ -9,8 +9,7 @@ from core.attack_mapping import DETECTION_MAPPINGS, map_alert
 
 
 def queue_order(families: pd.DataFrame) -> pd.DataFrame:
-    # raw ranking score, never the calibrated probability, so display changes
-    # cannot reorder an analyst's day; ties break on start and id
+    # ties break on start and id, so the order is the same on every run
     return families.sort_values(
         ["scenario", "day", "ranking_score", "start", "representative_session_id"],
         ascending=[True, True, False, True, True],

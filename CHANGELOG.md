@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Breaking
+
+- The inventory reads roles from `"roles"` only. `"groups"` and the AIT
+  testbed names (`servers`, `intranet`, `beatservers` and others) are no
+  longer translated; `meerkat inventory --list-roles` lists the names.
+- The model bundle no longer carries a probability calibrator, which nothing
+  displayed. Bundles saved by 1.2.0 or `retrain` before this change no
+  longer load; rerun `meerkat retrain`.
+
 ### Fixed
 
 - A malformed alert field, an empty alert file or a malformed inventory now

@@ -50,21 +50,6 @@ PEOPLE_ROLES = (
 
 CANONICAL_ROLES = DEVICE_TYPE_ROLES + ZONE_ROLES + SERVICE_ROLES + PEOPLE_ROLES
 
-# one-to-one on purpose: merging two names would drop a distinction the forest uses
-LEGACY_ROLE_ALIASES = {
-    "internet": "internet_facing",
-    "intranet": "internal",
-    "servers": "server",
-    "mailserver": "mail_server",
-    "dnsservers": "dns_server",
-    "share": "file_share",
-    "proxied": "behind_proxy",
-    "dnat": "nat_forwarded",
-    "ext_user": "external_user",
-    "ext_mail": "external_mail",
-    "beatservers": "monitoring_agent",
-}
-
 _KNOWN = frozenset(CANONICAL_ROLES)
 
 
@@ -74,9 +59,8 @@ def canonicalize(groups: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
         name = str(group).strip().casefold()
         if not name:
             continue
-        mapped = LEGACY_ROLE_ALIASES.get(name, name)
-        if mapped in _KNOWN:
-            canonical.append(mapped)
+        if name in _KNOWN:
+            canonical.append(name)
         else:
             unknown.append(name)
 

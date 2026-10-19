@@ -38,8 +38,8 @@ class EndToEndTests(unittest.TestCase):
         write_records(alerts / "acme_aminer.json", *[aminer_export_record()] * 3)
         write_company_inventory(
             root / "inventory.json",
-            ("server-a", "10.0.0.1", ("servers",)),
-            ("mail", "10.0.0.2", ("mailserver",)),
+            ("server-a", "10.0.0.1", ("server",)),
+            ("mail", "10.0.0.2", ("mail_server",)),
         )
         cls.root = root
         cls.base = [

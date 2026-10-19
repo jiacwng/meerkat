@@ -6,9 +6,9 @@
       "ip_addresses": [
         "192.168.230.95"
       ],
-      "groups": [
+      "roles": [
         "employee",
-        "internet",
+        "internet_facing",
         "remote_employee"
       ],
       "criticality": "medium"
@@ -18,9 +18,9 @@
       "ip_addresses": [
         "192.168.230.165"
       ],
-      "groups": [
+      "roles": [
         "employee",
-        "internet",
+        "internet_facing",
         "remote_employee"
       ],
       "criticality": "medium"
@@ -30,9 +30,9 @@
       "ip_addresses": [
         "192.168.231.127"
       ],
-      "groups": [
+      "roles": [
         "employee",
-        "internet",
+        "internet_facing",
         "remote_employee"
       ],
       "criticality": "medium"
@@ -42,10 +42,10 @@
       "ip_addresses": [
         "172.19.130.106"
       ],
-      "groups": [
+      "roles": [
         "dmz",
-        "proxied",
-        "servers"
+        "behind_proxy",
+        "server"
       ],
       "criticality": "high"
     },
@@ -54,10 +54,10 @@
       "ip_addresses": [
         "172.19.130.68"
       ],
-      "groups": [
+      "roles": [
         "dmz",
-        "dnat",
-        "servers"
+        "nat_forwarded",
+        "server"
       ],
       "criticality": "high"
     },
@@ -66,10 +66,10 @@
       "ip_addresses": [
         "192.168.231.164"
       ],
-      "groups": [
-        "ext_mail",
-        "internet",
-        "mailserver"
+      "roles": [
+        "external_mail",
+        "internet_facing",
+        "mail_server"
       ],
       "criticality": "low"
     },
@@ -78,10 +78,10 @@
       "ip_addresses": [
         "192.168.231.56"
       ],
-      "groups": [
-        "ext_mail",
-        "internet",
-        "mailserver"
+      "roles": [
+        "external_mail",
+        "internet_facing",
+        "mail_server"
       ],
       "criticality": "low"
     },
@@ -90,10 +90,10 @@
       "ip_addresses": [
         "172.19.131.174"
       ],
-      "groups": [
+      "roles": [
         "dmz",
-        "dnat",
-        "servers"
+        "nat_forwarded",
+        "server"
       ],
       "criticality": "high"
     },
@@ -102,10 +102,10 @@
       "ip_addresses": [
         "10.143.2.4"
       ],
-      "groups": [
-        "beatservers",
-        "intranet",
-        "servers"
+      "roles": [
+        "monitoring_agent",
+        "internal",
+        "server"
       ],
       "criticality": "high"
     },
@@ -114,10 +114,10 @@
       "ip_addresses": [
         "10.143.2.91"
       ],
-      "groups": [
+      "roles": [
         "employee",
         "internal_employee",
-        "intranet"
+        "internal"
       ],
       "criticality": "medium"
     },
@@ -126,10 +126,10 @@
       "ip_addresses": [
         "10.143.3.65"
       ],
-      "groups": [
+      "roles": [
         "employee",
         "internal_employee",
-        "intranet"
+        "internal"
       ],
       "criticality": "medium"
     },
@@ -138,9 +138,9 @@
       "ip_addresses": [
         "192.168.231.180"
       ],
-      "groups": [
-        "ext_user",
-        "internet"
+      "roles": [
+        "external_user",
+        "internet_facing"
       ],
       "criticality": "low"
     },
@@ -149,9 +149,9 @@
       "ip_addresses": [
         "192.168.231.75"
       ],
-      "groups": [
-        "ext_user",
-        "internet"
+      "roles": [
+        "external_user",
+        "internet_facing"
       ],
       "criticality": "low"
     },
@@ -160,9 +160,9 @@
       "ip_addresses": [
         "192.168.231.68"
       ],
-      "groups": [
-        "ext_user",
-        "internet"
+      "roles": [
+        "external_user",
+        "internet_facing"
       ],
       "criticality": "low"
     },
@@ -171,11 +171,11 @@
       "ip_addresses": [
         "10.143.0.103"
       ],
-      "groups": [
-        "beatservers",
-        "intranet",
-        "servers",
-        "share"
+      "roles": [
+        "monitoring_agent",
+        "internal",
+        "server",
+        "file_share"
       ],
       "criticality": "high"
     },
@@ -184,9 +184,9 @@
       "ip_addresses": [
         "10.143.0.35"
       ],
-      "groups": [
-        "intranet",
-        "servers"
+      "roles": [
+        "internal",
+        "server"
       ],
       "criticality": "high"
     },
@@ -195,10 +195,10 @@
       "ip_addresses": [
         "10.143.2.25"
       ],
-      "groups": [
+      "roles": [
         "employee",
         "internal_employee",
-        "intranet"
+        "internal"
       ],
       "criticality": "medium"
     },
@@ -207,12 +207,12 @@
       "ip_addresses": [
         "172.19.130.4"
       ],
-      "groups": [
+      "roles": [
         "dmz",
-        "dnat",
-        "mailserver",
-        "proxied",
-        "servers"
+        "nat_forwarded",
+        "mail_server",
+        "behind_proxy",
+        "server"
       ],
       "criticality": "high"
     },
@@ -221,10 +221,10 @@
       "ip_addresses": [
         "10.143.1.78"
       ],
-      "groups": [
+      "roles": [
         "employee",
         "internal_employee",
-        "intranet"
+        "internal"
       ],
       "criticality": "medium"
     },
@@ -233,9 +233,9 @@
       "ip_addresses": [
         "192.168.231.254"
       ],
-      "groups": [
-        "dnsservers",
-        "internet"
+      "roles": [
+        "dns_server",
+        "internet_facing"
       ],
       "criticality": "critical"
     },
@@ -246,10 +246,10 @@
         "192.168.230.4",
         "10.143.0.1"
       ],
-      "groups": [
-        "dnsservers",
+      "roles": [
+        "dns_server",
         "firewall",
-        "servers"
+        "server"
       ],
       "criticality": "critical"
     }
