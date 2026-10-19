@@ -725,7 +725,13 @@ def iter_normalized_rows(
                         mine[fingerprint] += 1
                         continue
                     mine[fingerprint] += 1
-                row = normalize_record(parsed, detector, windows, inventory)
+                try:
+                    row = normalize_record(parsed, detector, windows, inventory)
+                except (KeyError, TypeError, ValueError) as error:
+                    raise AlertFileError(
+                        f"{path.name} line {position + 1}: the {detector} alert "
+                        f"is missing a field or has a bad value ({error!r})"
+                    ) from error
                 row["source_file"] = path.name
                 row["source_position"] = position
                 if event_labels is not None:

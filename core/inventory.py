@@ -67,7 +67,7 @@ def load_inventory(path: Path) -> Inventory:
         config = json.loads(path.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as error:
         raise ValueError(f"{path.name} is not valid JSON: {error.msg}") from error
-    if not isinstance(config, dict) or "assets" not in config:
+    if not isinstance(config, dict) or not isinstance(config.get("assets"), list):
         raise ValueError(
             f'{path.name} must be an object with an "assets" list; '
             "`meerkat inventory` writes one in the right shape"
@@ -86,6 +86,10 @@ def load_inventory(path: Path) -> Inventory:
                 raise ValueError(
                     f"{path.name}: an asset is missing \"{required}\""
                 )
+        if not isinstance(item["ip_addresses"], list):
+            raise ValueError(
+                f"{path.name}: \"ip_addresses\" of {item['hostname']} must be a list"
+            )
         declared = item.get("roles") or item.get("groups") or []
         if isinstance(declared, str):
             declared = [declared]

@@ -988,7 +988,7 @@ def render_session(
 
 WHAT_DIFFERS = (
     "web_request", "http_status", "source_port", "destination_port",
-    "dns_query", "tls_server_name", "command", "destination_user",
+    "dns_query", "tls_server_name", "command", "target_user",
     "source_user",
 )
 ATTACK_URL = "https://attack.mitre.org/techniques/{}/"
@@ -1243,19 +1243,32 @@ def _score_company(
 ):
     from core.scenario_eval import score_sessions
 
-    inventory = load_inventory(inventory_path)
+    inventory = _load_or_exit(load_inventory, inventory_path, "the inventory")
     for message in _role_problems(inventory, inventory_path.name).values():
         console.print(message)
+    frame = _normalize_or_exit(
+        input_dir, company, inventory_path, wazuh_file, aminer_file
+    )
+    sessions = build_sessions(frame, company, inventory)
+    alerts = enrich_alerts(frame, attack_mappings)
+    scored_sessions, families = score_sessions(bundle, sessions)
+    return scored_sessions, families, alerts
+
+
+def _normalize_or_exit(
+    input_dir: Path,
+    company: str,
+    inventory_path: Path,
+    wazuh_file: Path | None,
+    aminer_file: Path | None,
+) -> pd.DataFrame:
     frame = normalize_scenario(
         input_dir, None, company, inventory_path,
         wazuh_file=wazuh_file, aminer_file=aminer_file,
     )
     if frame.empty:
         _fail("[red]no alerts parsed[/red]  the files resolved but held no rows")
-    sessions = build_sessions(frame, company, inventory)
-    alerts = enrich_alerts(frame, attack_mappings)
-    scored_sessions, families = score_sessions(bundle, sessions)
-    return scored_sessions, families, alerts
+    return frame
 
 
 def _file_record(path: Path | None) -> dict | None:
@@ -1761,7 +1774,7 @@ def cmd_review(args) -> None:
     session_handle = None
     if args.session and args.session.lower() != "all":
         session = _find_session(run, family, args.session)
-        session_handle = args.session.upper()
+        session_handle = canon_handle(args.session)
 
     entry = append_review(
         run.directory, run.run_id, family["family_id"], family["handle"],
@@ -1896,9 +1909,8 @@ def cmd_retrain(args) -> None:
             f"{', '.join(safe(host) for host in unresolved[:5])}"
         )
     bundle = _load_bundle(args.model)
-    alerts = normalize_scenario(
-        args.input, None, company, args.inventory,
-        wazuh_file=args.wazuh_file, aminer_file=args.aminer_file,
+    alerts = _normalize_or_exit(
+        args.input, company, args.inventory, args.wazuh_file, args.aminer_file
     )
     sessions = build_sessions(alerts, company, inventory)
 
@@ -2279,9 +2291,8 @@ def cmd_drift(args) -> None:
     company = _open_company(args)
     bundle = _load_bundle(args.model)
     inventory = _load_or_exit(load_inventory, args.inventory, "the inventory")
-    alerts = normalize_scenario(
-        args.input, None, company, args.inventory,
-        wazuh_file=args.wazuh_file, aminer_file=args.aminer_file,
+    alerts = _normalize_or_exit(
+        args.input, company, args.inventory, args.wazuh_file, args.aminer_file
     )
     sessions = build_sessions(alerts, company, inventory)
     drifts = compare_profile(

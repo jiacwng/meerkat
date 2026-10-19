@@ -282,6 +282,24 @@ class DecisionExportTests(unittest.TestCase):
             self.assertEqual(by_session["S2"]["decision"], "benign")
             self.assertEqual(by_session["S2"]["decided_by"], "family")
 
+    def test_a_session_handle_typed_in_lowercase_reaches_the_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            make_run(runs)
+            args = argparse.Namespace(
+                handle="F1", decision="escalate", session="s01", note=None,
+                analyst=None, run="acme-1", runs_dir=runs,
+            )
+            with mock.patch.object(cli, "session_label_key", return_value="k"):
+                cli.cmd_review(args)
+            run = cli.load_run(runs, "acme-1")
+            s1 = [
+                row for row in cli.decision_rows(run, run.families)
+                if row["family"] == "F1" and row["session"] == "S1"
+            ]
+            self.assertTrue(s1)
+            self.assertTrue(all(row["decision"] == "escalate" for row in s1))
+
     def test_review_session_all_records_a_family_wide_decision(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
@@ -719,6 +737,12 @@ class FakeInventory:
         return ()
 
 
+class WhatDiffersTests(unittest.TestCase):
+    def test_every_field_named_is_a_normalized_column(self):
+        from core.normalize import COLUMNS
+        self.assertLessEqual(set(cli.WHAT_DIFFERS), set(COLUMNS))
+
+
 class EmptyInputTests(unittest.TestCase):
     def test_triage_reports_no_alerts_the_way_check_does(self):
         # the empty feature matrix used to reach the forest, and the answer was
@@ -736,6 +760,49 @@ class EmptyInputTests(unittest.TestCase):
             )
         self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
         self.assertIn("no alerts parsed", errors.getvalue())
+
+    def test_drift_and_retrain_report_no_alerts_too(self):
+        commands = (
+            (cli.cmd_drift, {}),
+            (cli.cmd_retrain, {"incidents": Path("incidents.csv"), "holdout_days": 7}),
+        )
+        for command, extra in commands:
+            args = argparse.Namespace(
+                input=temporary_directory(), inventory=Path("inventory.json"),
+                model=Path("model.skops"), wazuh_file=None, aminer_file=None,
+                **extra,
+            )
+            errors = io.StringIO()
+            with (
+                self.subTest(command=command.__name__),
+                mock.patch.object(cli, "_open_company", return_value="acme"),
+                mock.patch.object(cli, "_require"),
+                mock.patch.object(cli, "_require_bundle"),
+                mock.patch.object(cli, "_load_bundle"),
+                mock.patch.object(cli, "load_inventory", return_value=FakeInventory()),
+                mock.patch.object(cli, "load_incidents", return_value=pd.DataFrame()),
+                mock.patch.object(cli, "unresolved_hosts", return_value=[]),
+                mock.patch.object(cli, "normalize_scenario", return_value=pd.DataFrame()),
+                contextlib.redirect_stderr(errors),
+                self.assertRaises(SystemExit) as caught,
+            ):
+                command(args)
+            self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
+            self.assertIn("no alerts parsed", errors.getvalue())
+
+    def test_a_bad_inventory_is_reported_by_triage(self):
+        errors = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_inventory", side_effect=ValueError("bad")),
+            contextlib.redirect_stderr(errors),
+            self.assertRaises(SystemExit) as caught,
+        ):
+            cli._score_company(
+                None, temporary_directory(), "acme", Path("inventory.json"),
+                None, None, {},
+            )
+        self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
+        self.assertIn("the inventory could not be read", errors.getvalue())
 
 
 class RunsDirectoryMessageTests(unittest.TestCase):
