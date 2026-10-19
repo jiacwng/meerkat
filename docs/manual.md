@@ -43,7 +43,7 @@ rebuilds only allowlisted types, so it does not execute the file the way
 unpickling does. None of that makes an untrusted bundle safe, so load your
 own. The JSON sidecar records the training settings and a checksum, which
 catches corruption and proves nothing about who wrote the file. Run directories under `runs/` are
-plain pickles; open only your own.
+pickles, loaded through an allowlist of pandas and numpy types; open only your own.
 
 ## Quickstart
 
@@ -681,4 +681,4 @@ of AMiner alerts, 34% of Wazuh alerts and 0.3% of Suricata alerts, and one
 host reaches a chain of five.
 
 **Evaluation is testbed data.** The published numbers come from the AIT Alert
-Data Set and a cross-check on CAM-LDS; no production SOC data was available.
+Data Set; no production SOC data was available.

@@ -44,7 +44,7 @@ references:
       Intrusion detection alerts from eight simulated company environments,
       published by the Austrian Institute of Technology. Meerkat is trained and
       evaluated on this data set. One environment and the labels are included in
-      this repository under CC BY 4.0; see data/README.md.
+      this repository under CC BY 4.0; see NOTICE.
   - type: conference-paper
     title: Introducing a New Alert Data Set for Multi-Step Attack Analysis
     authors:
