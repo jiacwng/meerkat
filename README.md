@@ -123,7 +123,8 @@ techniques. `export navigator` writes an ATT&CK Navigator layer. The
 </p>
 
 `retrain` refits the forest on a company's own incident records. It saves the
-new model only when it beats the shipped one on held-out incidents.
+new model when it reaches every incident the shipped one reaches and leaves
+no larger share of alerts on rules it never saw.
 
 ## Results
 

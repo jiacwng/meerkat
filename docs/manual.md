@@ -121,6 +121,15 @@ The verdict names follow OCSF's Incident Finding, matched after lowercasing.
 Rows with any other verdict are treated as non-attacks and dropped. A host the
 inventory cannot resolve is named in a warning and its rows match nothing.
 
+From Elastic Security, filter the Alerts table to closed alerts and export it as
+CSV. Keep the columns for the alert time, the host name and the close reason
+`kibana.alert.workflow_reason`. Rename them to `start`, `end`, `host` and
+`verdict`, and use the alert time for both `start` and `end`. The close reason
+`True positive` becomes the verdict `true_positive`. Other reasons such as
+`False positive` and `Benign positive` are dropped as non-attacks. Each row is
+one alert, so several rows can belong to one incident. If the export writes times
+in another format, convert them to ISO 8601 first.
+
 A first training batch should be the full alert archive with its incident
 history; records covering about 15 distinct incidents are a comfortable
 start. Keep the whole archive for later retrains, and trim old data only when
@@ -535,10 +544,13 @@ Decisions are appended to the same `reviews.jsonl` as `meerkat review`, with the
 
 Refit the session forest on your own alert archive, supervised by your
 incident records. Trains on the earlier days, scores the last `--holdout-days`,
-and saves only when a majority of the fits beat the shipped bundle there. A
-refusal exits with code 3 and says why; nothing is saved. A saved retrain
-prints what was refit, rescaled and kept, and the bundle's provenance sidecar
-records every setting.
+and saves when a majority of the fits reach every incident the shipped bundle
+reaches there and leave no larger share of those days' alerts on rules the
+model never saw. A saved retrain prints how many test incidents the two models
+disagree on, next to the 6 needed to call a difference real. A refusal exits
+with code 3 and says why; nothing is saved. A saved retrain also prints what
+was refit, rescaled and kept, and the bundle's provenance sidecar records every
+setting.
 
     meerkat retrain --incidents FILE [--input DIR] [--inventory FILE]
                     [--environment NAME] [--out FILE] [--holdout-days N]
@@ -658,8 +670,8 @@ history, counted per score band.
 
 Retraining learns from incident windows, because that is what a SOC can write down: sessions inside a reported
 incident share the weight of one label, sessions outside every incident are
-the negatives, and the gate keeps any refit that does not beat the shipped
-bundle from being saved.
+the negatives, and the gate keeps any refit that reaches fewer incidents
+from being saved.
 
 ## Reproducing the results
 
@@ -674,7 +686,8 @@ code change moved the normalized frame.
 **Batch.** One run covers complete days; meerkat does not tail a live
 alert stream.
 
-**The labels are coarse.** Retraining learns from incident windows, and the retrain gate compensates.
+**The labels are coarse.** Retraining learns from incident windows, The printed count of disagreeing test incidents shows how much evidence a
+retrain has.
 
 **Three detectors.** Wazuh, Suricata and AMiner. Others would need their own
 normalisation.

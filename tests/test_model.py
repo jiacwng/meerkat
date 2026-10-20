@@ -50,7 +50,7 @@ from core.incidents import (
 )
 from core.inventory import Asset, Inventory
 from core.scenario_eval import refit_forest
-from meerkat.cli import _validate_retrain_result
+from meerkat.cli import _disagreement_note, _validate_retrain_result
 
 
 class ClassifierTests(unittest.TestCase):
@@ -662,31 +662,30 @@ class TestRetrainGate(unittest.TestCase):
         # a retrained forest reaching none of the held-out incidents is broken
         # however good its other numbers look, so approval stops there
         with self.assertRaises(ValueError) as caught:
-            _validate_retrain_result(reached(0, 10), reached(0, 10))
+            _validate_retrain_result(reached(0, 10), reached(0, 10), 0.5, 0.1)
         self.assertIn("none of the 10", str(caught.exception))
 
     def test_a_regression_is_refused(self):
         # the client is choosing between the shipped bundle and this one, so
         # reaching 3 where the shipped one reached 8 can never be saved
         with self.assertRaises(ValueError):
-            _validate_retrain_result(reached(8, 10), reached(3, 10))
+            _validate_retrain_result(reached(8, 10), reached(3, 10), 0.5, 0.1)
 
-    def test_two_identical_models_give_no_reason_to_swap(self):
-        # identical reach on every incident gives the sign test nothing to
-        # work with, so a same-scoring retrain is not worth deploying
+    def test_a_model_that_misses_more_of_the_rules_is_refused(self):
         with self.assertRaises(ValueError) as caught:
-            _validate_retrain_result(reached(8, 10), reached(8, 10))
-        self.assertIn("disagree on 0", str(caught.exception))
+            _validate_retrain_result(reached(8, 10), reached(8, 10), 0.1, 0.2)
+        self.assertIn("never saw", str(caught.exception))
 
-    def test_five_disagreements_cannot_call_a_winner(self):
-        # a two-sided sign test on five same-direction pairs reaches only 0.0625
-        with self.assertRaises(ValueError):
-            _validate_retrain_result(reached(0, 10), reached(5, 10))
+    def test_a_tie_on_unseen_rules_is_saved(self):
+        _validate_retrain_result(reached(8, 10), reached(8, 10), 0.0, 0.0)
 
-    def test_six_disagreements_in_the_right_direction_approve(self):
-        # six same-direction pairs put the two-sided sign test at 0.031, the
-        # first count that can call the difference real
-        _validate_retrain_result(reached(0, 10), reached(6, 10))
+    def test_a_few_disagreements_are_enough_to_save(self):
+        _validate_retrain_result(reached(0, 10), reached(2, 10), 0.8, 0.1)
+
+    def test_the_note_gives_the_count_and_the_number_needed(self):
+        note = _disagreement_note(reached(0, 10), reached(4, 10))
+        self.assertIn("4 of 10 test incidents", note)
+        self.assertIn("6 are needed", note)
 
 
 class TestRescaleReranker(unittest.TestCase):
@@ -736,10 +735,22 @@ class TestRescaleReranker(unittest.TestCase):
 
 
 class TestCompareModels(unittest.TestCase):
-    # the gate's decision logic, now callable without going through cmd_retrain.
-    # It was only reachable through a hundred-line command before.
-    def verdict(self, shipped_hits: int, candidate_hits: list[int], total: int) -> dict:
+    # the gate's decision logic, callable without going through cmd_retrain
+    def verdict(
+        self,
+        shipped_hits: int,
+        candidate_hits: list[int],
+        total: int,
+        candidate_rules: set[str] = frozenset({"a", "b"}),
+    ) -> dict:
+        from types import SimpleNamespace
+
         from meerkat import cli
+
+        def model(known):
+            return SimpleNamespace(
+                schema=SimpleNamespace(rule_counts=pd.Series(1, index=sorted(known)))
+            )
 
         # the real _incident_reach returns a boolean numpy array, so the double
         # must too or .sum() below is a list attribute error
@@ -749,6 +760,7 @@ class TestCompareModels(unittest.TestCase):
         calls = iter([hits(shipped_hits)]
                      + [hits(h) for h in candidate_hits]
                      + [hits(shipped_hits)])
+        held = pd.DataFrame({"pair_counts": [[("a", 5)], [("b", 5)]]})
 
         with unittest.mock.patch.object(
             cli, "incident_reach_for", side_effect=lambda *a, **k: next(calls)
@@ -758,8 +770,8 @@ class TestCompareModels(unittest.TestCase):
             "core.scenario_eval.rescale_bundle", side_effect=lambda b, s: b,
         ):
             return cli.compare_models(
-                object(), [object()] * len(candidate_hits),
-                None, None, list(range(total)), None, 10,
+                model({"a"}), [model(candidate_rules)] * len(candidate_hits),
+                held, None, list(range(total)), None, 10,
             )
 
     def test_a_majority_of_seeds_must_beat_the_shipped_bundle(self):
@@ -769,7 +781,7 @@ class TestCompareModels(unittest.TestCase):
 
     def test_a_minority_is_refused(self):
         # four of the five forests reach nothing, so the first recorded reason is
-        # the zero-reach refusal rather than the discordance one
+        # the zero-reach refusal
         refused = self.verdict(0, [8, 0, 0, 0, 0], 10)
         self.assertFalse(refused["approved"])
         self.assertEqual(sum(refused["passed"]), 1)
@@ -780,6 +792,11 @@ class TestCompareModels(unittest.TestCase):
         # just spent, which is how a model looks good on paper and not in use
         chosen = self.verdict(0, [6, 9, 7], 10)
         self.assertEqual(chosen["median_index"], 2)
+
+    def test_a_candidate_that_knows_fewer_rules_is_refused(self):
+        refused = self.verdict(0, [2, 2, 2], 10, candidate_rules=set())
+        self.assertFalse(refused["approved"])
+        self.assertIn("never saw", refused["reason"])
 
 
 # incident records to training labels
