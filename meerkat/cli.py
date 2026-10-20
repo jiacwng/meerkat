@@ -2948,15 +2948,16 @@ def cmd_pull(args) -> None:
             )
 
     eve_records: Iterable[dict] = ()
+    skipped: list[str] = []
     if args.source == "file":
         if not args.alerts_file:
             _fail(
                 "[red]file mode needs --alerts-file[/red]  the wazuh "
                 "alerts.json to read from"
             )
-        records = connectors.read_window_file(args.alerts_file, window)
+        records = connectors.read_window_file(args.alerts_file, window, skipped)
         if args.eve_file:
-            eve_records = connectors.read_window_file(args.eve_file, window)
+            eve_records = connectors.read_window_file(args.eve_file, window, skipped)
     else:
         config = _indexer_config(args)
         if not config.verify_tls:
@@ -2977,6 +2978,8 @@ def cmd_pull(args) -> None:
     start_iso = datetime.fromtimestamp(window.start, UTC).isoformat()
     end_iso = datetime.fromtimestamp(window.end, UTC).isoformat()
     console.print(f"pulled {total} alerts for {safe(company)} ({args.source})")
+    if skipped:
+        console.print(_skipped_records_message(skipped))
     console.print(f"  window {start_iso} .. {end_iso}")
     console.print(f"  wrote {wazuh_out}")
     if eve_count:

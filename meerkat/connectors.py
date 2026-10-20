@@ -16,7 +16,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from core.normalize import get_timestamp, read_alert_record
+from core.normalize import (
+    BAD_RECORD_LIMIT,
+    AlertFileError,
+    get_timestamp,
+    read_alert_record,
+)
 
 
 class ConnectorError(Exception):
@@ -78,14 +83,23 @@ def day_window(day: str) -> Window:
     return Window(start.timestamp(), (start + timedelta(days=1)).timestamp())
 
 
-def read_window_file(path: Path, window: Window) -> Iterator[dict]:
+def read_window_file(
+    path: Path, window: Window, skipped: list[str] | None = None
+) -> Iterator[dict]:
     if path.suffix == ".gz":
         handle = gzip.open(path, "rt", encoding="utf-8-sig", errors="replace")
     else:
         handle = path.open(encoding="utf-8-sig", errors="replace")
+    bad: list[str] = []
+    lines = 0
     with handle:
         for position, line in enumerate(handle):
-            record = read_alert_record(line, path, position)
+            lines += 1
+            try:
+                record = read_alert_record(line, path, position)
+            except AlertFileError as error:
+                bad.append(str(error))
+                continue
             if record is None:
                 continue
             try:
@@ -94,6 +108,13 @@ def read_window_file(path: Path, window: Window) -> Iterator[dict]:
                 continue
             if window.contains(moment):
                 yield record
+    if len(bad) > BAD_RECORD_LIMIT * lines:
+        raise AlertFileError(
+            f"{path.name} has {len(bad)} bad records in {lines} lines, over "
+            f"the {BAD_RECORD_LIMIT:.0%} limit. First: {bad[0]}"
+        )
+    if skipped is not None:
+        skipped.extend(bad)
 
 
 def write_records(path: Path, records: Iterable[dict]) -> int:

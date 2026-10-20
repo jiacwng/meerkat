@@ -38,6 +38,8 @@
 - `pull` retries an indexer answer of HTTP 429 or 503 up to 3 times, waiting for
   `Retry-After`, or 1, 2 and 4 seconds.
 - `pull --source file` reads `.json.gz` files.
+- `pull --source file` skips up to 1% bad lines per file and reports how many. A
+  file over the limit stops the pull and writes nothing.
 - `retrain` saves a model when a majority of its forests reach every test
   incident the shipped one reaches and leave no larger share of the test days'
   alerts on rules it never saw. It no longer needs 6 incidents where the two

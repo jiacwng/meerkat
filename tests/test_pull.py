@@ -95,6 +95,36 @@ class PullFileModeTests(unittest.TestCase):
         self.assertTrue((self.out / "acme_wazuh.json").exists())
 
 
+class PullBadRecordTests(unittest.TestCase):
+    def pull(self, bad_lines: int):
+        directory = Path(tempfile.mkdtemp())
+        record = json.dumps(wazuh_record(
+            "2022-01-21T06:00:00+0000", rule_id="1", level=5, description="x",
+            timestamp_key="timestamp",
+        ))
+        lines = [record] * (200 - bad_lines) + ["{oops"] * bad_lines
+        source = directory / "src.json"
+        source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        out = directory / "out"
+        result = run_pull(
+            ["--environment", "acme", "--input", str(out), "--source", "file",
+             "--alerts-file", str(source), "--day", "2022-01-21"]
+        )
+        return result, out / "acme_wazuh.json"
+
+    def test_one_bad_line_in_two_hundred_is_skipped_and_reported(self):
+        result, written = self.pull(1)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("skipped 1 bad records", flat(result))
+        self.assertEqual(len(written.read_text(encoding="utf-8").splitlines()), 199)
+
+    def test_five_bad_lines_in_two_hundred_stop_the_pull(self):
+        result, written = self.pull(5)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("5 bad records in 200 lines", flat(result))
+        self.assertFalse(written.exists())
+
+
 class PullConfigTests(unittest.TestCase):
     def test_non_numeric_port_fails_cleanly(self):
         out = Path(tempfile.mkdtemp()) / "out"
