@@ -731,6 +731,7 @@ def temporary_directory() -> Path:
 
 class FakeInventory:
     unknown_roles: tuple[str, ...] = ()
+    assets_without_ip: tuple[str, ...] = ()
     assets_by_ip: dict = {}
 
     def assets_without_roles(self) -> tuple[str, ...]:
@@ -978,6 +979,51 @@ class SkippedRecordTests(unittest.TestCase):
         self.assertEqual(report["sampled"], 120)
         self.assertIn("skipped1badrecords", squashed(stderr.getvalue()))
         self.assertIn("line121", squashed(stderr.getvalue()))
+
+
+class InventoryGapTests(unittest.TestCase):
+    def check(self, assets: list[dict], roles: list[str] | None = None) -> dict:
+        directory = client_directory()
+        write_inventory(directory / "inventory" / "acme.json", assets)
+        model = directory / "m.skops"
+        if roles is not None:
+            (directory / "m.skops.json").write_text(
+                json.dumps({"roles": roles, "rules": []}), encoding="utf-8"
+            )
+        stdout = io.StringIO()
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(io.StringIO()),
+            contextlib.suppress(SystemExit),
+        ):
+            cli.cmd_check(argparse.Namespace(
+                model=model, company="acme", input=directory,
+                inventory=directory / "inventory" / "acme.json",
+                sample=100, wazuh_file=None, aminer_file=None, json=True,
+                attack_mappings=None,
+            ))
+        return json.loads(stdout.getvalue())
+
+    def test_an_asset_without_an_ip_is_named(self):
+        report = self.check([
+            {"hostname": "web01", "ip_addresses": ["10.0.0.9"], "roles": ["server"]},
+            {"hostname": "printer", "ip_addresses": [], "roles": []},
+        ])
+        self.assertIn("assets_without_ip", report["problems"])
+
+    def test_a_role_the_model_has_no_column_for_is_named(self):
+        report = self.check(
+            [{"hostname": "web01", "ip_addresses": ["10.0.0.9"],
+              "roles": ["server", "desktop"]}],
+            roles=["server"],
+        )
+        self.assertEqual(report["roles_without_column"], ["desktop"])
+
+    def test_no_sidecar_means_no_role_comparison(self):
+        report = self.check(
+            [{"hostname": "web01", "ip_addresses": ["10.0.0.9"], "roles": ["desktop"]}]
+        )
+        self.assertNotIn("roles_without_column", report)
 
 
 class CheckSampleTests(unittest.TestCase):

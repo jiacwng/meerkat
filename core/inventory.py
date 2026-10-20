@@ -30,6 +30,7 @@ class Inventory:
     ip_by_hostname: dict[str, str]
     unknown_roles: tuple[str, ...] = ()
     unknown_criticalities: tuple[str, ...] = ()
+    assets_without_ip: tuple[str, ...] = ()
 
     def __contains__(self, ip: str) -> bool:
         return ip in self.assets_by_ip
@@ -76,6 +77,7 @@ def load_inventory(path: Path) -> Inventory:
     ip_by_hostname = {}
     unknown_roles: set[str] = set()
     unknown_criticalities: set[str] = set()
+    without_ip: set[str] = set()
     for item in config["assets"]:
         if not isinstance(item, dict):
             raise ValueError(
@@ -111,6 +113,8 @@ def load_inventory(path: Path) -> Inventory:
             assets_by_ip[ip] = asset
         if asset.ip_addresses:
             ip_by_hostname[asset.hostname.casefold()] = asset.ip_addresses[0]
+        else:
+            without_ip.add(asset.hostname)
 
     return Inventory(
         company=str(config.get("company", path.stem)),
@@ -118,4 +122,5 @@ def load_inventory(path: Path) -> Inventory:
         ip_by_hostname=ip_by_hostname,
         unknown_roles=tuple(sorted(unknown_roles)),
         unknown_criticalities=tuple(sorted(unknown_criticalities)),
+        assets_without_ip=tuple(sorted(without_ip)),
     )

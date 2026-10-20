@@ -47,6 +47,8 @@
 
 ### Added
 
+- `check` names inventory assets that have no IP address, which match no alert, and
+  roles the model has no column for.
 - `check` and `triage` warn when more than 20% of alerts come from rules the model
   never saw, and report the share in `check --json` and `run.json`. `check --model
   PATH` names the model to compare with.
