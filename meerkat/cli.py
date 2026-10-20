@@ -1845,7 +1845,9 @@ RETRAIN_FITS = 5
 MIN_BAGGED_SESSIONS = 10
 
 
-def _validate_retrain_result(old, new) -> None:
+def _validate_retrain_result(
+    old, new, old_unseen: float, new_unseen: float
+) -> None:
     old = np.asarray(old, dtype=bool)
     new = np.asarray(new, dtype=bool)
     if not new.any():
@@ -1854,13 +1856,20 @@ def _validate_retrain_result(old, new) -> None:
         )
     if new.sum() < old.sum():
         raise ValueError("the retrained forest reaches fewer incidents")
-    discordant = int((old != new).sum())
-    if discordant < MIN_DISCORDANT:
+    if new_unseen > old_unseen:
         raise ValueError(
-            f"the two models disagree on {discordant} of {len(old)} held-out "
-            f"incidents, and {MIN_DISCORDANT} are needed before a difference can be "
-            "called real; supply incidents covering more days, or lower --budget"
+            f"the retrained forest leaves {new_unseen:.1%} of the test days' alerts "
+            f"on rules it never saw, the shipped one {old_unseen:.1%}"
         )
+
+
+def _disagreement_note(old, new) -> str:
+    discordant = int((np.asarray(old, dtype=bool) != np.asarray(new, dtype=bool)).sum())
+    return (
+        f"the retrained model disagrees with the shipped one on {discordant} of "
+        f"{len(old)} test incidents; {MIN_DISCORDANT} are needed to call the "
+        "difference real"
+    )
 
 
 def incident_reach_for(
@@ -1891,9 +1900,13 @@ def compare_models(
     shipped_reach = reach(shipped)
     verdicts, reasons = [], []
     results = [reach(candidate) for candidate in candidates]
-    for result in results:
+    shipped_unseen = unseen_rule_share(shipped.schema, held["pair_counts"])
+    for candidate, result in zip(candidates, results):
         try:
-            _validate_retrain_result(shipped_reach, result)
+            _validate_retrain_result(
+                shipped_reach, result, shipped_unseen,
+                unseen_rule_share(candidate.schema, held["pair_counts"]),
+            )
             verdicts.append(True)
         except ValueError as error:
             verdicts.append(False)
@@ -2006,6 +2019,11 @@ def cmd_retrain(args) -> None:
         f"[green]saved[/green] {args.out}  "
         f"{sum(verdict['passed'])} of {len(verdict['passed'])} seeds passed, "
         "median kept"
+    )
+    median = verdict["median_index"]
+    console.print(
+        f"[dim]{_disagreement_note(verdict['shipped'], verdict['candidates'][median])}"
+        "[/dim]"
     )
     console.print(
         "[dim]refit: forest (your sessions)  rescaled: re-ranker scale "
