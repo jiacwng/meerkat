@@ -19,6 +19,12 @@
   `export decisions`.
 - The alert table compares the target user field.
 
+### Added
+
+- `check` and `triage` warn when more than 20% of alerts come from rules the model
+  never saw, and report the share in `check --json` and `run.json`. `check --model
+  PATH` names the model to compare with.
+
 ## 1.2.0 - 2026-10-07
 
 ### Added

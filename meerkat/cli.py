@@ -1314,6 +1314,9 @@ def cmd_triage(args) -> None:
         args.wazuh_file, args.aminer_file, mappings,
     )
     families = decorate_families(families, alerts, args.budget)
+    unseen = unseen_rule_share(bundle.schema, scored_sessions["pair_counts"])
+    if unseen > UNSEEN_RULE_WARN:
+        console.print(_unseen_rules_message(unseen))
 
     meta = {
         "company": company,
@@ -1324,6 +1327,7 @@ def cmd_triage(args) -> None:
         "families": int(len(families)),
         "sessions": int(len(scored_sessions)),
         "alerts": int(len(alerts)),
+        "unseen_rule_share": round(unseen, 4),
         "attack_mappings": _file_record(args.attack_mappings),
     }
     directory = save_run(
@@ -2032,6 +2036,24 @@ def _sample_alerts(args, company: str, alert_files, mappings) -> pd.DataFrame:
     return enrich_alerts(pd.DataFrame(rows), mappings)
 
 
+def _known_rules(model: Path) -> set[tuple[str, str]] | None:
+    # read from the sidecar, so check never imports the ML stack to load the model
+    try:
+        record = json.loads(
+            model.with_suffix(model.suffix + ".json").read_text(encoding="utf-8")
+        )
+        return {(str(detector), str(rule)) for detector, rule in record["rules"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _unseen_rules_message(share: float) -> str:
+    return (
+        f"[yellow]{share:.0%} of alerts come from rules the model never saw"
+        "[/yellow]  ranking will be close to arbitrary until you retrain"
+    )
+
+
 def _check_findings(inventory, frame, source: str, report: dict) -> list[tuple[str | None, str]]:
     findings = list(_role_problems(inventory, source).items())
     if inventory.unknown_criticalities:
@@ -2170,6 +2192,13 @@ def cmd_check(args) -> None:
         report["outside_inventory_share"] = round(len(unmatched) / len(frame), 3)
 
     findings = _check_findings(inventory, frame, args.inventory.name, report)
+    known = _known_rules(args.model)
+    if known is not None:
+        pairs = zip(frame["detector_source"].astype(str), frame["rule_id"].astype(str))
+        share = sum(pair not in known for pair in pairs) / len(frame)
+        report["unseen_rule_share"] = round(share, 4)
+        if share > UNSEEN_RULE_WARN:
+            findings.append((None, _unseen_rules_message(share)))
     report["problems"] = [key for key, _ in findings if key]
     report["ready"] = not report["problems"]
     if args.json:
@@ -3158,6 +3187,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_input(check)
     _add_inventory(check)
     _add_attack_mappings(check)
+    _add_model(check, help="the model whose known rules the sample is compared with")
     check.add_argument("--sample", type=_positive, default=CHECK_SAMPLE,
                        help="how many alerts to read")
     check.add_argument("--json", action="store_true",

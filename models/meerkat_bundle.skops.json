@@ -2,7 +2,7 @@
   "sha256": "6da3042bc93772074e6bcbca04252103a2d3a72b515af5ddc77bbea60534deb6",
   "sklearn_version": "1.9.0",
   "python_version": "3.12.3",
-  "written_at": "2026-10-19T22:08:37+00:00",
+  "written_at": "2026-10-19T23:16:14+00:00",
   "training_scenarios": [
     "fox",
     "harrison",
@@ -34,5 +34,355 @@
   ],
   "max_depth": null,
   "min_samples_leaf": 1,
-  "class_weight": "balanced"
+  "class_weight": "balanced",
+  "rules": [
+    [
+      "aminer",
+      "AMiner: CPU value deviates from average in monitoring logs."
+    ],
+    [
+      "aminer",
+      "AMiner: CPU value out of expected range in monitoring logs."
+    ],
+    [
+      "aminer",
+      "AMiner: High entropy in Apache Access referer."
+    ],
+    [
+      "aminer",
+      "AMiner: High entropy in Apache Access request."
+    ],
+    [
+      "aminer",
+      "AMiner: High entropy in Apache Access user agent."
+    ],
+    [
+      "aminer",
+      "AMiner: High entropy in DNS domain."
+    ],
+    [
+      "aminer",
+      "AMiner: New apparmor parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New characters in Apache Access referer."
+    ],
+    [
+      "aminer",
+      "AMiner: New characters in Apache Access request."
+    ],
+    [
+      "aminer",
+      "AMiner: New characters in DNS domain."
+    ],
+    [
+      "aminer",
+      "AMiner: New cred_acq parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New cred_disp parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New cred_refr parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New event type."
+    ],
+    [
+      "aminer",
+      "AMiner: New ip address in DNS logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New login parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New query record in DNS logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New request method in Apache Access log."
+    ],
+    [
+      "aminer",
+      "AMiner: New service_start parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New service_stop parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New status code in Apache Access log."
+    ],
+    [
+      "aminer",
+      "AMiner: New syscall parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New user_acct parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New user_auth parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New user_cmd parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New user_end parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New user_login parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: New user_start parameter combination in Audit logs."
+    ],
+    [
+      "aminer",
+      "AMiner: Unusual occurrence frequencies of Apache Access logs."
+    ],
+    [
+      "aminer",
+      "AMiner: Unusual occurrence frequencies of Apache Access request methods."
+    ],
+    [
+      "aminer",
+      "AMiner: Unusual occurrence frequencies of DNS log events."
+    ],
+    [
+      "aminer",
+      "AMiner: Unusual occurrence frequencies of DNS query IPs."
+    ],
+    [
+      "aminer",
+      "AMiner: Unusual occurrence frequencies of DNS query records."
+    ],
+    [
+      "aminer",
+      "AMiner: Unusual occurrence frequencies of query records in DNS logs."
+    ],
+    [
+      "suricata",
+      "2001569"
+    ],
+    [
+      "suricata",
+      "2011802"
+    ],
+    [
+      "suricata",
+      "2013504"
+    ],
+    [
+      "suricata",
+      "2014169"
+    ],
+    [
+      "suricata",
+      "2016149"
+    ],
+    [
+      "suricata",
+      "2016150"
+    ],
+    [
+      "suricata",
+      "2016778"
+    ],
+    [
+      "suricata",
+      "2024364"
+    ],
+    [
+      "suricata",
+      "2025105"
+    ],
+    [
+      "suricata",
+      "2025109"
+    ],
+    [
+      "suricata",
+      "2027757"
+    ],
+    [
+      "suricata",
+      "2027758"
+    ],
+    [
+      "suricata",
+      "2027863"
+    ],
+    [
+      "suricata",
+      "2027865"
+    ],
+    [
+      "suricata",
+      "2029340"
+    ],
+    [
+      "suricata",
+      "2029706"
+    ],
+    [
+      "suricata",
+      "2029707"
+    ],
+    [
+      "suricata",
+      "2029709"
+    ],
+    [
+      "suricata",
+      "2220000"
+    ],
+    [
+      "suricata",
+      "2220006"
+    ],
+    [
+      "suricata",
+      "2221001"
+    ],
+    [
+      "suricata",
+      "2221004"
+    ],
+    [
+      "suricata",
+      "2221010"
+    ],
+    [
+      "suricata",
+      "2230000"
+    ],
+    [
+      "suricata",
+      "2230002"
+    ],
+    [
+      "suricata",
+      "2230003"
+    ],
+    [
+      "suricata",
+      "2230010"
+    ],
+    [
+      "suricata",
+      "2230027"
+    ],
+    [
+      "suricata",
+      "2240001"
+    ],
+    [
+      "wazuh",
+      "2501"
+    ],
+    [
+      "wazuh",
+      "30305"
+    ],
+    [
+      "wazuh",
+      "30306"
+    ],
+    [
+      "wazuh",
+      "31101"
+    ],
+    [
+      "wazuh",
+      "31104"
+    ],
+    [
+      "wazuh",
+      "31122"
+    ],
+    [
+      "wazuh",
+      "31151"
+    ],
+    [
+      "wazuh",
+      "31509"
+    ],
+    [
+      "wazuh",
+      "31510"
+    ],
+    [
+      "wazuh",
+      "31516"
+    ],
+    [
+      "wazuh",
+      "52507"
+    ],
+    [
+      "wazuh",
+      "5304"
+    ],
+    [
+      "wazuh",
+      "5402"
+    ],
+    [
+      "wazuh",
+      "5403"
+    ],
+    [
+      "wazuh",
+      "5501"
+    ],
+    [
+      "wazuh",
+      "5502"
+    ],
+    [
+      "wazuh",
+      "5503"
+    ],
+    [
+      "wazuh",
+      "5551"
+    ],
+    [
+      "wazuh",
+      "5706"
+    ],
+    [
+      "wazuh",
+      "5715"
+    ],
+    [
+      "wazuh",
+      "80730"
+    ],
+    [
+      "wazuh",
+      "9701"
+    ],
+    [
+      "wazuh",
+      "9705"
+    ],
+    [
+      "wazuh",
+      "9751"
+    ]
+  ]
 }
