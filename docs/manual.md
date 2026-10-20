@@ -140,7 +140,9 @@ start. Keep the whole archive for later retrains, and trim old data only when
 `meerkat.toml` in the working directory and `MEERKAT_*` variables fill flags
 that were not passed. Flags override variables, and variables override the file. The keys
 are `environment`, `input`, `inventory`, `attack_mappings`, `model` and
-`runs_dir`. `demo` ignores both.
+`runs_dir`. `demo` ignores both. When alerts land in a new folder each day, set
+`environment` and `inventory` here, because their defaults follow the input
+folder's name.
 
 ### A local ATT&CK mapping
 
