@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- `check` samples evenly across each alert file instead of reading only its
+  first lines.
 - A missing inventory now says how to point at one: `--inventory FILE` or
   `inventory` in `meerkat.toml`.
 - A malformed alert field, an empty alert file or a malformed inventory now

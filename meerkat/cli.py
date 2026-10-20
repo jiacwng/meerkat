@@ -14,6 +14,7 @@ import hashlib
 import html
 import io
 import json
+import math
 import os
 import pickle
 import re
@@ -2067,10 +2068,13 @@ def _sample_alerts(
     per_file = max(1, args.sample // len(alert_files))
     rows = []
     for entry in alert_files:
+        with entry[0].open("rb") as handle:
+            lines = sum(1 for _ in handle)
+        every = max(1, math.ceil(lines / per_file))
         rows.extend(islice(
             iter_normalized_rows(
                 args.input, None, company, args.inventory, files=[entry],
-                skipped=skipped,
+                skipped=skipped, every=every,
             ),
             per_file,
         ))

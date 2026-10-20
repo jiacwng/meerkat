@@ -980,6 +980,24 @@ class SkippedRecordTests(unittest.TestCase):
         self.assertIn("line121", squashed(stderr.getvalue()))
 
 
+class CheckSampleTests(unittest.TestCase):
+    def test_the_sample_spreads_over_the_whole_file(self):
+        directory = client_directory(days=3, per_day=40)
+        company = "acme"
+        frame = cli._sample_alerts(
+            argparse.Namespace(
+                input=directory, inventory=directory / "inventory" / "acme.json",
+                sample=12,
+            ),
+            company,
+            cli._resolve_files(directory, company, None, None),
+            cli.with_local_mappings(None),
+            [],
+        )
+        self.assertLessEqual(len(frame), 12)
+        self.assertGreater(frame["source_position"].max(), 100)
+
+
 class InventoryScaffoldTests(unittest.TestCase):
     def scaffold(self, records: list[dict], bom: bool = False) -> dict:
         directory = temporary_directory()

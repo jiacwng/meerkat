@@ -688,6 +688,7 @@ def iter_normalized_rows(
     aminer_file: Path | None = None,
     files: Sequence[tuple[Path, str]] | None = None,
     skipped: list[str] | None = None,
+    every: int = 1,
 ) -> Iterator[dict]:
     resolved = (
         list(files) if files is not None
@@ -717,6 +718,8 @@ def iter_normalized_rows(
         bad: list[str] = []
         with path.open(encoding="utf-8-sig", errors="replace") as fh:
             for position, line in enumerate(fh):
+                if position % every:
+                    continue
                 lines += 1
                 try:
                     record = read_alert_record(line, path, position)
