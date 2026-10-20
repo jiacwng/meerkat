@@ -74,6 +74,8 @@ recognised file is read, including a native Suricata `eve.json` beside a Wazuh
 export. `--wazuh-file` and `--aminer-file` read only the named file. Wazuh and
 Suricata are enough to run; AMiner improves coverage. A Suricata alert
 forwarded by Wazuh and present in `eve.json` too is counted once.
+A file may hold up to 1% bad lines, such as invalid JSON or a missing field. They
+are skipped and counted. A file with more stops the run and names the first one.
 
 ### The inventory
 

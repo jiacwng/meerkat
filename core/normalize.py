@@ -526,10 +526,12 @@ class AlertFileError(Exception):
     pass
 
 
+BAD_RECORD_LIMIT = 0.01
+
+
 def read_alert_record(line: str, path: Path, position: int) -> dict | None:
     # a malformed record names its file and line. Returning None means "skip a
-    # blank"; anything else is fatal, because silently dropping records would
-    # change the answer without saying so.
+    # blank"; the caller counts the rest against the file's bad record limit.
     if not line.strip():
         return None
     try:
@@ -685,6 +687,7 @@ def iter_normalized_rows(
     wazuh_file: Path | None = None,
     aminer_file: Path | None = None,
     files: Sequence[tuple[Path, str]] | None = None,
+    skipped: list[str] | None = None,
 ) -> Iterator[dict]:
     resolved = (
         list(files) if files is not None
@@ -710,33 +713,47 @@ def iter_normalized_rows(
     for path, family in resolved:
         offset = offsets.get(path, 0)
         mine: Counter[tuple] = Counter()
+        lines = 0
+        bad: list[str] = []
         with path.open(encoding="utf-8-sig", errors="replace") as fh:
             for position, line in enumerate(fh):
-                record = read_alert_record(line, path, position)
-                if record is None:
-                    continue
-                alert = read_family_record(record, family)
-                if alert is None:
-                    continue
-                parsed, detector = alert
-                if watch_duplicates and detector == "suricata":
-                    fingerprint = suricata_fingerprint(parsed)
-                    if seen[fingerprint] > mine[fingerprint]:
-                        mine[fingerprint] += 1
-                        continue
-                    mine[fingerprint] += 1
+                lines += 1
                 try:
-                    row = normalize_record(parsed, detector, windows, inventory)
-                except (KeyError, TypeError, ValueError) as error:
-                    raise AlertFileError(
-                        f"{path.name} line {position + 1}: the {detector} alert "
-                        f"is missing a field or has a bad value ({error!r})"
-                    ) from error
+                    record = read_alert_record(line, path, position)
+                    if record is None:
+                        continue
+                    alert = read_family_record(record, family)
+                    if alert is None:
+                        continue
+                    parsed, detector = alert
+                    if watch_duplicates and detector == "suricata":
+                        fingerprint = suricata_fingerprint(parsed)
+                        if seen[fingerprint] > mine[fingerprint]:
+                            mine[fingerprint] += 1
+                            continue
+                        mine[fingerprint] += 1
+                    try:
+                        row = normalize_record(parsed, detector, windows, inventory)
+                    except (KeyError, TypeError, ValueError) as error:
+                        raise AlertFileError(
+                            f"{path.name} line {position + 1}: the {detector} alert "
+                            f"is missing a field or has a bad value ({error!r})"
+                        ) from error
+                except AlertFileError as error:
+                    bad.append(str(error))
+                    continue
                 row["source_file"] = path.name
                 row["source_position"] = position
                 if event_labels is not None:
                     row["event_label"] = event_labels[offset + position]
                 yield row
+        if len(bad) > BAD_RECORD_LIMIT * lines:
+            raise AlertFileError(
+                f"{path.name} has {len(bad)} bad records in {lines} lines, over "
+                f"the {BAD_RECORD_LIMIT:.0%} limit. First: {bad[0]}"
+            )
+        if skipped is not None:
+            skipped.extend(bad)
         seen += mine
 
 
@@ -748,13 +765,14 @@ def normalize_scenario(
     event_csv_dir: Path | None = None,
     wazuh_file: Path | None = None,
     aminer_file: Path | None = None,
+    skipped: list[str] | None = None,
 ) -> pd.DataFrame:
     columns = COLUMNS + ["event_label"] if event_csv_dir is not None else COLUMNS
     chunks: list[pd.DataFrame] = []
     batch: list[dict] = []
     for row in iter_normalized_rows(
         raw_dir, labels_path, scenario, inventory_path, event_csv_dir,
-        wazuh_file, aminer_file,
+        wazuh_file, aminer_file, skipped=skipped,
     ):
         batch.append(row)
         if len(batch) >= CHUNK_ROWS:
