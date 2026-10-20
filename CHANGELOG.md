@@ -24,6 +24,10 @@
 - `check` and `triage` skip up to 1% bad records per alert file and report how many
   they skipped and the first one. A file over the limit still stops the run.
   `run.json` records `skipped_records` and `skipped_first`.
+- Alert files beside `<environment>_wazuh.json` are read too, except other
+  environments' `*_wazuh.json` and `*_aminer.json`. `meerkat inventory` names a
+  machine by `agent.name` when the alert has no hostname and no other address
+  uses that name.
 
 ### Added
 

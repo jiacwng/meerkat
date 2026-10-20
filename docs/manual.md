@@ -68,8 +68,9 @@ One run covers complete days; score a batch after the day closes.
 ### Alert files
 
 Meerkat looks in the input directory (default `./alerts`) for
-`<environment>_wazuh.json` and `<environment>_aminer.json`, then falls back to
-reading each `.json` file's opening lines to recognise its format. Every
+`<environment>_wazuh.json` and `<environment>_aminer.json`, and also reads
+every other `.json` file whose opening lines look like an alert export, except
+other environments' `*_wazuh.json` and `*_aminer.json`. Every
 recognised file is read, including a native Suricata `eve.json` beside a Wazuh
 export. `--wazuh-file` and `--aminer-file` read only the named file. Wazuh and
 Suricata are enough to run; AMiner improves coverage. A Suricata alert

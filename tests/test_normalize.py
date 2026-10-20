@@ -747,6 +747,15 @@ class ConventionFirst(unittest.TestCase):
         )
 
 
+    def test_other_files_in_the_directory_join_the_named_ones(self):
+        directory = raw_directory()
+        named = write_records(directory / "acme_wazuh.json", wazuh_record())
+        extra = write_records(directory / "alerts-2026-10-19.json", wazuh_record())
+        write_records(directory / "othercorp_wazuh.json", wazuh_record())
+        files = resolve_alert_files(directory, "acme")
+        self.assertEqual(files, [(named, WAZUH_FAMILY), (extra, WAZUH_FAMILY)])
+
+
 class SniffedDiscovery(unittest.TestCase):
     def test_a_wazuh_export_called_alerts_json_is_found(self):
         # alerts.json is what wazuh itself writes, and needing a flag for the

@@ -591,11 +591,11 @@ def resolve_alert_files(
     ]
 
     if named:
-        covered = {family for _, family in named}
         chosen = {path for path, _ in named}
         return sort_alert_files(named + [
             pair for pair in sniffed
-            if pair[1] not in covered and pair[0] not in chosen
+            if pair[0] not in chosen
+            and not pair[0].name.endswith(("_wazuh.json", "_aminer.json"))
         ])
 
     # an explicit path that does not exist is a typo worth reporting, so the family
