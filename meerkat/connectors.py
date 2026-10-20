@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 import os
 import ssl
 import tempfile
+import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,7 +24,9 @@ class ConnectorError(Exception):
 
 
 MAX_RESPONSE_BYTES = 256 * 1024 * 1024
-MAX_RECORDS = 2_000_000
+RETRY_STATUSES = (429, 503)
+RETRIES = 3
+MAX_RETRY_WAIT = 60
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -49,6 +54,7 @@ class IndexerConfig:
     password: str | None = None
     token: str | None = None
     verify_tls: bool = True
+    ca_file: str | None = None
     page_size: int = 500
     keep_alive: str = "1m"
     timeout: float = 30.0
@@ -72,9 +78,12 @@ def day_window(day: str) -> Window:
     return Window(start.timestamp(), (start + timedelta(days=1)).timestamp())
 
 
-def read_window_file(path: Path, window: Window) -> list[dict]:
-    records = []
-    with path.open(encoding="utf-8-sig", errors="replace") as handle:
+def read_window_file(path: Path, window: Window) -> Iterator[dict]:
+    if path.suffix == ".gz":
+        handle = gzip.open(path, "rt", encoding="utf-8-sig", errors="replace")
+    else:
+        handle = path.open(encoding="utf-8-sig", errors="replace")
+    with handle:
         for position, line in enumerate(handle):
             record = read_alert_record(line, path, position)
             if record is None:
@@ -84,22 +93,27 @@ def read_window_file(path: Path, window: Window) -> list[dict]:
             except (KeyError, ValueError, TypeError):
                 continue
             if window.contains(moment):
-                records.append(record)
-    return records
+                yield record
 
 
-def write_records(path: Path, records: list[dict]) -> None:
+def write_records(path: Path, records: Iterable[dict]) -> int:
     # a pull cut short must not leave a half file that triage reads as the day
     descriptor, partial = tempfile.mkstemp(dir=path.parent, suffix=".partial")
+    count = 0
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             for record in records:
                 handle.write(json.dumps(record))
                 handle.write("\n")
-        os.replace(partial, path)
+                count += 1
+        if count:
+            os.replace(partial, path)
+        else:
+            os.unlink(partial)
     except BaseException:
         os.unlink(partial)
         raise
+    return count
 
 
 def _http_send(request, context, timeout) -> bytes:
@@ -108,6 +122,14 @@ def _http_send(request, context, timeout) -> bytes:
     )
     with opener.open(request, timeout=timeout) as response:
         return response.read(MAX_RESPONSE_BYTES + 1)
+
+
+def _retry_wait(error: urllib.error.HTTPError, attempt: int) -> float:
+    try:
+        wait = float(error.headers.get("Retry-After", ""))
+    except (TypeError, ValueError, AttributeError):
+        wait = 2.0**attempt
+    return min(max(wait, 0.0), MAX_RETRY_WAIT)
 
 
 def _send(config: IndexerConfig, method: str, path: str, body: dict | None) -> dict:
@@ -120,21 +142,26 @@ def _send(config: IndexerConfig, method: str, path: str, body: dict | None) -> d
     elif config.user is not None:
         raw = f"{config.user}:{config.password or ''}".encode()
         request.add_header("Authorization", "Basic " + base64.b64encode(raw).decode())
-    context = ssl.create_default_context()
+    context = ssl.create_default_context(cafile=config.ca_file)
     if not config.verify_tls:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-    try:
-        payload = _http_send(request, context, config.timeout)
-    except urllib.error.HTTPError as error:
-        if error.code == 401:
-            raise ConnectorError("the indexer rejected the credentials") from error
-        raise ConnectorError(f"the indexer returned HTTP {error.code}") from error
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
-        reason = getattr(error, "reason", error)
-        raise ConnectorError(
-            f"cannot reach the indexer at {config.host}:{config.port}: {reason}"
-        ) from error
+    for attempt in range(RETRIES + 1):
+        try:
+            payload = _http_send(request, context, config.timeout)
+            break
+        except urllib.error.HTTPError as error:
+            if error.code in RETRY_STATUSES and attempt < RETRIES:
+                time.sleep(_retry_wait(error, attempt))
+                continue
+            if error.code == 401:
+                raise ConnectorError("the indexer rejected the credentials") from error
+            raise ConnectorError(f"the indexer returned HTTP {error.code}") from error
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            reason = getattr(error, "reason", error)
+            raise ConnectorError(
+                f"cannot reach the indexer at {config.host}:{config.port}: {reason}"
+            ) from error
     if len(payload) > MAX_RESPONSE_BYTES:
         raise ConnectorError(
             f"the indexer response exceeds {MAX_RESPONSE_BYTES // (1024 * 1024)} MB"
@@ -166,7 +193,7 @@ def _close_pit(config: IndexerConfig, pit_id: str) -> None:
         pass
 
 
-def query_window(config: IndexerConfig, window: Window) -> list[dict]:
+def query_window(config: IndexerConfig, window: Window) -> Iterator[dict]:
     pit_id = _open_pit(config)
     query = {
         "range": {
@@ -178,7 +205,6 @@ def query_window(config: IndexerConfig, window: Window) -> list[dict]:
     }
     sort = [{"@timestamp": "asc"}, {"_id": "asc"}]
     path = "/_search" if pit_id else f"/{config.index}/_search"
-    records: list[dict] = []
     after = None
     try:
         while True:
@@ -192,18 +218,14 @@ def query_window(config: IndexerConfig, window: Window) -> list[dict]:
             if not hits:
                 break
             try:
-                records.extend(hit["_source"] for hit in hits)
+                sources = [hit["_source"] for hit in hits]
                 after = hits[-1]["sort"]
             except KeyError as error:
                 raise ConnectorError(
                     "the indexer returned a hit without _source or sort"
                 ) from error
-            if len(records) > MAX_RECORDS:
-                raise ConnectorError(
-                    f"the window holds more than {MAX_RECORDS} alerts; narrow it"
-                )
+            yield from sources
             pit_id = result.get("pit_id", pit_id)
     finally:
         if pit_id:
             _close_pit(config, pit_id)
-    return records

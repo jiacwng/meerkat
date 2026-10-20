@@ -22,6 +22,7 @@ import sys
 import tomllib
 import warnings
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import cached_property
@@ -2882,6 +2883,9 @@ def _indexer_config(args):
                 "[red]verify_tls under \\[pull] must be true or false[/red]  "
                 f"got {safe(repr(verify))}"
             )
+    ca_file = args.ca_file or section.get("ca_file")
+    if ca_file is not None and not Path(str(ca_file)).is_file():
+        _fail(f"[red]ca_file is not a file:[/red] {safe(ca_file)}")
     port_raw = pick(None, "MEERKAT_INDEXER_PORT", "port", 9200)
     try:
         port = int(port_raw)
@@ -2895,6 +2899,7 @@ def _indexer_config(args):
         password=secret("MEERKAT_INDEXER_PASSWORD", "password"),
         token=secret("MEERKAT_INDEXER_TOKEN", "token"),
         verify_tls=verify,
+        ca_file=None if ca_file is None else str(ca_file),
     )
 
 
@@ -2915,7 +2920,7 @@ def cmd_pull(args) -> None:
                 "existing file; move or delete it first"
             )
 
-    eve_records: list[dict] = []
+    eve_records: Iterable[dict] = ()
     if args.source == "file":
         if not args.alerts_file:
             _fail(
@@ -2930,27 +2935,25 @@ def cmd_pull(args) -> None:
         if not config.verify_tls:
             errors.print("[yellow]TLS verification disabled[/yellow]  credentials "
                          "are sent over an unverified channel")
-        try:
-            records = connectors.query_window(config, window)
-        except connectors.ConnectorError as error:
-            _fail(f"[red]{safe(error)}[/red]")
+        records = connectors.query_window(config, window)
 
-    total = len(records) + len(eve_records)
+    try:
+        wazuh_count = connectors.write_records(wazuh_out, records)
+        eve_count = connectors.write_records(eve_out, eve_records) if args.eve_file else 0
+    except connectors.ConnectorError as error:
+        _fail(f"[red]{safe(error)}[/red]")
+    total = wazuh_count + eve_count
     if total == 0:
         errors.print("[yellow]no alerts in the window[/yellow]  nothing written")
-        return
-
-    connectors.write_records(wazuh_out, records)
-    if eve_records:
-        connectors.write_records(eve_out, eve_records)
+        raise SystemExit(EXIT_ERROR)
 
     start_iso = datetime.fromtimestamp(window.start, UTC).isoformat()
     end_iso = datetime.fromtimestamp(window.end, UTC).isoformat()
     console.print(f"pulled {total} alerts for {safe(company)} ({args.source})")
     console.print(f"  window {start_iso} .. {end_iso}")
     console.print(f"  wrote {wazuh_out}")
-    if eve_records:
-        console.print(f"  wrote {eve_out}  ({len(eve_records)} suricata)")
+    if eve_count:
+        console.print(f"  wrote {eve_out}  ({eve_count} suricata)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -3035,9 +3038,15 @@ def build_parser() -> argparse.ArgumentParser:
     pull.add_argument("--user", default=None,
                       help="indexer username, or MEERKAT_INDEXER_USER; the password "
                            "or token comes from MEERKAT_INDEXER_PASSWORD, "
-                           "MEERKAT_INDEXER_TOKEN, or the [pull] table in meerkat.toml")
+                           "MEERKAT_INDEXER_TOKEN (sent as the Authorization "
+                           "header exactly as given, so include the scheme, "
+                           "for example 'Bearer abc'), or the [pull] table "
+                           "in meerkat.toml")
     pull.add_argument("--insecure", action="store_true",
                       help="skip TLS verification, for a self-signed indexer")
+    pull.add_argument("--ca-file", type=Path, default=None,
+                      help="certificate authority file that signed the indexer, or "
+                           "ca_file under [pull]")
     pull.set_defaults(func=cmd_pull)
 
     queue = sub.add_parser("queue", help="reopen a saved run's queue")

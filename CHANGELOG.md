@@ -28,12 +28,20 @@
   environments' `*_wazuh.json` and `*_aminer.json`. `meerkat inventory` names a
   machine by `agent.name` when the alert has no hostname and no other address
   uses that name.
+- `pull` exits with status 1 when the window holds no alerts.
+- `pull` writes each page to disk as it arrives, so a window can hold more than
+  2 million alerts.
+- `pull` retries an indexer answer of HTTP 429 or 503 up to 3 times, waiting for
+  `Retry-After`, or 1, 2 and 4 seconds.
+- `pull --source file` reads `.json.gz` files.
 
 ### Added
 
 - `check` and `triage` warn when more than 20% of alerts come from rules the model
   never saw, and report the share in `check --json` and `run.json`. `check --model
   PATH` names the model to compare with.
+- `pull --ca-file FILE` and `ca_file` under `[pull]` trust a company's own
+  certificate authority.
 
 ## 1.2.0 - 2026-10-07
 
