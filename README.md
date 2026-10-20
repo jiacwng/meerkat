@@ -89,14 +89,22 @@ One pass from scoring to review and export:
 
 ## Usage
 
+Alerts land in a new folder each day, so set the environment and the inventory
+once in `meerkat.toml`:
+
+```toml
+environment = "acme"
+inventory = "inventory/acme.json"
+```
+
 ```bash
-meerkat inventory        # asset inventory from your alerts, once
-meerkat check            # what triage will see
+meerkat inventory --input alerts/2026-10-05 --out inventory/acme.json  # once
+meerkat check --input alerts/2026-10-05      # what triage will see
 meerkat pull --day 2026-10-06 --input alerts/2026-10-06  # each morning, yesterday
-meerkat triage --input alerts/2026-10-06                 # score the day into a run
-meerkat browse           # work the queue, record decisions
-meerkat export decisions # the review pass as a grid
-meerkat retrain --incidents tickets.csv  # refit on your own history
+meerkat triage --input alerts/2026-10-06     # score the day into a run
+meerkat browse                               # work the queue, record decisions
+meerkat export decisions                     # the review pass as a grid
+meerkat retrain --incidents tickets.csv      # refit on your own history
 ```
 
 `inspect` opens any family, session or alert with its evidence and ATT&CK

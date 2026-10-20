@@ -1679,5 +1679,22 @@ class TestQueueRendering(unittest.TestCase):
         capture(lambda: cli.console.print(heading))
 
 
+class MissingInventoryTests(unittest.TestCase):
+    def test_the_error_names_both_ways_to_point_at_an_inventory(self):
+        reported = io.StringIO()
+        with (
+            contextlib.redirect_stderr(reported),
+            self.assertRaises(SystemExit) as caught,
+        ):
+            cli._open_company(argparse.Namespace(
+                input=Path(tempfile.mkdtemp()), company="acme", inventory=None,
+            ))
+        self.assertEqual(caught.exception.code, EXIT_ERROR)
+        text = " ".join(reported.getvalue().split())
+        self.assertIn("inventory not found", text)
+        self.assertIn("--inventory FILE", text)
+        self.assertIn("meerkat.toml", text)
+
+
 if __name__ == "__main__":
     unittest.main()

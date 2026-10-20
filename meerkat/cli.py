@@ -1210,7 +1210,12 @@ def _open_company(args) -> str:
     company = resolve_company(args)
     if args.inventory is None:
         args.inventory = args.input / "inventory" / f"{company}.json"
-    _require(args.inventory, "inventory")
+    if not args.inventory.exists():
+        _fail(
+            f"[red]inventory not found:[/red] {safe(args.inventory)}  run "
+            "`meerkat inventory` first, then pass --inventory FILE or set "
+            "inventory in meerkat.toml"
+        )
     return company
 
 
