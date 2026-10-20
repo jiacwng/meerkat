@@ -181,6 +181,43 @@ class TestCliRobustness(unittest.TestCase):
                     )
                 self.assertIn(f"{directory.name}_wazuh.json line 2", str(caught.exception))
 
+    def day_with_bad_lines(self, total: int, bad_positions: set[int]):
+        good = {
+            "timestamp": "2022-01-21T06:33:00+00:00",
+            "rule": {"id": "5710", "description": "sshd", "level": 5},
+            "agent": {"ip": "10.0.0.1", "name": "h1"},
+        }
+        lines = [
+            json.dumps({**good, "timestamp": "yesterday"}) if i in bad_positions
+            else json.dumps(good)
+            for i in range(total)
+        ]
+        return self.client("\n".join(lines), self.GOOD_INVENTORY)
+
+    def test_one_bad_record_in_a_hundred_is_skipped_and_reported(self):
+        from core.normalize import normalize_scenario
+        directory = self.day_with_bad_lines(100, {41})
+        skipped: list[str] = []
+        frame = normalize_scenario(
+            directory, None, directory.name,
+            directory / "inventory" / f"{directory.name}.json", skipped=skipped,
+        )
+        self.assertEqual(len(frame), 99)
+        self.assertEqual(len(skipped), 1)
+        self.assertIn(f"{directory.name}_wazuh.json line 42", skipped[0])
+
+    def test_two_bad_records_in_a_hundred_stop_the_day(self):
+        from core.normalize import AlertFileError, normalize_scenario
+        directory = self.day_with_bad_lines(100, {41, 60})
+        with self.assertRaises(AlertFileError) as caught:
+            normalize_scenario(
+                directory, None, directory.name,
+                directory / "inventory" / f"{directory.name}.json",
+            )
+        message = str(caught.exception)
+        self.assertIn("2 bad records in 100 lines, over the 1% limit", message)
+        self.assertIn("line 42", message)
+
 
 class TestBoundaryValues(unittest.TestCase):
     # each of these was accepted silently and produced a wrong or unreachable

@@ -19,6 +19,12 @@
   `export decisions`.
 - The alert table compares the target user field.
 
+### Changed
+
+- `check` and `triage` skip up to 1% bad records per alert file and report how many
+  they skipped and the first one. A file over the limit still stops the run.
+  `run.json` records `skipped_records` and `skipped_first`.
+
 ### Added
 
 - `check` and `triage` warn when more than 20% of alerts come from rules the model

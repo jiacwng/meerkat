@@ -947,12 +947,37 @@ class UnseenRuleTests(unittest.TestCase):
     def test_triage_warns_and_records_the_share_in_the_run(self):
         triaged = triage_client()
         self.assertEqual(triaged.run.meta["unseen_rule_share"], 0.5)
+        self.assertEqual(triaged.run.meta["skipped_records"], 0)
         self.assertIn("neversaw", squashed(triaged.printed))
 
     def test_the_sidecar_lists_every_rule_the_model_was_fitted_on(self):
         record = json.loads(provenance_path(SHIPPED_BUNDLE).read_text(encoding="utf-8"))
         self.assertIn(["wazuh", "31101"], record["rules"])
         self.assertNotIn(["wazuh", "5710"], record["rules"])
+
+
+class SkippedRecordTests(unittest.TestCase):
+    def test_check_skips_one_bad_record_in_a_long_file_and_says_so(self):
+        directory = client_directory(days=3, per_day=40)
+        with (directory / "acme_wazuh.json").open("a", encoding="utf-8") as handle:
+            handle.write("{oops\n")
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+            contextlib.suppress(SystemExit),
+        ):
+            cli.cmd_check(argparse.Namespace(
+                model=Path("no-model.skops"), company="acme", input=directory,
+                inventory=directory / "inventory" / "acme.json",
+                sample=500, wazuh_file=None, aminer_file=None, json=True,
+                attack_mappings=None,
+            ))
+        report = json.loads(stdout.getvalue())
+        self.assertEqual(report["skipped_records"], 1)
+        self.assertEqual(report["sampled"], 120)
+        self.assertIn("skipped1badrecords", squashed(stderr.getvalue()))
+        self.assertIn("line121", squashed(stderr.getvalue()))
 
 
 class InventoryScaffoldTests(unittest.TestCase):

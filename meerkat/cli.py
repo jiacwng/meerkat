@@ -1240,6 +1240,7 @@ def _score_company(
     wazuh_file: Path | None,
     aminer_file: Path | None,
     attack_mappings: dict,
+    skipped: list[str] | None = None,
 ):
     from core.scenario_eval import score_sessions
 
@@ -1247,7 +1248,7 @@ def _score_company(
     for message in _role_problems(inventory, inventory_path.name).values():
         console.print(message)
     frame = _normalize_or_exit(
-        input_dir, company, inventory_path, wazuh_file, aminer_file
+        input_dir, company, inventory_path, wazuh_file, aminer_file, skipped
     )
     sessions = build_sessions(frame, company, inventory)
     alerts = enrich_alerts(frame, attack_mappings)
@@ -1261,14 +1262,25 @@ def _normalize_or_exit(
     inventory_path: Path,
     wazuh_file: Path | None,
     aminer_file: Path | None,
+    skipped: list[str] | None = None,
 ) -> pd.DataFrame:
+    skipped = [] if skipped is None else skipped
     frame = normalize_scenario(
         input_dir, None, company, inventory_path,
-        wazuh_file=wazuh_file, aminer_file=aminer_file,
+        wazuh_file=wazuh_file, aminer_file=aminer_file, skipped=skipped,
     )
+    if skipped:
+        console.print(_skipped_records_message(skipped))
     if frame.empty:
         _fail("[red]no alerts parsed[/red]  the files resolved but held no rows")
     return frame
+
+
+def _skipped_records_message(skipped: list[str]) -> str:
+    return (
+        f"[yellow]skipped {len(skipped)} bad records[/yellow]  "
+        f"first: {safe(skipped[0])}"
+    )
 
 
 def _file_record(path: Path | None) -> dict | None:
@@ -1309,9 +1321,10 @@ def cmd_triage(args) -> None:
             "the queue"
         )
     console.print(f"scoring {company} with {args.model}")
+    skipped: list[str] = []
     scored_sessions, families, alerts = _score_company(
         bundle, args.input, company, args.inventory,
-        args.wazuh_file, args.aminer_file, mappings,
+        args.wazuh_file, args.aminer_file, mappings, skipped,
     )
     families = decorate_families(families, alerts, args.budget)
     unseen = unseen_rule_share(bundle.schema, scored_sessions["pair_counts"])
@@ -1328,6 +1341,8 @@ def cmd_triage(args) -> None:
         "sessions": int(len(scored_sessions)),
         "alerts": int(len(alerts)),
         "unseen_rule_share": round(unseen, 4),
+        "skipped_records": len(skipped),
+        "skipped_first": skipped[0] if skipped else "",
         "attack_mappings": _file_record(args.attack_mappings),
     }
     directory = save_run(
@@ -2021,13 +2036,16 @@ def _unmapped_rules(frame: pd.DataFrame) -> list[dict]:
     ]
 
 
-def _sample_alerts(args, company: str, alert_files, mappings) -> pd.DataFrame:
+def _sample_alerts(
+    args, company: str, alert_files, mappings, skipped: list[str]
+) -> pd.DataFrame:
     per_file = max(1, args.sample // len(alert_files))
     rows = []
     for entry in alert_files:
         rows.extend(islice(
             iter_normalized_rows(
-                args.input, None, company, args.inventory, files=[entry]
+                args.input, None, company, args.inventory, files=[entry],
+                skipped=skipped,
             ),
             per_file,
         ))
@@ -2155,7 +2173,8 @@ def cmd_check(args) -> None:
     mappings = _load_or_exit(
         with_local_mappings, args.attack_mappings, "the local ATT&CK mapping"
     )
-    frame = _sample_alerts(args, company, alert_files, mappings)
+    skipped: list[str] = []
+    frame = _sample_alerts(args, company, alert_files, mappings, skipped)
 
     report: dict = {
         "environment": company,
@@ -2192,6 +2211,9 @@ def cmd_check(args) -> None:
         report["outside_inventory_share"] = round(len(unmatched) / len(frame), 3)
 
     findings = _check_findings(inventory, frame, args.inventory.name, report)
+    if skipped:
+        report["skipped_records"] = len(skipped)
+        findings.append((None, _skipped_records_message(skipped)))
     known = _known_rules(args.model)
     if known is not None:
         pairs = zip(frame["detector_source"].astype(str), frame["rule_id"].astype(str))
