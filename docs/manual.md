@@ -199,10 +199,11 @@ a local `alerts.json`. The window is one UTC day with `--day`, or an explicit
 Forwarded Suricata alerts arrive inside the Wazuh file already; a native
 `eve.json` is read with `--eve-file` and written as `<environment>_eve.json`.
 Pull stops when the target file already exists.
+`--alerts-file` and `--eve-file` also read `.gz` files. Pull exits 1 when the window holds no alerts.
 
     meerkat pull [--environment NAME] [--input DIR] [--source indexer|file]
                  [--day YYYY-MM-DD | --from TIME --to TIME]
-                 [--host H] [--user U] [--insecure]
+                 [--host H] [--user U] [--insecure] [--ca-file FILE]
                  [--alerts-file FILE] [--eve-file FILE]
 
 | option | description |
@@ -213,6 +214,7 @@ Pull stops when the target file already exists.
 | `--host` | the indexer host; port 9200 and index `wazuh-alerts-*` come from env or config |
 | `--user U` | indexer username |
 | `--insecure` | skip TLS verification, for a self-signed indexer |
+| `--ca-file FILE` | the certificate authority file that signed the indexer; also `ca_file` under `[pull]` |
 | `--alerts-file`, `--eve-file` | file mode: the sources to read |
 | `--input DIR` | where the files are written, default `./alerts` |
 
@@ -226,14 +228,16 @@ host = "wazuh.example"
 user = "admin"
 password = "..."
 verify_tls = true
+ca_file = "/etc/ssl/wazuh-ca.pem"
 ```
 
 `meerkat.toml` holds a secret, so it is gitignored; keep it out of version
 control, or store it at `~/.config/meerkat/config.toml`. The non-secret keys
 also work as `MEERKAT_INDEXER_HOST`, `_PORT`, `_INDEX` and `_USER` environment
 variables; a flag wins, then the environment variable, then the config. A
-bearer or API token goes in `MEERKAT_INDEXER_TOKEN` for a setup that
-authenticates with a token. Recorded output:
+token goes in `MEERKAT_INDEXER_TOKEN` and is sent as the Authorization header
+exactly as written, so include the scheme, for example `Bearer abc`. Recorded
+output:
 
 ```text
 pulled 8210 alerts for acme (indexer)

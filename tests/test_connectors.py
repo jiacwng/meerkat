@@ -2,6 +2,7 @@
 # indexer's HTTP layer mocked so the suite needs no live Wazuh
 
 import functools
+import gzip
 import json
 import tempfile
 import unittest
@@ -62,7 +63,7 @@ class FileModeTests(unittest.TestCase):
             wazuh("2022-01-21T12:00:00+0000"),
             wazuh("2022-01-22T00:00:00+0000"),
         ])
-        kept = connectors.read_window_file(source, self.window)
+        kept = list(connectors.read_window_file(source, self.window))
         self.assertEqual(len(kept), 2)
         self.assertEqual(
             [row["timestamp"] for row in kept],
@@ -76,12 +77,12 @@ class FileModeTests(unittest.TestCase):
             handle.write("\n")
             handle.write("{not json\n")
         with self.assertRaises(AlertFileError):
-            connectors.read_window_file(source, self.window)
+            list(connectors.read_window_file(source, self.window))
 
     def test_a_record_without_a_timestamp_is_dropped(self):
         source = self.dir / "source.json"
         write_lines(source, [{"rule": {"level": 5}, "agent": {"name": "h"}}])
-        self.assertEqual(connectors.read_window_file(source, self.window), [])
+        self.assertEqual(list(connectors.read_window_file(source, self.window)), [])
 
     def test_write_records_round_trips(self):
         out = self.dir / "out.json"
@@ -89,6 +90,24 @@ class FileModeTests(unittest.TestCase):
         connectors.write_records(out, rows)
         back = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(back, rows)
+
+    def test_a_gzipped_alerts_file_is_read(self):
+        source = self.dir / "alerts.json.gz"
+        with gzip.open(source, "wt", encoding="utf-8") as handle:
+            handle.write(json.dumps(wazuh("2022-01-21T01:00:00+0000")) + "\n")
+            handle.write(json.dumps(wazuh("2022-01-23T01:00:00+0000")) + "\n")
+        kept = list(connectors.read_window_file(source, self.window))
+        self.assertEqual([row["timestamp"] for row in kept], ["2022-01-21T01:00:00+0000"])
+
+    def test_writing_nothing_leaves_no_file_and_counts_zero(self):
+        out = self.dir / "out.json"
+        self.assertEqual(connectors.write_records(out, iter(())), 0)
+        self.assertEqual(list(self.dir.iterdir()), [])
+
+    def test_write_records_returns_the_count(self):
+        out = self.dir / "out.json"
+        rows = (wazuh(f"2022-01-21T0{n}:00:00+0000") for n in range(3))
+        self.assertEqual(connectors.write_records(out, rows), 3)
 
     def test_a_failed_write_leaves_no_file(self):
         out = self.dir / "out.json"
@@ -135,7 +154,7 @@ class IndexerPagingTests(unittest.TestCase):
         ]
         stub = StubTransport(pages)
         with mock.patch.object(connectors, "_send", stub):
-            records = connectors.query_window(self.config, self.window)
+            records = list(connectors.query_window(self.config, self.window))
         self.assertEqual(len(records), 3)
         self.assertTrue(all("rule" in row for row in records))
         searches = [call for call in stub.calls if call[1] == "/_search"]
@@ -147,7 +166,7 @@ class IndexerPagingTests(unittest.TestCase):
         pages = [[hit("2022-01-21T01:00:00Z", "a")], []]
         stub = StubTransport(pages, pit_id=None)
         with mock.patch.object(connectors, "_send", stub):
-            records = connectors.query_window(self.config, self.window)
+            records = list(connectors.query_window(self.config, self.window))
         self.assertEqual(len(records), 1)
         self.assertTrue(any(call[1] == "/wazuh-alerts-*/_search" for call in stub.calls))
         self.assertFalse(any(call[0] == "DELETE" for call in stub.calls))
@@ -155,13 +174,13 @@ class IndexerPagingTests(unittest.TestCase):
     def test_empty_result_returns_no_records(self):
         stub = StubTransport([[]])
         with mock.patch.object(connectors, "_send", stub):
-            self.assertEqual(connectors.query_window(self.config, self.window), [])
+            self.assertEqual(list(connectors.query_window(self.config, self.window)), [])
 
     def test_a_hit_without_source_is_a_clean_error(self):
         stub = StubTransport([[{"sort": ["2022-01-21T01:00:00Z", "a"]}]])
         with mock.patch.object(connectors, "_send", stub):
             with self.assertRaises(connectors.ConnectorError) as caught:
-                connectors.query_window(self.config, self.window)
+                list(connectors.query_window(self.config, self.window))
         self.assertIn("_source", str(caught.exception))
 
 
@@ -243,6 +262,52 @@ class TransportTests(unittest.TestCase):
             with self.assertRaises(connectors.ConnectorError) as caught:
                 connectors._send(self.config, "GET", "/", None)
         self.assertIn("exceeds", str(caught.exception))
+
+    def test_a_busy_indexer_is_retried_then_answers(self):
+        calls = []
+
+        def fake_send(request, context, timeout):
+            calls.append(1)
+            if len(calls) < 3:
+                raise urllib.error.HTTPError("u", 429, "Too Many", {"Retry-After": "2"}, None)
+            return b'{"ok": true}'
+
+        with (
+            mock.patch.object(connectors, "_http_send", fake_send),
+            mock.patch.object(connectors.time, "sleep") as sleep,
+        ):
+            result = connectors._send(self.config, "GET", "/", None)
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [2.0, 2.0])
+
+    def test_a_503_backs_off_and_then_gives_up(self):
+        def fake_send(request, context, timeout):
+            raise urllib.error.HTTPError("u", 503, "Unavailable", {}, None)
+
+        with (
+            mock.patch.object(connectors, "_http_send", fake_send),
+            mock.patch.object(connectors.time, "sleep") as sleep,
+        ):
+            with self.assertRaises(connectors.ConnectorError) as caught:
+                connectors._send(self.config, "GET", "/", None)
+        self.assertIn("HTTP 503", str(caught.exception))
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1.0, 2.0, 4.0])
+
+    def test_other_errors_are_not_retried(self):
+        calls = []
+
+        def fake_send(request, context, timeout):
+            calls.append(1)
+            raise urllib.error.HTTPError("u", 500, "Server", {}, None)
+
+        with (
+            mock.patch.object(connectors, "_http_send", fake_send),
+            mock.patch.object(connectors.time, "sleep") as sleep,
+        ):
+            with self.assertRaises(connectors.ConnectorError):
+                connectors._send(self.config, "GET", "/", None)
+        self.assertEqual(len(calls), 1)
+        sleep.assert_not_called()
 
     def test_insecure_config_disables_verification(self):
         captured = {}

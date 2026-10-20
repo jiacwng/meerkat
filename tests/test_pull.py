@@ -3,6 +3,7 @@
 
 import argparse
 import contextlib
+import gzip
 import io
 import json
 import tempfile
@@ -39,7 +40,8 @@ class PullFileModeTests(unittest.TestCase):
 
     def test_empty_window_writes_no_file(self):
         result = run_pull(self.base("--day", "2019-01-01"))
-        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no alerts in the window", flat(result))
         self.assertFalse((self.out / "acme_wazuh.json").exists())
 
     def test_out_of_range_epoch_fails_cleanly(self):
@@ -74,6 +76,17 @@ class PullFileModeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertTrue((self.out / "acme_wazuh.json").exists())
 
+    def test_a_gzipped_alerts_file_is_pulled(self):
+        gz = self.dir / "src.json.gz"
+        with gzip.open(gz, "wt", encoding="utf-8") as handle:
+            handle.write(self.src.read_text(encoding="utf-8"))
+        result = run_pull(
+            ["--environment", "acme", "--input", str(self.out), "--source", "file",
+             "--alerts-file", str(gz), "--day", "2022-01-21"]
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue((self.out / "acme_wazuh.json").exists())
+
     def test_stray_eve_file_does_not_block_a_file_pull(self):
         self.out.mkdir(parents=True)
         (self.out / "acme_eve.json").write_text("x", encoding="utf-8")
@@ -96,7 +109,9 @@ class PullConfigTests(unittest.TestCase):
         self.assertIn("port is not a number", flat(result))
 
     def _config_with(self, section):
-        args = argparse.Namespace(host="idx.example", user=None, insecure=False)
+        args = argparse.Namespace(
+            host="idx.example", user=None, insecure=False, ca_file=None
+        )
         with (
             mock.patch.object(cli, "_load_config", return_value=({"pull": section}, "")),
             contextlib.redirect_stderr(io.StringIO()),
@@ -106,6 +121,17 @@ class PullConfigTests(unittest.TestCase):
     def test_verify_tls_takes_a_boolean(self):
         self.assertFalse(self._config_with({"verify_tls": False}).verify_tls)
         self.assertTrue(self._config_with({"verify_tls": True}).verify_tls)
+
+    def test_ca_file_is_read_from_the_config(self):
+        ca = Path(tempfile.mkdtemp()) / "ca.pem"
+        ca.write_text("x", encoding="utf-8")
+        self.assertEqual(self._config_with({"ca_file": str(ca)}).ca_file, str(ca))
+        self.assertIsNone(self._config_with({}).ca_file)
+
+    def test_a_ca_file_that_is_not_there_is_refused(self):
+        with self.assertRaises(SystemExit) as caught:
+            self._config_with({"ca_file": "/no/such/ca.pem"})
+        self.assertEqual(caught.exception.code, cli.EXIT_ERROR)
 
     def test_verify_tls_as_a_string_is_refused(self):
         with self.assertRaises(SystemExit) as caught:

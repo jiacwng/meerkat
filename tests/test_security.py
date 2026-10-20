@@ -125,19 +125,18 @@ class ConnectorHardeningTests(unittest.TestCase):
             None, None, 302, "moved", {}, "https://evil.example/"
         ))
 
-    def test_query_window_caps_total_records(self):
+    def test_query_window_streams_one_page_at_a_time(self):
         config = connectors.IndexerConfig(host="h", page_size=2)
         page = {"hits": {"hits": [
             {"_source": {}, "sort": [1]},
             {"_source": {}, "sort": [2]},
         ]}}
-        with (
-            patch.object(connectors, "MAX_RECORDS", 3),
-            patch.object(connectors, "_send") as send,
-        ):
-            send.side_effect = [{"pit_id": "p"}, page, page, {}]
-            with self.assertRaises(connectors.ConnectorError):
-                connectors.query_window(config, connectors.Window(0.0, 100.0))
+        with patch.object(connectors, "_send") as send:
+            send.side_effect = [{"pit_id": "p"}, page, page, {}, {}]
+            stream = connectors.query_window(config, connectors.Window(0.0, 100.0))
+            next(stream)
+            self.assertEqual(send.call_count, 2)
+            self.assertEqual(len(list(stream)), 3)
 
 
 if __name__ == "__main__":
