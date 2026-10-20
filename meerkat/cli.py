@@ -21,6 +21,7 @@ import shutil
 import sys
 import tomllib
 import warnings
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import cached_property
@@ -3269,6 +3270,7 @@ def cmd_inventory(args) -> None:
     # on. A wazuh alert carries agent.name and agent.ip but no roles, so roles are
     # the one part a person still fills in.
     names: dict[str, str] = {}
+    agent_names: dict[str, str] = {}
     read = 0
     with source.open(encoding="utf-8-sig") as handle:
         for read, line in enumerate(islice(handle, args.limit), start=1):
@@ -3281,7 +3283,17 @@ def cmd_inventory(args) -> None:
             if not address:
                 continue
             hostname = str((record.get("predecoder") or {}).get("hostname") or "")
-            names.setdefault(address, hostname.strip() or address)
+            names.setdefault(address, hostname.strip())
+            agent_names.setdefault(address, str(agent.get("name") or "").strip())
+
+    # an agent name shared by several addresses is a collector, not a machine
+    owners = Counter(agent_names.values())
+    for address, hostname in names.items():
+        agent_name = agent_names[address]
+        if not hostname and agent_name and owners[agent_name] == 1:
+            names[address] = agent_name
+        elif not hostname:
+            names[address] = address
 
     if not names:
         _fail(f"[red]no agent addresses found in {safe(source.name)}[/red]")

@@ -1004,6 +1004,23 @@ class InventoryScaffoldTests(unittest.TestCase):
             ["db01", "web01"],
         )
 
+    def test_an_asset_without_a_hostname_takes_an_agent_name_only_it_alone_uses(self):
+        written = self.scaffold([
+            {"agent": {"ip": "10.0.0.1", "name": "web01"}},
+            {"agent": {"ip": "10.0.0.2", "name": "agent-two"},
+             "predecoder": {"hostname": "db01"}},
+            {"agent": {"ip": "10.0.0.3", "name": "collector"}},
+            {"agent": {"ip": "10.0.0.4", "name": "collector"}},
+            {"agent": {"ip": "10.0.0.5"}},
+        ])
+        self.assertEqual(
+            {asset["ip_addresses"][0]: asset["hostname"] for asset in written["assets"]},
+            {
+                "10.0.0.1": "web01", "10.0.0.2": "db01", "10.0.0.3": "10.0.0.3",
+                "10.0.0.4": "10.0.0.4", "10.0.0.5": "10.0.0.5",
+            },
+        )
+
     def test_every_scaffolded_asset_carries_an_address(self):
         # a record without one is skipped, so the "assets have no address"
         # warning that used to follow could never fire
