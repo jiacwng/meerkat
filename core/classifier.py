@@ -345,6 +345,8 @@ def _write_provenance(model: object, path: Path) -> None:
 
     forest = getattr(model, "forest", model)
     params = forest.get_params() if hasattr(forest, "get_params") else {}
+    counts = getattr(getattr(model, "schema", None), "rule_counts", None)
+    rules = sorted([str(d), str(r)] for d, r in counts.index) if counts is not None else []
     record = {
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "sklearn_version": sklearn.__version__,
@@ -357,6 +359,7 @@ def _write_provenance(model: object, path: Path) -> None:
         "max_depth": params.get("max_depth"),
         "min_samples_leaf": params.get("min_samples_leaf"),
         "class_weight": params.get("class_weight"),
+        "rules": rules,
     }
     provenance_path(path).write_text(
         json.dumps(record, indent=2) + "\n", encoding="utf-8"

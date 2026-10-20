@@ -872,6 +872,7 @@ class CheckReportsTheTestedValueTests(unittest.TestCase):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             cli.cmd_check(argparse.Namespace(
+                model=Path("no-model.skops"),
                 company="acme", input=directory, inventory=inventory,
                 sample=100, wazuh_file=None, aminer_file=None, json=False,
                 attack_mappings=None,
@@ -900,6 +901,7 @@ class CheckReadsEveryAlertFileTests(unittest.TestCase):
             contextlib.suppress(SystemExit),
         ):
             cli.cmd_check(argparse.Namespace(
+                model=Path("no-model.skops"),
                 company="acme", input=directory, inventory=inventory,
                 sample=100, wazuh_file=None, aminer_file=None, json=False,
                 attack_mappings=None,
@@ -909,6 +911,48 @@ class CheckReadsEveryAlertFileTests(unittest.TestCase):
         self.assertIn("eve.json", printed)
         self.assertIn("Suricata", printed)
         self.assertIn("absentloganomaly", printed)
+
+
+class UnseenRuleTests(unittest.TestCase):
+    # the client fixture fires 5710 and 31101 in equal numbers, and the shipped
+    # model only ever saw 31101
+    def check(self, model: Path) -> tuple[dict, str]:
+        directory = client_directory()
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+            contextlib.suppress(SystemExit),
+        ):
+            cli.cmd_check(argparse.Namespace(
+                model=model, company="acme", input=directory,
+                inventory=directory / "inventory" / "acme.json",
+                sample=100, wazuh_file=None, aminer_file=None, json=True,
+                attack_mappings=None,
+            ))
+        return json.loads(stdout.getvalue()), squashed(stderr.getvalue())
+
+    def test_check_reports_the_share_of_alerts_from_rules_the_model_never_saw(self):
+        report, warnings = self.check(SHIPPED_BUNDLE)
+        self.assertEqual(report["unseen_rule_share"], 0.5)
+        self.assertIn("50%ofalertscomefromrulesthemodelneversaw", warnings)
+        self.assertNotIn("unseen_rules", report["problems"])
+
+    def test_check_without_a_readable_sidecar_says_nothing_about_rules(self):
+        report, warnings = self.check(Path("no-model.skops"))
+        self.assertNotIn("unseen_rule_share", report)
+        self.assertNotIn("neversaw", warnings)
+
+    @unittest.skipUnless(HAS_BUNDLE, "needs the shipped model from Git LFS")
+    def test_triage_warns_and_records_the_share_in_the_run(self):
+        triaged = triage_client()
+        self.assertEqual(triaged.run.meta["unseen_rule_share"], 0.5)
+        self.assertIn("neversaw", squashed(triaged.printed))
+
+    def test_the_sidecar_lists_every_rule_the_model_was_fitted_on(self):
+        record = json.loads(provenance_path(SHIPPED_BUNDLE).read_text(encoding="utf-8"))
+        self.assertIn(["wazuh", "31101"], record["rules"])
+        self.assertNotIn(["wazuh", "5710"], record["rules"])
 
 
 class InventoryScaffoldTests(unittest.TestCase):
@@ -1359,6 +1403,7 @@ class TestRuleCardinality(unittest.TestCase):
             contextlib.suppress(SystemExit),
         ):
             cli.cmd_check(argparse.Namespace(
+                model=Path("no-model.skops"),
                 company="acme", input=directory, inventory=inventory,
                 sample=len(rule_ids) * 2, wazuh_file=None, aminer_file=None, json=False,
                 attack_mappings=None,

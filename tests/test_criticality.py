@@ -170,6 +170,7 @@ class CheckAndScaffoldTests(unittest.TestCase):
             contextlib.suppress(SystemExit),
         ):
             cli.cmd_check(argparse.Namespace(
+                model=Path("no-model.skops"),
                 company="acme", input=directory, inventory=inventory,
                 sample=100, wazuh_file=None, aminer_file=None, json=True,
                 attack_mappings=None,

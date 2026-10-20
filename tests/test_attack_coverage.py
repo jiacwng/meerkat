@@ -77,6 +77,7 @@ class CheckCoverageTests(unittest.TestCase):
             contextlib.suppress(SystemExit),
         ):
             cli.cmd_check(argparse.Namespace(
+                model=Path("no-model.skops"),
                 company="acme", input=directory,
                 inventory=directory / "inventory" / "acme.json",
                 sample=100, wazuh_file=None, aminer_file=None,
@@ -117,6 +118,7 @@ class CheckCoverageTests(unittest.TestCase):
         with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(SystemExit) as caught:
                 cli.cmd_check(argparse.Namespace(
+                    model=Path("no-model.skops"),
                     company="acme", input=directory,
                     inventory=directory / "inventory" / "acme.json",
                     sample=100, wazuh_file=None, aminer_file=None, json=False,
