@@ -1231,6 +1231,13 @@ def _role_problems(inventory, source: str) -> dict[str, str]:
             "without the role features. `meerkat inventory --list-roles` lists "
             "the vocabulary."
         )
+    if inventory.assets_without_ip:
+        names = inventory.assets_without_ip
+        problems["assets_without_ip"] = (
+            f"[yellow]{len(names)} assets have no IP address[/yellow]  alerts are "
+            "matched to assets by address, so these match nothing: "
+            f"{', '.join(safe(name) for name in names[:5])}"
+        )
     if inventory.unknown_roles:
         problems["unknown_roles"] = (
             f"[yellow]unrecognised roles[/yellow] "
@@ -2094,6 +2101,24 @@ def _known_rules(model: Path) -> set[tuple[str, str]] | None:
         return None
 
 
+def _model_roles(model: Path) -> set[str] | None:
+    try:
+        record = json.loads(
+            model.with_suffix(model.suffix + ".json").read_text(encoding="utf-8")
+        )
+        return {str(role) for role in record["roles"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _roles_without_column_message(roles: list[str], known: int) -> str:
+    return (
+        f"[yellow]roles the model has no column for[/yellow] "
+        f"{', '.join(safe(role) for role in roles)}  they add nothing to the "
+        f"score; the model reads {known} roles"
+    )
+
+
 def _unseen_rules_message(share: float) -> str:
     return (
         f"[yellow]{share:.0%} of alerts come from rules the model never saw"
@@ -2250,6 +2275,13 @@ def cmd_check(args) -> None:
         report["unseen_rule_share"] = round(share, 4)
         if share > UNSEEN_RULE_WARN:
             findings.append((None, _unseen_rules_message(share)))
+    model_roles = _model_roles(args.model)
+    if model_roles is not None:
+        used = {role for asset in inventory.assets_by_ip.values() for role in asset.groups}
+        ignored = sorted(used - model_roles)
+        if ignored:
+            report["roles_without_column"] = ignored
+            findings.append((None, _roles_without_column_message(ignored, len(model_roles))))
     report["problems"] = [key for key, _ in findings if key]
     report["ready"] = not report["problems"]
     if args.json:
