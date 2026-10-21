@@ -95,9 +95,7 @@ def build_sessions(
     work["_severity"] = standardize_severity(
         work["detector_source"], work["severity"]
     )
-    work["_has_technique"] = (
-        work["native_technique_ids"].astype(str).fillna("").ne("")
-    )
+    work["_has_technique"] = work["native_technique_ids"].astype(str).ne("")
     work["_asset_roles"] = [
         _asset_roles(str(entity), inventory)
         for entity in work["entity_id"]
