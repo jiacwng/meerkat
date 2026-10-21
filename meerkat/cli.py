@@ -680,9 +680,6 @@ def _render_why(family: pd.Series) -> None:
     console.print("[bold cyan]Ranking signals, largest contributions[/bold cyan]")
     contributions = family_contributions(family)
     total = sum(abs(value) for _, value in contributions)
-    if not total:
-        console.print("  [dim]this run holds no contributions; re-run triage[/dim]\n")
-        return
     shown = contributions[:TOP_CONTRIBUTIONS]
     width = max(len(phrase) for phrase, _ in shown)
     for phrase, value in shown:

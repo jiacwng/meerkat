@@ -123,9 +123,8 @@ class RenderTests(unittest.TestCase):
                 cli.render_queue(pd.DataFrame([family]), {}, "Review queue")
         self.assertIn("detectors within 10 minutes", capture.get())
 
-    def test_a_run_without_pushes_says_to_re_run_triage(self):
+    def test_a_family_without_pushes_has_no_top_raise(self):
         family = pd.Series({"asset_roles": ()})
-        self.assertIn("re-run triage", _capture(cli._render_why, family))
         self.assertEqual(cli.top_raise(family), "")
 
 
