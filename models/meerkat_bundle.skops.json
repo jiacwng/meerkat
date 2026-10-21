@@ -1,8 +1,8 @@
 {
-  "sha256": "6da3042bc93772074e6bcbca04252103a2d3a72b515af5ddc77bbea60534deb6",
+  "sha256": "61d8c8a6a8c28aa451c5345dbd1d97f8f5e5c5b35f51db76fb98dc10429babb1",
   "sklearn_version": "1.9.0",
   "python_version": "3.12.3",
-  "written_at": "2026-10-19T23:16:14+00:00",
+  "written_at": "2026-10-21T12:35:51+00:00",
   "training_scenarios": [
     "fox",
     "harrison",

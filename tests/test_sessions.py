@@ -165,6 +165,7 @@ class FamilyTests(unittest.TestCase):
 def session_rows() -> pd.DataFrame:
     return pd.DataFrame({
         "scenario": ["train", "train"],
+        "day": [0, 0],
         "entity_id": ["10.0.0.1", "10.0.0.2"],
         "detector_source": ["wazuh", "suricata"],
         "rule_id": ["common", "rare"],
@@ -192,6 +193,20 @@ def session_rows() -> pd.DataFrame:
 
 
 class SessionFeatureTests(unittest.TestCase):
+    def test_host_volume_is_its_rank_within_the_day(self):
+        busy = session_rows()
+        quiet = busy.assign(
+            detectors_on_entity=busy["detectors_on_entity"] / 10,
+            groups_on_entity=busy["groups_on_entity"] / 10,
+            log_alerts_on_entity=busy["log_alerts_on_entity"] / 10,
+        )
+        schema = fit_session_feature_schema(busy)
+
+        X = build_session_feature_matrix(busy, schema)
+
+        self.assertEqual(list(X["log_alerts_on_entity"]), [1.0, 0.5])
+        pd.testing.assert_frame_equal(X, build_session_feature_matrix(quiet, schema))
+
     def test_schema_learns_categories_and_rule_counts_from_training_only(self):
         # the training companies fix the column set, so a detector, rule or
         # role first seen on the held-out company adds none and reads as unseen

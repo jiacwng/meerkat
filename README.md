@@ -55,21 +55,21 @@ Data Set, under CC BY 4.0 ([NOTICE](NOTICE)). The model never trained on this
 company. Its queue for the first day, from `meerkat queue --day 2022-01-21`:
 
 ```text
-run russellmitchell-20261007-134440-786  |  company russellmitchell  |  budget 10  |  326 families
+run russellmitchell-20261021-124402-413  |  company russellmitchell  |  budget 10  |  326 families
 Review queue (top 10 per day, 2022-01-21)  |  F1 = top priority
 ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━┓
 ┃ handle ┃ date       ┃ start ┃ host            ┃ crit     ┃ detector ┃ finding                                  ┃ why                         ┃ alerts ┃ chain ┃ score ┃    esc% ┃ review ┃
 ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━━━╇━━━━━━━━┩
-│ F1     │ 2022-01-21 │ 06:33 │ inet-firewall   │ critical │ AMiner   │ AMiner: Unusual occurrence frequencies o │ asset role firewall         │      6 │     2 │  1.00 │         │        │
-│ F2     │ 2022-01-21 │ 11:27 │ inet-firewall   │ critical │ AMiner   │ AMiner: New service_start parameter comb │ asset role firewall         │      1 │     2 │  0.96 │         │        │
-│ F3     │ 2022-01-21 │ 11:27 │ inet-firewall   │ critical │ AMiner   │ AMiner: New service_stop parameter combi │ asset role firewall         │      1 │     2 │  0.96 │         │        │
-│ F4     │ 2022-01-21 │ 00:00 │ inet-firewall   │ critical │ AMiner   │ AMiner: New ip address in DNS logs.      │ asset role firewall         │     16 │     2 │  0.65 │         │        │
-│ F5     │ 2022-01-21 │ 16:10 │ inet-firewall   │ critical │ Suricata │ SURICATA HTTP gzip decompression failed  │ asset role firewall         │      1 │       │  0.50 │         │        │
-│ F6     │ 2022-01-21 │ 06:37 │ webserver       │ high     │ Suricata │ SURICATA TLS invalid record/traffic      │ detectors within 10 minutes │    105 │     1 │  0.20 │         │        │
-│ F7     │ 2022-01-21 │ 06:37 │ webserver       │ high     │ Suricata │ SURICATA TLS invalid handshake message   │ detectors within 10 minutes │    105 │     1 │  0.18 │         │        │
-│ F8     │ 2022-01-21 │ 06:33 │ intranet-server │ high     │ Suricata │ ET POLICY GNU/Linux APT User-Agent Outbo │ detectors within 10 minutes │      7 │     2 │  0.16 │         │        │
-│ F9     │ 2022-01-21 │ 16:06 │ inet-firewall   │ critical │ Suricata │ SURICATA HTTP unable to match response t │ asset role firewall         │      8 │       │  0.16 │         │        │
-│ F10    │ 2022-01-21 │ 06:37 │ mail            │ high     │ Suricata │ SURICATA TLS invalid record/traffic      │ detectors within 10 minutes │    105 │     1 │  0.15 │         │        │
+│ F1     │ 2022-01-21 │ 00:18 │ internal-share  │ high     │ AMiner   │ AMiner: New service_start parameter comb │ asset role internal         │      1 │     1 │  1.00 │         │        │
+│ F2     │ 2022-01-21 │ 00:18 │ internal-share  │ high     │ AMiner   │ AMiner: New service_stop parameter combi │ asset role internal         │      1 │     1 │  1.00 │         │        │
+│ F3     │ 2022-01-21 │ 00:14 │ internal-share  │ high     │ AMiner   │ AMiner: New event type.                  │ asset role internal         │      1 │     1 │  0.87 │         │        │
+│ F4     │ 2022-01-21 │ 00:00 │ inet-firewall   │ critical │ AMiner   │ AMiner: New ip address in DNS logs.      │ asset role firewall         │     16 │     2 │  0.30 │         │        │
+│ F5     │ 2022-01-21 │ 06:33 │ inet-firewall   │ critical │ AMiner   │ AMiner: Unusual occurrence frequencies o │ asset role firewall         │      6 │     2 │  0.20 │         │        │
+│ F6     │ 2022-01-21 │ 06:33 │ intranet-server │ high     │ Suricata │ ET POLICY GNU/Linux APT User-Agent Outbo │ detectors within 10 minutes │      7 │     2 │  0.18 │         │        │
+│ F7     │ 2022-01-21 │ 00:01 │ intranet-server │ high     │ AMiner   │ AMiner: CPU value out of expected range  │ detectors within 10 minutes │     15 │     2 │  0.18 │         │        │
+│ F8     │ 2022-01-21 │ 06:37 │ webserver       │ high     │ Suricata │ SURICATA TLS invalid record/traffic      │ detectors within 10 minutes │    105 │     1 │  0.16 │         │        │
+│ F9     │ 2022-01-21 │ 06:37 │ webserver       │ high     │ Suricata │ SURICATA TLS invalid handshake message   │ detectors within 10 minutes │    105 │     1 │  0.15 │         │        │
+│ F10    │ 2022-01-21 │ 06:37 │ mail            │ high     │ Suricata │ SURICATA TLS invalid record/traffic      │ detectors within 10 minutes │    105 │     1 │  0.14 │         │        │
 └────────┴────────────┴───────┴─────────────────┴──────────┴──────────┴──────────────────────────────────────────┴─────────────────────────────┴────────┴───────┴───────┴─────────┴────────┘
 ```
 
@@ -142,16 +142,16 @@ alert labelled. The model trains on seven networks and is scored on the eighth.
 
 | Ranking method | steps reached, 5 a day | steps reached, 10 a day | alerts behind 10 items, per day |
 |---|---:|---:|---:|
-| **Meerkat** | **53** | **58** | **14,660** |
-| Forest score of the best session | 43 | 51 | 38,487 |
-| Random order | 24 | 38 | 2,803 |
+| **Meerkat** | **52** | **57** | **44,463** |
+| Forest score of the best session | 41 | 48 | 38,865 |
+| Random order | 21 | 30 | 8,680 |
 | Detectors' own severity | 19 | 33 | 4,542 |
 
 A step is one phase of the scripted attack on one machine, reached when the
 queue holds an alert labelled to it. 60 of the 79 steps are findable at all.
-At five items a day, Meerkat reaches 53 and the forest alone reaches 43, on
-every seed. At ten, the two are close and Meerkat queues fewer alerts. Full
-tables and every baseline: [bench/README.md](bench/README.md).
+At five items a day, Meerkat reaches 52 and the forest alone reaches 41, on
+every seed. At ten it reaches 57 against 48. Meerkat queues about as many
+alerts as the forest alone. Full tables and every baseline: [bench/README.md](bench/README.md).
 
 The busiest test day, 453,697 alerts, triages in 72 seconds with 1.1 GB of
 memory.
@@ -169,6 +169,9 @@ memory.
 - The model reads 16 asset roles taken from the testbed. Other roles in the
   inventory add nothing to the score, and `check` names them.
 - A run covers complete days, and a day is a UTC day.
+- Host alert volume enters the forest as its rank within the day, so a network
+  of a different size scores the same. The re-ranker still reads raw counts.
+  Raising the held-out network's volume tenfold lowered 57 to 55 at ten a day.
 - An attack that fires the same rule as everyday noise, at the same severity
   and the same hours, ranks with the noise.
 - Criticality and ATT&CK tactics are shown and filtered on, and never change

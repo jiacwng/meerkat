@@ -10,6 +10,9 @@
 - The model bundle no longer carries a probability calibrator, which nothing
   displayed. Bundles saved by 1.2.0 or `retrain` before this change no
   longer load; rerun `meerkat retrain`.
+- The forest reads a host's alert, session and detector counts as their rank
+  within the day. Bundles saved before this change score hosts on the old
+  scale; rerun `meerkat retrain`.
 
 ### Fixed
 
@@ -25,6 +28,11 @@
 
 ### Changed
 
+- Host volume enters the forest as its rank within the day, so a network of a
+  different size scores the same. At 10 a day the queue reaches 57 of 60
+  steps, down from 58, and holds 44,463 alerts a day, up from 14,660. With
+  the held-out network's volume raised tenfold the old model reached 51 and
+  this one 55.
 - `check` and `triage` skip up to 1% bad records per alert file and report how many
   they skipped and the first one. A file over the limit still stops the run.
   `run.json` records `skipped_records` and `skipped_first`.

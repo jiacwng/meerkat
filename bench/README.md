@@ -112,19 +112,20 @@ alerts.
 
 | Ranker | windows K=5 | K=10 | K=25 | alerts/day@10 |
 |---|---:|---:|---:|---:|
-| **Family re-ranker (ours)** | **53** | **58** | **58** | **14,660** |
-| Best child session | 43 | 51 | 58 | 38,487 |
+| **Family re-ranker (ours)** | **52** | **57** | **58** | **44,463** |
+| Best child session | 41 | 48 | 58 | 38,865 |
 | Family size | 29 | 30 | 39 | 55,531 |
 | Native detector severity | 19 | 33 | 46 | 4,542 |
-| Random | 24 | 38 | 49 | 2,803 |
+| Random | 21 | 30 | 44 | 8,680 |
 | Floor: one item per day | 60 | 60 | 60 | 57,295 |
 
 `python -m bench.evaluate` regenerates every row and writes `sign_tests.csv`,
 exact sign tests per seed over the eight folds. Against family size, severity
 and random order the re-ranker separates on every seed (p 0.008 to 0.031).
-Against best child session it separates at K=5 on every seed (p 0.031) and
-not above: 3 to 5 of 8 folds differ at K=10, and the windows are identical at
-K=25. The difference between those two is the cost column.
+Against best child session it separates at K=5 and K=10 on every seed
+(p 0.031), and the windows are identical at K=25. The cost column does not
+separate them: the re-ranker queues 44,463 alerts a day at K=10 and the
+forest alone 38,865.
 Seeds are tested one by one before any averaging.
 
 The floor row is why the cost column exists. Merging items can only raise
@@ -141,7 +142,7 @@ and Alert Fatigue Mitigation in SOCs* proposes, is the other end of one family:
 alpha-nDCG (Clarke et al., SIGIR 2008) pays a repeated subtopic (1-alpha) less
 each time, alpha=0 is plain nDCG, and this table is the alpha=1 end without the
 position discount. By nDCG best child session wins every budget while reaching
-ten fewer windows at K=5. Both columns are in the output.
+eleven fewer windows at K=5. Both columns are in the output.
 
 Detector ceilings bound every row above. Read a low number against its ceiling
 before reading it as a ranking failure:
