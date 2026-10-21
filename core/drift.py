@@ -34,6 +34,10 @@ class TrainingProfile:
     family_score_bins: tuple[tuple[float, ...], tuple[float, ...]] = ((), ())
     inventory_coverage: float = 0.0
     n_sessions: int = 0
+    environment: str = ""
+    first_day: int = 0
+    last_day: int = 0
+    trained_day: int = 0
 
 
 @dataclass

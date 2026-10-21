@@ -10,6 +10,7 @@ import re
 import tempfile
 import unittest
 import warnings
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
@@ -1206,24 +1207,89 @@ class RealExitCodeTests(unittest.TestCase):
         # the gate saying no must not leave a bundle behind
         self.assertFalse(written.exists())
 
-    def test_a_drift_report_exits_with_its_own_code_and_says_what_moved(self):
-        # a client stream this far from the training set is exactly the case
-        # drift exists to report, and a wrapper has to tell it from a crash
+    def _drift(self, bundle) -> tuple[str, int]:
         directory = client_directory()
         printed = io.StringIO()
+        code = 0
         with (
+            mock.patch.object(cli, "_load_bundle", return_value=bundle),
             contextlib.redirect_stdout(printed),
             contextlib.redirect_stderr(io.StringIO()),
-            self.assertRaises(SystemExit) as caught,
         ):
-            cli.cmd_drift(argparse.Namespace(
+            try:
+                cli.cmd_drift(argparse.Namespace(
+                    model=SHIPPED_BUNDLE, input=directory, company="acme",
+                    inventory=directory / "inventory" / "acme.json",
+                    wazuh_file=None, aminer_file=None, top=5, json=False, all=False,
+                ))
+            except SystemExit as exited:
+                code = exited.code
+        return " ".join(printed.getvalue().split()), code
+
+    def test_drift_against_the_shipped_data_names_it_and_exits_zero(self):
+        # a first run compares a company with the AIT lab, which differs by
+        # construction, so the alarm waits for a baseline from a retrain
+        report, code = self._drift(cli._load_bundle(SHIPPED_BUNDLE))
+        self.assertEqual(code, 0)
+        self.assertIn(
+            "compared with: the AIT lab data the model shipped with. "
+            "Run `meerkat retrain` to compare with your own alerts.",
+            report,
+        )
+        self.assertIn(f"past PSI {PSI_MAJOR}", report)
+
+    def test_drift_prints_the_record_a_retrain_wrote(self):
+        # the retrain runs for real up to the gate, then drift reads its bundle
+        # back against the same alerts, which therefore read as stable
+        directory = client_directory()
+        incidents = directory / "incidents.csv"
+        start = datetime(2022, 1, 21, tzinfo=UTC).timestamp()
+        incidents.write_text(
+            f"start,end,host,verdict\n{start},{start + 1800},web01,true_positive\n",
+            encoding="utf-8",
+        )
+        approved = {
+            "approved": True,
+            "passed": [True, True],
+            "reason": "",
+            "shipped": np.array([True, False]),
+            "rescaled": np.array([True, False]),
+            "candidates": [np.array([True, True])] * 2,
+            "median_index": 0,
+        }
+        written = directory / "retrained.skops"
+        with (
+            mock.patch.object(cli, "compare_models", return_value=approved),
+            mock.patch.multiple(
+                cli, RETRAIN_TREES=5, RETRAIN_FITS=2, MIN_BAGGED_SESSIONS=1
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            cli.cmd_retrain(argparse.Namespace(
                 model=SHIPPED_BUNDLE, input=directory, company="acme",
                 inventory=directory / "inventory" / "acme.json",
-                wazuh_file=None, aminer_file=None, top=5, json=False, all=False,
+                incidents=incidents, wazuh_file=None, aminer_file=None,
+                holdout_days=1, budget=10, out=written,
             ))
-        self.assertEqual(caught.exception.code, cli.EXIT_DRIFT)
+        report, code = self._drift(cli._load_bundle(written))
+        self.assertEqual(code, 0)
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        self.assertIn(
+            f"compared with: acme alerts from 2022-01-21 to 2022-01-22, "
+            f"retrained on {today}",
+            report,
+        )
+        self.assertIn("no major drift", report)
+
+    def test_a_drift_report_exits_with_its_own_code_and_says_what_moved(self):
+        # a client stream this far from its own training set is exactly the case
+        # drift exists to report, and a wrapper has to tell it from a crash
+        shipped = cli._load_bundle(SHIPPED_BUNDLE)
+        retrained = replace(shipped, profile=replace(shipped.profile, environment="acme"))
+        report, code = self._drift(retrained)
+        self.assertEqual(code, cli.EXIT_DRIFT)
         self.assertNotIn(cli.EXIT_DRIFT, (EXIT_ERROR, EXIT_DECLINED))
-        report = " ".join(printed.getvalue().split())
         self.assertIn(f"past PSI {PSI_MAJOR}", report)
         # and it never claims the ranking got worse, which needs labels
         self.assertIn("does not measure whether the ranking is still right", report)

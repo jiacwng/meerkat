@@ -2007,7 +2007,7 @@ def cmd_retrain(args) -> None:
     # enough for seed noise to flip it
     try:
         candidates = [
-            refit_forest(bundle, train, prior, RETRAIN_TREES, seed=offset)
+            refit_forest(bundle, train, prior, RETRAIN_TREES, company, seed=offset)
             for offset in range(RETRAIN_FITS)
         ]
     except ValueError as error:
@@ -2315,6 +2315,7 @@ def _drift_report(bundle, sessions, families, drifts, alerts_count) -> dict:
         "sessions": len(sessions),
         "families": len(families),
         "trained_sessions": profile.n_sessions,
+        "own_baseline": bool(profile.environment),
         "unseen_rule_share": round(float(unseen), 4),
         "outside_inventory_share": round(
             1.0 - float(sessions["in_inventory"].mean()), 4
@@ -2344,6 +2345,17 @@ def _print_drift(args, report, profile, drifts) -> None:
         f"{report['families']} families against a model trained on "
         f"{profile.n_sessions} sessions"
     )
+    if profile.environment:
+        console.print(
+            f"  compared with: {safe(profile.environment)} alerts from "
+            f"{fmt_date(profile.first_day)} to {fmt_date(profile.last_day)}, "
+            f"retrained on {fmt_date(profile.trained_day)}"
+        )
+    else:
+        console.print(
+            "  compared with: the AIT lab data the model shipped with. "
+            "Run `meerkat retrain` to compare with your own alerts."
+        )
     unseen = report["unseen_rule_share"]
     console.print(
         f"  rules the model never saw: [bold]{unseen:.1%}[/bold] of alerts"
@@ -2421,7 +2433,7 @@ def cmd_drift(args) -> None:
         print(json.dumps(report, indent=2, default=str))
     else:
         _print_drift(args, report, bundle.profile, drifts)
-    if report["drifted"]:
+    if report["drifted"] and report["own_baseline"]:
         raise SystemExit(EXIT_DRIFT)
 
 
