@@ -106,6 +106,33 @@ class EntityAttributionTests(unittest.TestCase):
         self.assertEqual(fields.observer_id, "10.0.0.1")
         self.assertTrue(fields.entity_in_inventory)
 
+    def test_a_wazuh_alert_with_no_agent_address_resolves_by_hostname(self):
+        # a syslog or agentless alert carries the device's name and no agent address
+        record = {
+            "rule": {"description": "Login failed", "level": 8},
+            "predecoder": {"hostname": "FW-Edge"},
+            "agent": {"name": "manager"},
+        }
+        assets = company_inventory(("fw-edge", "10.0.0.7", ("firewall",)))
+
+        fields = normalize.extract_wazuh_fields(record, assets)
+
+        self.assertEqual(fields.entity_id, "10.0.0.7")
+        self.assertTrue(fields.entity_in_inventory)
+
+    def test_an_unknown_agentless_hostname_stays_its_own_entity(self):
+        record = {
+            "rule": {"description": "Login failed", "level": 8},
+            "predecoder": {"hostname": "mystery"},
+            "agent": {"name": "manager"},
+        }
+        assets = company_inventory(("fw-edge", "10.0.0.7", ("firewall",)))
+
+        fields = normalize.extract_wazuh_fields(record, assets)
+
+        self.assertEqual(fields.entity_id, "mystery")
+        self.assertFalse(fields.entity_in_inventory)
+
     def test_suricata_known_destination_wins(self):
         # both endpoints are managed here, and taking the destination puts the
         # session on the machine being attacked
