@@ -180,7 +180,7 @@ Exit codes:
 | 1 | error |
 | 2 | bad arguments |
 | 3 | retrain refused by the gate |
-| 4 | major feature drift, or too many rules the model never saw |
+| 4 | major feature drift, or too many rules the model never saw, against a baseline from `meerkat retrain` |
 
 ---
 
@@ -575,7 +575,9 @@ setting.
 Report whether the incoming alerts have changed shape since the model was
 trained, with no labels needed: a population stability index per feature, the
 share of rules the model never saw, and inventory coverage. PSI below 0.10 is
-stable, above 0.25 is a major shift; a major shift exits with code 4. It does
+stable, above 0.25 is a major shift. A major shift exits with code 4 once
+`meerkat retrain` has saved a baseline from your own alerts. Against the AIT lab
+data the model ships with, `drift` prints the same report and exits 0. It does
 not report whether the ranking got worse, which needs labelled outcomes.
 
 The three host counts, `detectors_on_entity`, `groups_on_entity` and
@@ -603,6 +605,7 @@ Recorded output:
 note the bundled model was trained with a different scikit-learn than the installed 1.9.0. It loads
 and scores normally; retrain with `meerkat retrain` to silence this.
 36358 alerts, 1487 sessions, 326 families against a model trained on 14292 sessions
+  compared with: the AIT lab data the model shipped with. Run `meerkat retrain` to compare with your own alerts.
   rules the model never saw: 0.0% of alerts
   sessions on hosts outside the inventory: 0.0%  (training had 0.4%)
 feature drift, worst first
@@ -611,7 +614,7 @@ feature drift, worst first
 ┡━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━┩
 │ log_rarity │ 0.160 │ moderate │          -8.940 │ -11.519 │
 └────────────┴───────┴──────────┴─────────────────┴─────────┘
-  top-decile family score: 0.998 now, 0.900 at training
+  top-decile family score: 0.999 now, 0.923 at training
 no major drift  worst PSI 0.160
 ```
 

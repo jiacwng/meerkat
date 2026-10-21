@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 
 import pandas as pd
@@ -20,7 +21,7 @@ from core.features import (
     build_session_feature_matrix,
     fit_session_feature_schema,
 )
-from core.sessions import build_families
+from core.sessions import SECONDS_PER_DAY, build_families
 
 
 @dataclass
@@ -55,6 +56,7 @@ def refit_forest(
     sessions: pd.DataFrame,
     prior: pd.Series,
     n_estimators: int,
+    environment: str,
     seed: int = 0,
 ) -> TriageBundle:
     schema = fit_session_feature_schema(sessions)
@@ -65,6 +67,13 @@ def refit_forest(
     scored["ranking_score"] = predict_scores(forest, X)
     families = build_families(scored)
     reranker = rescale_reranker(bundle.reranker, families)
+    profile = replace(
+        build_profile(X, reranker.predict(families)),
+        environment=environment,
+        first_day=int(sessions["day"].min()),
+        last_day=int(sessions["day"].max()),
+        trained_day=int(time.time() // SECONDS_PER_DAY),
+    )
     return TriageBundle(
         forest=forest,
         schema=schema,
@@ -72,7 +81,7 @@ def refit_forest(
         training_scenarios=bundle.training_scenarios,
         n_estimators=n_estimators,
         seed=seed,
-        profile=build_profile(X, reranker.predict(families)),
+        profile=profile,
     )
 
 
