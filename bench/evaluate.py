@@ -6,11 +6,11 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from math import comb
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import binomtest
 
 from core.classifier import (
     fit_family_reranker,
@@ -328,8 +328,7 @@ def _exact_sign_p(deltas: list[int]) -> tuple[float, int]:
     if n_eff == 0:
         return float("nan"), 0
     positive = sum(1 for delta in nonzero if delta > 0)
-    tail = sum(comb(n_eff, i) for i in range(min(positive, n_eff - positive) + 1))
-    return min(1.0, 2 * tail / 2 ** n_eff), n_eff
+    return float(binomtest(positive, n_eff, 0.5).pvalue), n_eff
 
 
 def sign_tests(per_fold: pd.DataFrame, metric: str) -> pd.DataFrame:
