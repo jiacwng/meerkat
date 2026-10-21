@@ -28,14 +28,11 @@
   <a href="#results">Results</a>
 </p>
 
-## Overview
-
-Meerkat ranks a finished day of Wazuh alerts into a short review queue for the
-next morning. It groups the alerts by rule and machine, scores each group, and
-lists the top items for an analyst to work in the terminal.
-
-It reads Wazuh alerts, including the Suricata alerts in the Wazuh feed. AMiner,
-a log anomaly detector, is an optional second source.
+Meerkat is a command-line tool that turns one day of Wazuh alerts into a short
+review queue for the next morning. It groups alerts that belong together,
+scores each group, and lists the top ten for an analyst to work through in the
+terminal. It reads Wazuh, including the Suricata alerts in the Wazuh feed, and
+optionally AMiner log anomalies.
 
 ## Quick start
 
@@ -50,9 +47,8 @@ python -m pip install -e .
 meerkat demo
 ```
 
-The clone holds a trained model and one company's alerts from the AIT Alert
-Data Set, under CC BY 4.0 ([NOTICE](NOTICE)). The model never trained on this
-company. Its queue for the first day, from `meerkat queue --day 2022-01-21`:
+`meerkat demo` scores one company from the AIT Alert Data Set that the model
+never trained on. Its queue for 2022-01-21:
 
 ```text
 run russellmitchell-20261021-124402-413  |  company russellmitchell  |  budget 10  |  326 families
@@ -73,11 +69,7 @@ Review queue (top 10 per day, 2022-01-21)  |  F1 = top priority
 └────────┴────────────┴───────┴─────────────────┴──────────┴──────────┴──────────────────────────────────────────┴─────────────────────────────┴────────┴───────┴───────┴─────────┴────────┘
 ```
 
-`score` sets the order. `why` names the largest contribution to the score,
-`crit` is the asset's criticality, and `chain` is the length of the host's
-ATT&CK chain that day. `esc%` and `review` fill in as you record decisions.
-
-One pass from scoring to review and export:
+`score` sets the order and `why` names what raised it most.
 
 <p align="center">
   <img
@@ -87,10 +79,9 @@ One pass from scoring to review and export:
   >
 </p>
 
-## Usage
+## Daily use
 
-Alerts land in a new folder each day, so set the environment and the inventory
-once in `meerkat.toml`:
+Set the environment once in `meerkat.toml`:
 
 ```toml
 environment = "acme"
@@ -107,20 +98,17 @@ meerkat export decisions                     # the review pass as a grid
 meerkat retrain --incidents tickets.csv      # refit on your own history
 ```
 
-`inspect` opens any family, session or alert with its evidence and ATT&CK
-techniques. `export navigator` writes an ATT&CK Navigator layer. The
-[manual](docs/manual.md) covers every command, flag and input format.
+The [manual](docs/manual.md) covers every command and input format.
 
 ## How it works
 
-- A **session** is one rule firing on one machine until it is quiet for ten
-  minutes.
-- A **family** joins the same day's sessions that share a machine, a detector
-  and a rule. One family is one item in the queue.
-- A random forest scores each session, and a logistic regression ranks each
-  family from its sessions.
-- The top families of each day form the queue. The budget is 10 a day by
-  default.
+- Alerts from one rule on one machine, with no gap over ten minutes, form a
+  **session**.
+- Sessions from the same day, machine, detector and rule form a **family**.
+  One family is one line in the queue.
+- A random forest scores each session. A logistic regression ranks each family
+  from its sessions.
+- The top ten families of each day are the queue.
 
 <p align="center">
   <img
@@ -130,55 +118,39 @@ techniques. `export navigator` writes an ATT&CK Navigator layer. The
   >
 </p>
 
-`retrain` refits the forest on a company's own incident records. It saves the
-new model when it reaches every incident the shipped one reaches and leaves
-no larger share of alerts on rules it never saw.
+`meerkat retrain` refits the forest on your own incident history. It saves the
+new model only if it passes a check against the shipped one on held-out days.
 
 ## Results
 
-Measured on the [AIT Alert Data Set](https://zenodo.org/records/8263181):
-eight simulated company networks attacked by one scripted attack, with every
-alert labelled. The model trains on seven networks and is scored on the eighth.
+Tested on the [AIT Alert Data Set](https://zenodo.org/records/8263181): eight
+simulated company networks hit by the same scripted attack, with every alert
+labelled. The model trains on seven networks and is tested on the eighth, once
+for each network.
 
-| Ranking method | steps reached, 5 a day | steps reached, 10 a day | alerts behind 10 items, per day |
-|---|---:|---:|---:|
-| **Meerkat** | **52** | **57** | **44,463** |
-| Forest score of the best session | 41 | 48 | 38,865 |
-| Random order | 21 | 30 | 8,680 |
-| Detectors' own severity | 19 | 33 | 4,542 |
+| Ranking | attack steps found, 10 a day |
+|---|---:|
+| **Meerkat** | **57** |
+| Forest score alone | 48 |
+| Detector severity | 33 |
+| Random order | 30 |
 
-A step is one phase of the scripted attack on one machine, reached when the
-queue holds an alert labelled to it. 60 of the 79 steps are findable at all.
-At five items a day, Meerkat reaches 52 and the forest alone reaches 41, on
-every seed. At ten it reaches 57 against 48. Meerkat queues about as many
-alerts as the forest alone. Full tables and every baseline: [bench/README.md](bench/README.md).
-
-The busiest test day, 453,697 alerts, triages in 72 seconds with 1.1 GB of
-memory.
+An attack step is one phase of the attack on one machine. It counts as found
+when the queue holds one of its alerts. 60 steps can be found at all. The
+busiest day, 453,697 alerts, takes 72 seconds and 1.1 GB of memory.
+[bench/README.md](bench/README.md) shows how to reproduce these numbers.
 
 ## Limitations
 
-- The results come from one simulated testbed whose eight networks share an
-  attack script. The model may partly learn that script: which rules it fires
-  and which machine roles it targets. Nothing here shows how the tool performs
-  in production.
-- A new site starts with the shipped model, which has seen only the testbed's
-  rules. When more than 20% of a run's alerts come from rules it has not seen,
-  `check` and `triage` warn that the ranking is close to arbitrary until a
-  retrain. Retraining needs a record of past incidents.
-- The model reads 16 asset roles taken from the testbed. Other roles in the
-  inventory add nothing to the score, and `check` names them.
-- A run covers complete days, and a day is a UTC day.
-- Host alert volume enters the forest as its rank within the day, so a network
-  of a different size scores the same. The re-ranker still reads raw counts.
-  Raising the held-out network's volume tenfold lowered 57 to 55 at ten a day.
+- Every number comes from one simulated lab whose eight networks share one
+  attack script. They say nothing about production.
+- The shipped model knows only the lab's rules and asset roles. A new site
+  should retrain on its own incident history. `check` and `triage` warn when
+  more than 20% of alerts come from rules the model has not seen.
 - An attack that fires the same rule as everyday noise, at the same severity
   and the same hours, ranks with the noise.
-- Criticality and ATT&CK tactics are shown and filtered on, and never change
-  the score. The ATT&CK mapping was built from the test data.
-- Wazuh, Suricata and AMiner are supported. Another detector needs an adapter.
 
 ## License
 
 MIT, see [LICENSE](LICENSE). [NOTICE](NOTICE) carries the AIT and MITRE ATT&CK
-attributions, and `CITATION.cff` the data set references.
+attributions and the data set references.
