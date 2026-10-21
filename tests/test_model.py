@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import tempfile
+import time
 import unittest
 import unittest.mock
 import zipfile
@@ -573,11 +574,25 @@ class ClientRetrainingTests(unittest.TestCase):
         # part that moves, because a client forest scores lower and tighter.
         retrained = refit_forest(
             self.bundle, self.client, self._prior(3), n_estimators=10,
+            environment="alpha",
         )
         shipped = self.bundle.reranker.model.named_steps
         refitted = retrained.reranker.model.named_steps
         np.testing.assert_array_equal(shipped["model"].coef_, refitted["model"].coef_)
         self.assertFalse(np.array_equal(shipped["scale"].mean_, refitted["scale"].mean_))
+
+    def test_a_retrain_records_whose_alerts_and_which_days_it_learned_from(self):
+        # drift prints this record, and an empty environment means the shipped data
+        self.assertEqual(self.bundle.profile.environment, "")
+        retrained = refit_forest(
+            self.bundle, self.client, self._prior(3), n_estimators=10,
+            environment="alpha",
+        )
+        profile = retrained.profile
+        self.assertEqual(profile.environment, "alpha")
+        self.assertEqual(profile.first_day, int(self.client["day"].min()))
+        self.assertEqual(profile.last_day, int(self.client["day"].max()))
+        self.assertEqual(profile.trained_day, int(time.time() // 86400))
 
 
 # The client retraining path: soft labels from bags, a rescaled re-ranker and a

@@ -91,10 +91,9 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(json.loads(result.stdout)), 1)
 
-        # synthetic alerts sit far from the training data, so drift may exit 4
-        # by design; anything else is a failure
+        # the shipped bundle has no retrain record, so drift reports and exits 0
         result = self.run_command(["drift", *self.base])
-        self.assertIn(result.returncode, (0, 4), result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
