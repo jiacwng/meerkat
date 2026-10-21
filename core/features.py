@@ -25,6 +25,7 @@ SESSION_NUMERIC_FEATURES = (
     "groups_on_entity",
     "log_alerts_on_entity",
 )
+HOST_VOLUME_FEATURES = ("detectors_on_entity", "groups_on_entity", "log_alerts_on_entity")
 SUPPORTED_DETECTOR_ORDER = ("wazuh", "suricata", "aminer")
 SCHEMA_INDEX_NAMES = ("detector_source", "rule_id")
 
@@ -99,11 +100,20 @@ def fit_session_feature_schema(sessions: pd.DataFrame) -> SessionFeatureSchema:
     return SessionFeatureSchema(rule_counts, detectors, roles)
 
 
+# a host's volume is read as its rank among the rows of the same day, so the
+# feature does not depend on how busy the whole network is
+def rank_host_volume(X: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
+    days = [table["scenario"].astype(str).to_numpy(), table["day"].to_numpy()]
+    for name in HOST_VOLUME_FEATURES:
+        X[name] = X[name].groupby(days).rank(pct=True)
+    return X
+
+
 def build_session_feature_matrix(
     sessions: pd.DataFrame,
     schema: SessionFeatureSchema,
 ) -> pd.DataFrame:
-    X = sessions[list(SESSION_NUMERIC_FEATURES)].astype(float).copy()
+    X = rank_host_volume(sessions[list(SESSION_NUMERIC_FEATURES)].astype(float).copy(), sessions)
     known = schema.rule_counts.to_dict()
     shares = {detector: np.zeros(len(sessions)) for detector in schema.detectors}
     rarity = np.zeros(len(sessions))
