@@ -163,12 +163,12 @@ memory.
   and which machine roles it targets. Nothing here shows how the tool performs
   in production.
 - A new site starts with the shipped model, which has seen only the testbed's
-  rules. When more than 20% of a day's alerts come from rules it has not seen,
+  rules. When more than 20% of a run's alerts come from rules it has not seen,
   `check` and `triage` warn that the ranking is close to arbitrary until a
   retrain. Retraining needs a record of past incidents.
 - The model reads 16 asset roles taken from the testbed. Other roles in the
   inventory add nothing to the score, and `check` names them.
-- A run covers one complete day in UTC.
+- A run covers complete days, and a day is a UTC day.
 - An attack that fires the same rule as everyday noise, at the same severity
   and the same hours, ranks with the noise.
 - Criticality and ATT&CK tactics are shown and filtered on, and never change
