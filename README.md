@@ -162,8 +162,13 @@ memory.
   attack script. The model may partly learn that script: which rules it fires
   and which machine roles it targets. Nothing here shows how the tool performs
   in production.
-- A new site starts with the shipped model. Retraining needs a record of past
-  incidents.
+- A new site starts with the shipped model, which has seen only the testbed's
+  rules. When more than 20% of a day's alerts come from rules it has not seen,
+  `check` and `triage` warn that the ranking is close to arbitrary until a
+  retrain. Retraining needs a record of past incidents.
+- The model reads 16 asset roles taken from the testbed. Other roles in the
+  inventory add nothing to the score, and `check` names them.
+- A run covers one complete day in UTC.
 - An attack that fires the same rule as everyday noise, at the same severity
   and the same hours, ranks with the noise.
 - Criticality and ATT&CK tactics are shown and filtered on, and never change
