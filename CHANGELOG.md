@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 - 2026-10-22
 
 ### Breaking
 
@@ -28,6 +28,9 @@
 
 ### Changed
 
+- `drift` names what it compares against: the AIT lab data the model ships
+  with, or the environment, days and date of the last `retrain`. Against the
+  AIT data it exits 0, because a first run would compare a company with the lab.
 - Host volume enters the forest as its rank within the day, so a network of a
   different size scores the same. At 10 a day the queue reaches 57 of 60
   steps, down from 58, and holds 44,463 alerts a day, up from 14,660. With
