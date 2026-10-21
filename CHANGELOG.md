@@ -32,6 +32,8 @@
   environments' `*_wazuh.json` and `*_aminer.json`. `meerkat inventory` names a
   machine by `agent.name` when the alert has no hostname and no other address
   uses that name.
+- A Wazuh alert with no agent address is matched to the inventory by the hostname in
+  its log line, so syslog devices share their asset's address.
 - `pull` exits with status 1 when the window holds no alerts.
 - `pull` writes each page to disk as it arrives, so a window can hold more than
   2 million alerts.

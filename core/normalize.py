@@ -141,6 +141,7 @@ def extract_wazuh_fields(
     if not host:
         asset = inventory.assets_by_ip.get(agent_ip)
         host = asset.hostname if asset else agent_ip or agent["name"]
+    entity_ip = agent_ip or inventory.ip_by_hostname.get(str(host).casefold(), "")
     mitre = rule.get("mitre") or {}
     mitre_ids = mitre.get("id") or []
     if isinstance(mitre_ids, str):
@@ -152,9 +153,9 @@ def extract_wazuh_fields(
     return ExtractedFields(
         name=rule["description"],
         host=host,
-        entity_id=agent_ip or str(host),
+        entity_id=entity_ip or str(host),
         observer_id=agent_ip or str(agent.get("name") or ""),
-        entity_in_inventory=agent_ip in inventory,
+        entity_in_inventory=entity_ip in inventory,
         severity=float(rule["level"]),
         native_technique_ids=";".join(str(one) for one in mitre_ids),
         rule_id=str(rule.get("id", "")),
