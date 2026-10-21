@@ -1234,9 +1234,11 @@ def _role_problems(inventory, source: str) -> dict[str, str]:
     if inventory.assets_without_ip:
         names = inventory.assets_without_ip
         problems["assets_without_ip"] = (
-            f"[yellow]{len(names)} assets have no IP address[/yellow]  alerts are "
-            "matched to assets by address, so these match nothing: "
-            f"{', '.join(safe(name) for name in names[:5])}"
+            f"[yellow]{len(names)} "
+            f"{'asset has' if len(names) == 1 else 'assets have'} no IP "
+            "address[/yellow]  alerts are matched to assets by address, so these "
+            f"match nothing: {', '.join(safe(name) for name in names[:5])}"
+            + (f" and {len(names) - 5} more" if len(names) > 5 else "")
         )
     if inventory.unknown_roles:
         problems["unknown_roles"] = (
@@ -1293,7 +1295,8 @@ def _normalize_or_exit(
 
 def _skipped_records_message(skipped: list[str]) -> str:
     return (
-        f"[yellow]skipped {len(skipped)} bad records[/yellow]  "
+        f"[yellow]skipped {len(skipped)} bad "
+        f"{'record' if len(skipped) == 1 else 'records'}[/yellow]  "
         f"first: {safe(skipped[0])}"
     )
 
@@ -2106,6 +2109,8 @@ def _model_roles(model: Path) -> set[str] | None:
         record = json.loads(
             model.with_suffix(model.suffix + ".json").read_text(encoding="utf-8")
         )
+        if not isinstance(record["roles"], list):
+            return None
         return {str(role) for role in record["roles"]}
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -2999,7 +3004,13 @@ def cmd_pull(args) -> None:
 
     try:
         wazuh_count = connectors.write_records(wazuh_out, records)
-        eve_count = connectors.write_records(eve_out, eve_records) if args.eve_file else 0
+        try:
+            eve_count = (
+                connectors.write_records(eve_out, eve_records) if args.eve_file else 0
+            )
+        except BaseException:
+            wazuh_out.unlink(missing_ok=True)
+            raise
     except connectors.ConnectorError as error:
         _fail(f"[red]{safe(error)}[/red]")
     total = wazuh_count + eve_count
