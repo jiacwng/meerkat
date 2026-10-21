@@ -977,12 +977,12 @@ class SkippedRecordTests(unittest.TestCase):
         report = json.loads(stdout.getvalue())
         self.assertEqual(report["skipped_records"], 1)
         self.assertEqual(report["sampled"], 120)
-        self.assertIn("skipped1badrecords", squashed(stderr.getvalue()))
+        self.assertIn("skipped1badrecord", squashed(stderr.getvalue()))
         self.assertIn("line121", squashed(stderr.getvalue()))
 
 
 class InventoryGapTests(unittest.TestCase):
-    def check(self, assets: list[dict], roles: list[str] | None = None) -> dict:
+    def check(self, assets: list[dict], roles: list[str] | str | None = None) -> dict:
         directory = client_directory()
         write_inventory(directory / "inventory" / "acme.json", assets)
         model = directory / "m.skops"
@@ -1018,6 +1018,13 @@ class InventoryGapTests(unittest.TestCase):
             roles=["server"],
         )
         self.assertEqual(report["roles_without_column"], ["desktop"])
+
+    def test_a_sidecar_with_a_string_for_roles_is_ignored(self):
+        report = self.check(
+            [{"hostname": "web01", "ip_addresses": ["10.0.0.9"], "roles": ["server"]}],
+            roles="server",
+        )
+        self.assertNotIn("roles_without_column", report)
 
     def test_no_sidecar_means_no_role_comparison(self):
         report = self.check(
