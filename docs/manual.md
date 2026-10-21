@@ -683,8 +683,7 @@ from being saved.
 The benchmark lives in `bench/` in the repository and is not part of the
 installed package. Reproduction needs the AIT Alert Data Set, a 2.7 GB
 download; [bench/README.md](../bench/README.md) carries the steps, the layout
-check and the expected numbers. `bench/digest.py` says in seconds whether a
-code change moved the normalized frame.
+check and the expected numbers.
 
 ## Limitations
 
