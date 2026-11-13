@@ -1,0 +1,320 @@
+{
+  "company": "fox",
+  "assets": [
+    {
+      "hostname": "internal-share",
+      "ip_addresses": [
+        "10.35.33.111"
+      ],
+      "roles": [
+        "monitoring_agent",
+        "internal",
+        "server",
+        "file_share"
+      ]
+    },
+    {
+      "hostname": "remote-employee-1",
+      "ip_addresses": [
+        "192.168.128.107"
+      ],
+      "roles": [
+        "employee",
+        "internet_facing",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-0",
+      "ip_addresses": [
+        "192.168.130.84"
+      ],
+      "roles": [
+        "employee",
+        "internet_facing",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-2",
+      "ip_addresses": [
+        "192.168.129.254"
+      ],
+      "roles": [
+        "employee",
+        "internet_facing",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-3",
+      "ip_addresses": [
+        "192.168.128.152"
+      ],
+      "roles": [
+        "employee",
+        "internet_facing",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "jonesmorgan-mail",
+      "ip_addresses": [
+        "192.168.128.170"
+      ],
+      "roles": [
+        "external_mail",
+        "internet_facing",
+        "mail_server"
+      ]
+    },
+    {
+      "hostname": "ext-user-5",
+      "ip_addresses": [
+        "192.168.131.165"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "taylorcruz-mail",
+      "ip_addresses": [
+        "192.168.128.195"
+      ],
+      "roles": [
+        "external_mail",
+        "internet_facing",
+        "mail_server"
+      ]
+    },
+    {
+      "hostname": "ext-user-0",
+      "ip_addresses": [
+        "192.168.131.118"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "miller-mail",
+      "ip_addresses": [
+        "192.168.129.212"
+      ],
+      "roles": [
+        "external_mail",
+        "internet_facing",
+        "mail_server"
+      ]
+    },
+    {
+      "hostname": "ext-user-3",
+      "ip_addresses": [
+        "192.168.131.234"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "ext-user-6",
+      "ip_addresses": [
+        "192.168.131.156"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "whittaker-mail",
+      "ip_addresses": [
+        "192.168.131.228"
+      ],
+      "roles": [
+        "external_mail",
+        "internet_facing",
+        "mail_server"
+      ]
+    },
+    {
+      "hostname": "ext-user-4",
+      "ip_addresses": [
+        "192.168.131.15"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "ext-user-1",
+      "ip_addresses": [
+        "192.168.129.209"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "ext-user-2",
+      "ip_addresses": [
+        "192.168.130.110"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "internal-employee-4",
+      "ip_addresses": [
+        "10.35.33.116"
+      ],
+      "roles": [
+        "employee",
+        "internal_employee",
+        "internal"
+      ]
+    },
+    {
+      "hostname": "mail",
+      "ip_addresses": [
+        "172.17.131.81"
+      ],
+      "roles": [
+        "dmz",
+        "nat_forwarded",
+        "mail_server",
+        "behind_proxy",
+        "server"
+      ]
+    },
+    {
+      "hostname": "vpn",
+      "ip_addresses": [
+        "172.17.130.196"
+      ],
+      "roles": [
+        "dmz",
+        "nat_forwarded",
+        "server"
+      ]
+    },
+    {
+      "hostname": "webserver",
+      "ip_addresses": [
+        "172.17.130.37"
+      ],
+      "roles": [
+        "dmz",
+        "nat_forwarded",
+        "server"
+      ]
+    },
+    {
+      "hostname": "internal-employee-0",
+      "ip_addresses": [
+        "10.35.32.164"
+      ],
+      "roles": [
+        "employee",
+        "internal_employee",
+        "internal"
+      ]
+    },
+    {
+      "hostname": "internal-employee-2",
+      "ip_addresses": [
+        "10.35.35.118"
+      ],
+      "roles": [
+        "employee",
+        "internal_employee",
+        "internal"
+      ]
+    },
+    {
+      "hostname": "cloud-share",
+      "ip_addresses": [
+        "172.17.129.140"
+      ],
+      "roles": [
+        "dmz",
+        "behind_proxy",
+        "server"
+      ]
+    },
+    {
+      "hostname": "internal-employee-3",
+      "ip_addresses": [
+        "10.35.35.202"
+      ],
+      "roles": [
+        "employee",
+        "internal_employee",
+        "internal"
+      ]
+    },
+    {
+      "hostname": "monitoring",
+      "ip_addresses": [
+        "10.35.35.204"
+      ],
+      "roles": [
+        "internal",
+        "server"
+      ]
+    },
+    {
+      "hostname": "internal-employee-1",
+      "ip_addresses": [
+        "10.35.33.144"
+      ],
+      "roles": [
+        "employee",
+        "internal_employee",
+        "internal"
+      ]
+    },
+    {
+      "hostname": "intranet-server",
+      "ip_addresses": [
+        "10.35.35.206"
+      ],
+      "roles": [
+        "monitoring_agent",
+        "internal",
+        "server"
+      ]
+    },
+    {
+      "hostname": "inet-firewall",
+      "ip_addresses": [
+        "10.35.32.1",
+        "192.168.128.4",
+        "172.17.128.1"
+      ],
+      "roles": [
+        "dns_server",
+        "firewall",
+        "server"
+      ]
+    },
+    {
+      "hostname": "inet-dns",
+      "ip_addresses": [
+        "192.168.255.254"
+      ],
+      "roles": [
+        "dns_server",
+        "internet_facing"
+      ]
+    }
+  ]
+}

@@ -14,9 +14,9 @@ concept helps.
 
 ## Scope
 
-The code in `core/` and `meerkat/`, and the code that reads an incident CSV
-in particular, since that file may come from a system the user does not
-control.
+The code in `core/`, `meerkat/` and `bench/`, and the model-loading and
+export paths in particular, since they read files a user may not have
+produced. The bundled AIT alert data is a public dataset and is out of scope.
 
 ## Supported versions
 
