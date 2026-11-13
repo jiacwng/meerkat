@@ -2,6 +2,7 @@
 
 import argparse
 import contextlib
+import importlib.util
 import io
 import os
 import pickle
@@ -66,10 +67,35 @@ class RunUnpicklerTests(unittest.TestCase):
         self.assertIn("blocked", str(caught.exception))
 
 
+class RunTextStorageTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("pyarrow"), "pyarrow is not installed")
+    def test_a_run_with_arrow_text_reads_back_equal(self):
+        arrow = pd.StringDtype("pyarrow", na_value=float("nan"))
+        frame = pd.DataFrame(
+            {
+                "name": pd.array(["a", None, "c"], dtype=arrow),
+                "kind": pd.Categorical(pd.array(["u", "v", None], dtype=arrow)),
+                "count": [1, 2, 3],
+            },
+            index=pd.Index(["x", "y", "z"], dtype=arrow),
+        )
+        runs = Path(tempfile.mkdtemp())
+        directory = cli.save_run(runs, "acme-1", {}, frame, frame, frame)
+        for name in ("families.pkl", "sessions.pkl", "alerts.pkl"):
+            back = _read_run_frame(directory / name)
+            pd.testing.assert_frame_equal(
+                back, frame, check_dtype=False, check_index_type=False,
+                check_column_type=False, check_categorical=False,
+            )
+            self.assertFalse(
+                any(cli._is_arrow_text(dtype) for dtype in back.dtypes)
+            )
+
+
 class RunVersionTests(unittest.TestCase):
     def test_a_frame_this_pandas_cannot_rebuild_is_a_clean_error(self):
         path = Path(tempfile.mkdtemp()) / "families.pkl"
-        pd.DataFrame({"a": [1]}).to_pickle(path)
+        cli._python_text_frame(pd.DataFrame({"a": [1]})).to_pickle(path)
         with patch.object(pd.DataFrame, "__setstate__", side_effect=TypeError("x")):
             with self.assertRaises(ValueError) as caught:
                 _read_run_frame(path)
