@@ -1,3 +1,3 @@
-# Meerkat: a command line that ranks a SOC's open incidents.
+# Meerkat: a SOC alert-triage command line.
 
-__version__ = "2.0.0.dev0"
+__version__ = "1.3.0"

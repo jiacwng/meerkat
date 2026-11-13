@@ -1,82 +1,120 @@
-# Reads an incident CSV in GUIDE's column names into one row per incident.
+# Turns a client's incident records into training labels. A ticket says an incident
+# ran on a host between two times, not which alerts were the attack, so nothing is
+# asserted positive: every session inside an incident joins a bag and carries k/n
+# of the ticket's weight, and sessions in no bag are negatives. k/n is a bag-size
+# discount, not a probability: it keeps each ticket's total weight at k, whatever
+# its width.
+
+from __future__ import annotations
+
+import csv
+from pathlib import Path
 
 import pandas as pd
 
-REQUIRED = ("IncidentId", "Timestamp", "DetectorId")
-DESCRIPTIVE = ("AlertTitle", "Category")
-LINKS = (
-    "DeviceId", "DeviceName", "AccountObjectId", "AccountSid", "AccountUpn",
-    "AccountName", "IpAddress", "Sha256", "Url",
-)
-GRADES = ("TruePositive", "BenignPositive", "FalsePositive")
-COLUMNS = (*REQUIRED, "IncidentGrade", *DESCRIPTIVE, "MitreTechniques", *LINKS)
-SEPARATOR = "|"
+from core.inventory import Inventory
+
+# OCSF Incident Finding verdicts that mean an attack happened; "test" is a purple
+# team run, which is known-good supervision
+POSITIVE_VERDICTS = frozenset({
+    "true_positive", "security_risk", "test", "malicious",
+})
+BAG_SIZE_DISCOUNT = 1.0
+REQUIRED_COLUMNS = ("start", "end", "host", "verdict")
 
 
-class IncidentError(ValueError):
-    pass
+def _epoch_seconds(values: pd.Series, column: str, path: Path) -> pd.Series:
+    # epoch seconds or ISO 8601 only, so an ambiguous 12/01/2026 is not guessed
+    numeric = pd.to_numeric(values, errors="coerce")
+    parsed = pd.to_datetime(
+        values.where(numeric.isna()), errors="coerce", utc=True,
+        format="ISO8601",
+    )
+    seconds = (parsed - pd.Timestamp(0, tz="UTC")) / pd.Timedelta(seconds=1)
+    combined = numeric.fillna(seconds)
+    bad = combined.isna()
+    if bad.any():
+        raise ValueError(
+            f"{path} has {int(bad.sum())} row(s) whose {column} is neither "
+            "epoch seconds nor ISO 8601"
+        )
+    return combined.astype(float)
 
 
-def read_incidents(path) -> pd.DataFrame:
-    # an incident takes its time, rule, title and category from its earliest row
-    rows = _read_rows(path)
-    rows = rows.sort_values("Timestamp", kind="stable")
-    by_incident = rows.groupby("IncidentId", sort=False)
-
-    incidents = by_incident[["Timestamp", "DetectorId", *DESCRIPTIVE]].first()
-    grades = rows["IncidentGrade"].replace("", pd.NA)
-    incidents["IncidentGrade"] = grades.groupby(rows["IncidentId"]).first()
-    incidents["MitreTechniques"] = _distinct(rows, "MitreTechniques", split=";")
-    for column in LINKS:
-        incidents[column] = _distinct(rows, column)
-    return incidents.fillna("").reset_index()[list(COLUMNS)]
-
-
-def _read_rows(path) -> pd.DataFrame:
-    wanted = {*COLUMNS, "OrgId"}
-    try:
-        rows = pd.read_csv(path, dtype=str, keep_default_na=False,
-                           usecols=lambda name: name in wanted)
-    except FileNotFoundError:
-        raise IncidentError(f"{path}: no such file") from None
-    except (OSError, UnicodeDecodeError, pd.errors.ParserError,
-            pd.errors.EmptyDataError) as error:
-        raise IncidentError(f"{path}: not a readable CSV ({error})") from None
-
-    missing = [name for name in REQUIRED if name not in rows.columns]
+def load_incidents(path: Path) -> pd.DataFrame:
+    with path.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    if not rows:
+        raise ValueError(f"{path} has no incident rows")
+    missing = [c for c in REQUIRED_COLUMNS if c not in rows[0]]
     if missing:
-        raise IncidentError(f"{path}: missing column {', '.join(missing)}")
-    if rows.empty:
-        raise IncidentError(f"{path}: no incident rows")
-    if "OrgId" in rows.columns and rows["OrgId"].nunique() > 1:
-        raise IncidentError(
-            f"{path}: {rows['OrgId'].nunique()} organisations in OrgId, "
-            "a file holds one organisation")
+        raise ValueError(
+            f"{path} is missing {', '.join(missing)}; "
+            f"expected columns {', '.join(REQUIRED_COLUMNS)}"
+        )
+    frame = pd.DataFrame(rows)
+    frame["start"] = _epoch_seconds(frame["start"], "start", path)
+    frame["end"] = _epoch_seconds(frame["end"], "end", path)
+    frame["verdict"] = (
+        frame["verdict"].str.strip().str.lower().str.replace(" ", "_")
+    )
+    finite = frame["start"].notna() & frame["end"].notna()
+    finite &= frame["start"].abs().ne(float("inf")) & frame["end"].abs().ne(float("inf"))
+    if not finite.all():
+        raise ValueError(
+            f"{path} has {int((~finite).sum())} row(s) whose start or end is not "
+            "a finite number; times are epoch seconds"
+        )
+    inverted = frame["start"] > frame["end"]
+    if inverted.any():
+        raise ValueError(
+            f"{path} has {int(inverted.sum())} row(s) whose start is after its "
+            "end; check the column order"
+        )
 
-    rows = rows.reindex(columns=list(COLUMNS), fill_value="")
-    rows = rows.apply(lambda column: column.str.strip())
-    for name in REQUIRED:
-        blank = int((rows[name] == "").sum())
-        if blank:
-            raise IncidentError(f"{path}: {blank} rows have no {name}")
-    unknown = rows.loc[~rows["IncidentGrade"].isin(("", *GRADES)), "IncidentGrade"]
-    if len(unknown):
-        raise IncidentError(
-            f"{path}: IncidentGrade {unknown.iloc[0]!r} is not one of "
-            f"{', '.join(GRADES)}")
-    try:
-        times = pd.to_datetime(rows["Timestamp"], utc=True, format="ISO8601")
-    except ValueError as error:
-        raise IncidentError(f"{path}: Timestamp is not ISO 8601 ({error})") from None
-    rows["Timestamp"] = times.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    return rows
+    kept = frame[frame["verdict"].isin(POSITIVE_VERDICTS)].reset_index(drop=True)
+    if kept.empty:
+        raise ValueError(
+            f"{path} has {len(frame)} rows and none carry a verdict meaning an "
+            f"attack happened; expected one of {', '.join(sorted(POSITIVE_VERDICTS))}"
+        )
+    return kept
 
 
-def _distinct(rows: pd.DataFrame, column: str, split: str | None = None) -> pd.Series:
-    values = rows[["IncidentId", column]]
-    if split:
-        values = values.assign(**{column: values[column].str.split(split)})
-        values = values.explode(column)
-        values[column] = values[column].str.strip()
-    values = values[values[column] != ""].drop_duplicates().sort_values(column)
-    return values.groupby("IncidentId")[column].agg(SEPARATOR.join)
+def entity_for(host: str, inventory: Inventory) -> str:
+    host = str(host).strip()
+    if host in inventory.assets_by_ip:
+        return host
+    return inventory.ip_by_hostname.get(host.casefold(), "")
+
+
+def assign_bag_priors(
+    sessions: pd.DataFrame,
+    incidents: pd.DataFrame,
+    inventory: Inventory,
+) -> pd.Series:
+    prior = pd.Series(0.0, index=sessions.index, dtype=float)
+    entities = sessions["entity_id"].astype(str)
+    for row in incidents.itertuples():
+        entity = entity_for(row.host, inventory)
+        if not entity:
+            continue
+        # a burst rarely starts and ends inside the reported window, so any overlap
+        # puts a session in the bag
+        overlap = (
+            entities.eq(entity)
+            & sessions["start"].le(row.end)
+            & sessions["end"].ge(row.start)
+        )
+        count = int(overlap.sum())
+        if count:
+            candidate = BAG_SIZE_DISCOUNT / count
+            prior.loc[overlap] = prior.loc[overlap].clip(lower=candidate)
+    return prior.clip(upper=1.0)
+
+
+def unresolved_hosts(incidents: pd.DataFrame, inventory: Inventory) -> list[str]:
+    return sorted({
+        str(row.host) for row in incidents.itertuples()
+        if not entity_for(row.host, inventory)
+    })

@@ -1,0 +1,384 @@
+{
+  "company": "wilson",
+  "assets": [
+    {
+      "hostname": "remote-employee-4",
+      "ip_addresses": [
+        "192.168.227.67"
+      ],
+      "roles": [
+        "employee",
+        "internet_facing",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-1",
+      "ip_addresses": [
+        "192.168.224.189"
+      ],
+      "roles": [
+        "employee",
+        "internet_facing",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-5",
+      "ip_addresses": [
+        "192.168.225.116"
+      ],
+      "roles": [
+        "employee",
+        "internet_facing",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-6",
+      "ip_addresses": [
+        "192.168.224.233"
+      ],
+      "roles": [
+        "employee",
+        "internet_facing",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-0",
+      "ip_addresses": [
+        "192.168.226.96"
+      ],
+      "roles": [
+        "employee",
+        "internet_facing",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-3",
+      "ip_addresses": [
+        "192.168.224.143"
+      ],
+      "roles": [
+        "employee",
+        "internet_facing",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-7",
+      "ip_addresses": [
+        "192.168.225.175"
+      ],
+      "roles": [
+        "employee",
+        "internet_facing",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "remote-employee-2",
+      "ip_addresses": [
+        "192.168.224.45"
+      ],
+      "roles": [
+        "employee",
+        "internet_facing",
+        "remote_employee"
+      ]
+    },
+    {
+      "hostname": "vpn",
+      "ip_addresses": [
+        "10.182.193.78"
+      ],
+      "roles": [
+        "dmz",
+        "nat_forwarded",
+        "server"
+      ]
+    },
+    {
+      "hostname": "internal-employee-1",
+      "ip_addresses": [
+        "172.26.243.237"
+      ],
+      "roles": [
+        "employee",
+        "internal_employee",
+        "internal"
+      ]
+    },
+    {
+      "hostname": "ext-user-7",
+      "ip_addresses": [
+        "192.168.225.209"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "internal-employee-6",
+      "ip_addresses": [
+        "172.26.242.84"
+      ],
+      "roles": [
+        "employee",
+        "internal_employee",
+        "internal"
+      ]
+    },
+    {
+      "hostname": "ext-user-2",
+      "ip_addresses": [
+        "192.168.226.13"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "lane-mail",
+      "ip_addresses": [
+        "192.168.226.198"
+      ],
+      "roles": [
+        "external_mail",
+        "internet_facing",
+        "mail_server"
+      ]
+    },
+    {
+      "hostname": "internal-employee-5",
+      "ip_addresses": [
+        "172.26.241.140"
+      ],
+      "roles": [
+        "employee",
+        "internal_employee",
+        "internal"
+      ]
+    },
+    {
+      "hostname": "internal-employee-0",
+      "ip_addresses": [
+        "172.26.241.183"
+      ],
+      "roles": [
+        "employee",
+        "internal_employee",
+        "internal"
+      ]
+    },
+    {
+      "hostname": "internal-employee-2",
+      "ip_addresses": [
+        "172.26.242.89"
+      ],
+      "roles": [
+        "employee",
+        "internal_employee",
+        "internal"
+      ]
+    },
+    {
+      "hostname": "internal-employee-3",
+      "ip_addresses": [
+        "172.26.240.180"
+      ],
+      "roles": [
+        "employee",
+        "internal_employee",
+        "internal"
+      ]
+    },
+    {
+      "hostname": "internal-employee-4",
+      "ip_addresses": [
+        "172.26.243.99"
+      ],
+      "roles": [
+        "employee",
+        "internal_employee",
+        "internal"
+      ]
+    },
+    {
+      "hostname": "internal-share",
+      "ip_addresses": [
+        "172.26.240.200"
+      ],
+      "roles": [
+        "monitoring_agent",
+        "internal",
+        "server",
+        "file_share"
+      ]
+    },
+    {
+      "hostname": "ext-user-8",
+      "ip_addresses": [
+        "192.168.225.152"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "ext-user-4",
+      "ip_addresses": [
+        "192.168.224.62"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "cloud-share",
+      "ip_addresses": [
+        "10.182.194.196"
+      ],
+      "roles": [
+        "dmz",
+        "behind_proxy",
+        "server"
+      ]
+    },
+    {
+      "hostname": "webserver",
+      "ip_addresses": [
+        "10.182.194.5"
+      ],
+      "roles": [
+        "dmz",
+        "nat_forwarded",
+        "server"
+      ]
+    },
+    {
+      "hostname": "ext-user-1",
+      "ip_addresses": [
+        "192.168.227.234"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "monitoring",
+      "ip_addresses": [
+        "172.26.242.35"
+      ],
+      "roles": [
+        "internal",
+        "server"
+      ]
+    },
+    {
+      "hostname": "intranet-server",
+      "ip_addresses": [
+        "172.26.243.167"
+      ],
+      "roles": [
+        "monitoring_agent",
+        "internal",
+        "server"
+      ]
+    },
+    {
+      "hostname": "ext-user-5",
+      "ip_addresses": [
+        "192.168.224.100"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "ext-user-6",
+      "ip_addresses": [
+        "192.168.227.65"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "wilsonahmed-mail",
+      "ip_addresses": [
+        "192.168.224.185"
+      ],
+      "roles": [
+        "external_mail",
+        "internet_facing",
+        "mail_server"
+      ]
+    },
+    {
+      "hostname": "mail",
+      "ip_addresses": [
+        "10.182.193.181"
+      ],
+      "roles": [
+        "dmz",
+        "nat_forwarded",
+        "mail_server",
+        "behind_proxy",
+        "server"
+      ]
+    },
+    {
+      "hostname": "ext-user-3",
+      "ip_addresses": [
+        "192.168.226.242"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "ext-user-0",
+      "ip_addresses": [
+        "192.168.225.45"
+      ],
+      "roles": [
+        "external_user",
+        "internet_facing"
+      ]
+    },
+    {
+      "hostname": "inet-firewall",
+      "ip_addresses": [
+        "10.182.192.1",
+        "192.168.224.4",
+        "172.26.240.1"
+      ],
+      "roles": [
+        "dns_server",
+        "firewall",
+        "server"
+      ]
+    },
+    {
+      "hostname": "inet-dns",
+      "ip_addresses": [
+        "192.168.239.254"
+      ],
+      "roles": [
+        "dns_server",
+        "internet_facing"
+      ]
+    }
+  ]
+}

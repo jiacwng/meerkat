@@ -1,0 +1,144 @@
+# Turns sessions into the numeric matrix the forest reads. Entity and alert-name
+# identity never become features, so a model trained on one company cannot
+# recognise another by name.
+
+from __future__ import annotations
+
+import warnings
+from dataclasses import dataclass
+
+import numpy as np
+import pandas as pd
+
+# lives here so the read commands find it without importing sklearn
+CONTRIBUTION_PREFIX = "contribution_"
+
+SESSION_NUMERIC_FEATURES = (
+    "log_size",
+    "duration_s",
+    "alerts_per_min",
+    "severity_max",
+    "severity_mean",
+    "has_technique",
+    "in_inventory",
+    "detectors_on_entity",
+    "groups_on_entity",
+    "log_alerts_on_entity",
+)
+HOST_VOLUME_FEATURES = ("detectors_on_entity", "groups_on_entity", "log_alerts_on_entity")
+SUPPORTED_DETECTOR_ORDER = ("wazuh", "suricata", "aminer")
+SCHEMA_INDEX_NAMES = ("detector_source", "rule_id")
+
+_UNSCALED_DETECTORS_WARNED: set[str] = set()
+
+
+@dataclass(frozen=True)
+class SessionFeatureSchema:
+    rule_counts: pd.Series          # alerts per rule, counted on training data
+    detectors: tuple[str, ...]      # one column each, in a fixed order
+    roles: tuple[str, ...]          # asset roles from the customer inventory
+
+    @property
+    def feature_names(self) -> tuple[str, ...]:
+        detector_columns = tuple(f"detector_{name}" for name in self.detectors)
+        role_columns = tuple(f"role_{name}" for name in self.roles)
+        return (
+            SESSION_NUMERIC_FEATURES
+            + detector_columns
+            + ("log_rarity", "is_unseen_rule")
+            + role_columns
+        )
+
+
+def standardize_severity(
+    detector_source: pd.Series,
+    severity: pd.Series,
+) -> pd.Series:
+    # wazuh rises 0-15, suricata falls 1-3, aminer has no severity at all and
+    # takes the midpoint, since scoring it zero would rank a whole detector last
+    standardized = pd.Series(0.5, index=severity.index, dtype=float)
+    wazuh = detector_source.eq("wazuh")
+    suricata = detector_source.eq("suricata")
+    standardized[wazuh] = (severity[wazuh] / 15.0).clip(0, 1)
+    standardized[suricata] = ((4.0 - severity[suricata]) / 3.0).clip(0, 1)
+    unscaled = {
+        str(name)
+        for name in detector_source[~(wazuh | suricata)].unique()
+        if not pd.isna(name)
+    } - set(SUPPORTED_DETECTOR_ORDER) - _UNSCALED_DETECTORS_WARNED
+    for detector in sorted(unscaled):
+        _UNSCALED_DETECTORS_WARNED.add(detector)
+        warnings.warn(
+            f"detector {detector!r} has no severity scale in standardize_severity, "
+            "so all of its alerts score 0.5",
+            stacklevel=2,
+        )
+    return standardized
+
+
+def fit_session_feature_schema(sessions: pd.DataFrame) -> SessionFeatureSchema:
+    counts: dict[tuple[str, str], int] = {}
+    for pairs in sessions["pair_counts"]:
+        for pair, count in pairs:
+            counts[pair] = counts.get(pair, 0) + count
+    index = (
+        pd.MultiIndex.from_tuples(list(counts), names=SCHEMA_INDEX_NAMES) if counts
+        else pd.MultiIndex.from_arrays([[], []], names=SCHEMA_INDEX_NAMES)
+    )
+    rule_counts = pd.Series(list(counts.values()), index=index, dtype="int64")
+    seen_detectors = {detector for detector, _ in counts}
+    detectors = tuple(
+        detector
+        for detector in SUPPORTED_DETECTOR_ORDER
+        if detector in seen_detectors
+    ) + tuple(sorted(seen_detectors - set(SUPPORTED_DETECTOR_ORDER)))
+    roles = tuple(sorted({
+        role
+        for configured_roles in sessions["configured_roles"]
+        for role in configured_roles
+    }))
+    return SessionFeatureSchema(rule_counts, detectors, roles)
+
+
+# a host's volume is read as its rank among the rows of the same day, so the
+# feature does not depend on how busy the whole network is
+def rank_host_volume(X: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
+    days = [table["scenario"].astype(str).to_numpy(), table["day"].to_numpy()]
+    for name in HOST_VOLUME_FEATURES:
+        X[name] = X[name].groupby(days).rank(pct=True)
+    return X
+
+
+def build_session_feature_matrix(
+    sessions: pd.DataFrame,
+    schema: SessionFeatureSchema,
+) -> pd.DataFrame:
+    X = rank_host_volume(sessions[list(SESSION_NUMERIC_FEATURES)].astype(float).copy(), sessions)
+    known = schema.rule_counts.to_dict()
+    shares = {detector: np.zeros(len(sessions)) for detector in schema.detectors}
+    rarity = np.zeros(len(sessions))
+    unseen = np.zeros(len(sessions))
+    for row, pairs in enumerate(sessions["pair_counts"]):
+        total = float(sum(count for _, count in pairs)) or 1.0
+        for pair, count in pairs:
+            weight = count / total
+            if pair[0] in shares:
+                shares[pair[0]][row] += weight
+            # a rule missing from training is unseen, not merely quiet, so it gets
+            # its own flag rather than a count of zero
+            if pair in known:
+                rarity[row] -= weight * np.log1p(float(known[pair]))
+            else:
+                unseen[row] += weight
+
+    for detector in schema.detectors:
+        X[f"detector_{detector}"] = shares[detector]
+    X["log_rarity"] = rarity
+    X["is_unseen_rule"] = unseen
+
+    for role in schema.roles:
+        X[f"role_{role}"] = sessions["asset_roles"].map(
+            lambda asset_roles: float(role in asset_roles)
+        )
+
+    return X.loc[:, list(schema.feature_names)]
