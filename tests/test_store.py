@@ -51,19 +51,48 @@ class StoreTests(unittest.TestCase):
     def test_latest_review_wins_over_the_file_and_over_earlier_reviews(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv")
         self.assertEqual(self._grade_of("200"), "")
-        store.append_grade(self.runs_dir, "200", "FalsePositive", "")
-        store.append_grade(self.runs_dir, "200", "TruePositive", "second look, real")
-        store.append_grade(self.runs_dir, "102", "TruePositive", "")
+        store.append_grade(self.runs_dir, "200", "FalsePositive", "", 0.5, "queue")
+        store.append_grade(self.runs_dir, "200", "TruePositive", "second look, real",
+                           0.5, "queue")
+        store.append_grade(self.runs_dir, "102", "TruePositive", "", 0.5, "queue")
         self.assertEqual(self._grade_of("200"), "TruePositive")
         self.assertEqual(self._grade_of("102"), "TruePositive")
         self.assertEqual(self._grade_of("103"), "FalsePositive")
 
     def test_notes_with_commas_quotes_and_newlines_survive(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv")
-        store.append_grade(self.runs_dir, "200", "TruePositive", 'a, "b"\nc')
-        store.append_grade(self.runs_dir, "201", "BenignPositive", "")
+        store.append_grade(self.runs_dir, "200", "TruePositive", 'a, "b"\nc', 0.5, "queue")
+        store.append_grade(self.runs_dir, "201", "BenignPositive", "", 0.5, "queue")
         self.assertEqual(self._grade_of("200"), "TruePositive")
         self.assertEqual(self._grade_of("201"), "BenignPositive")
+
+    def test_a_review_stores_the_score_and_pile_it_had(self):
+        store.save_run(self.runs_dir, self.incidents, "a.csv")
+        self.assertTrue(store.read_reviews(self.runs_dir).empty)
+        store.append_grade(self.runs_dir, "200", "TruePositive", "", 0.123456789, "audit")
+        header = (self.runs_dir / store.GRADES_FILE).read_text().splitlines()[0]
+        self.assertEqual(header, "time,IncidentId,grade,note,score,pile")
+        reviews = store.read_reviews(self.runs_dir)
+        self.assertEqual(reviews["score"].tolist(), [0.123456789])
+        self.assertEqual(reviews["pile"].tolist(), ["audit"])
+
+    def test_grades_with_missing_columns_a_bad_score_or_a_bad_pile_are_refused(self):
+        store.save_run(self.runs_dir, self.incidents, "a.csv")
+        head = "time,IncidentId,grade,note"
+        cases = (
+            (f"{head}\nt,200,TruePositive,\n", "expected columns"),
+            (f"{head},score,pile\nt,200,TruePositive,,high,queue\n", "not a number"),
+            (f"{head},score,pile\nt,200,TruePositive,,,queue\n", "not a number"),
+            (f"{head},score,pile\nt,200,TruePositive,,0.5,later\n", "not one of"),
+            (f"{head},score,pile\nt,200,TruePositive,,0.5,\n", "not one of"),
+        )
+        for text, message in cases:
+            with self.subTest(text):
+                (self.runs_dir / store.GRADES_FILE).write_text(text)
+                for read in (store.read_reviews, store.load_run, store.load_history):
+                    with self.assertRaisesRegex(store.StoreError, message) as raised:
+                        read(self.runs_dir)
+                    self.assertNotIn("\n", str(raised.exception))
 
     def test_history_joins_runs_and_keeps_the_latest_copy(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv")
