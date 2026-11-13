@@ -48,7 +48,9 @@ def _build_parser() -> argparse.ArgumentParser:
     shown = queue.add_mutually_exclusive_group()
     shown.add_argument("--limit", type=_positive, default=DEFAULT_LIMIT, metavar="N",
                        help=f"rows shown (default {DEFAULT_LIMIT})")
-    shown.add_argument("--all", action="store_true", help="every ungraded incident")
+    shown.add_argument("--all", action="store_true", help="every row instead of the first N")
+    queue.add_argument("--closed", action="store_true",
+                       help="incidents under the close level instead of the queue")
     _add_run(queue)
     _add_json(queue)
     _add_runs_dir(queue)
@@ -102,7 +104,7 @@ def _positive(text: str) -> int:
 
 
 def _queue(args: argparse.Namespace) -> None:
-    from core import rank, store
+    from core import close, store
     from core.incidents import read_incidents
 
     if args.file is not None:
@@ -112,45 +114,81 @@ def _queue(args: argparse.Namespace) -> None:
         meta, incidents = store.load_run(args.runs_dir, args.run)
 
     # the rule's past rate comes from every run, the rows shown from this one
-    scored = rank.score(store.load_history(args.runs_dir))
+    scored, level, entries = _scored(args.runs_dir)
     in_run = scored["IncidentId"].isin(incidents["IncidentId"])
     open_incidents = scored[in_run & (scored["IncidentGrade"] == "")]
-    shown = open_incidents if args.all else open_incidents.head(args.limit)
+    closed = open_incidents[open_incidents["pile"] == "closed"]
+    audit = open_incidents[open_incidents["pile"] == "audit"]
+    if args.closed:
+        listed = closed
+    else:
+        listed = open_incidents[open_incidents["pile"] != "closed"]
+    shown = listed if args.all else listed.head(args.limit)
 
     if args.json:
         rows = [_as_record(row, position)
                 for position, row in enumerate(shown.to_dict("records"), start=1)]
-        _print_json({"run": meta["run"], "open": len(open_incidents), "queue": rows})
+        _print_json({
+            "run": meta["run"], "open": len(open_incidents), "closed": len(closed),
+            "audit": len(audit), "close_level": level, "miss_rate": close.MISS_RATE,
+            "audit_share": close.AUDIT_SHARE, "queue": rows})
         return
 
     if open_incidents.empty:
         print(f"No open incidents in run {meta['run']}.")
         return
-    rows = [
-        (str(position), row["IncidentId"], f"{row['score']:.2f}", row["DetectorId"],
-         _rule_history(row), row["Timestamp"], row["AlertTitle"])
-        for position, row in enumerate(shown.to_dict("records"), start=1)]
-    _print_table(
-        ("#", "incident", "score", "rule", "rule history", "time", "title"), rows)
-    print(f"{len(shown)} of {len(open_incidents)} open incidents, run {meta['run']}")
+    if not listed.empty:
+        rows = [
+            (str(position), row["IncidentId"], f"{row['score']:.2f}",
+             "audit" if row["pile"] == "audit" else "", row["DetectorId"],
+             _rule_history(row), row["Timestamp"], row["AlertTitle"])
+            for position, row in enumerate(shown.to_dict("records"), start=1)]
+        _print_table(("#", "incident", "score", "pile", "rule", "rule history", "time",
+                      "title"), rows)
+        print(f"{len(shown)} of {len(listed)} open incidents, run {meta['run']}")
+    if level is None:
+        print(f"Nothing closed yet: {len(entries)} of {close.needed()} "
+              "graded true positives.")
+    else:
+        print(f"{len(closed)} more are under the close level "
+              f"(at most {close.MISS_RATE:.0%} of true positives). "
+              f"{len(audit)} others under it are above as audit.")
 
 
 def _review(args: argparse.Namespace) -> None:
-    from core import store
+    from core import close, store
 
-    history = store.load_history(args.runs_dir)
-    if args.incident not in set(history["IncidentId"]):
+    scored, level, _ = _scored(args.runs_dir)
+    found = scored[scored["IncidentId"] == args.incident]
+    if found.empty:
         raise store.StoreError(f"no incident {args.incident!r} in {args.runs_dir}")
+    reviews = store.read_reviews(args.runs_dir)
+    earlier = reviews[reviews["IncidentId"] == args.incident]
+    if earlier.empty:
+        score = float(found["score"].iloc[0])
+        pile = close.pile_of(args.incident, score, level)
+    else:
+        score, pile = float(earlier["score"].iloc[0]), earlier["pile"].iloc[0]
     grade = GRADE_CODES[args.grade]
-    store.append_grade(args.runs_dir, args.incident, grade, args.note)
+    store.append_grade(args.runs_dir, args.incident, grade, args.note, score, pile)
     print(f"{_printable(args.incident)} graded {grade}")
 
 
+def _scored(runs_dir: Path):
+    from core import close, rank, store
+
+    reviews = store.read_reviews(runs_dir)
+    entries = close.calibration(reviews)
+    level = close.close_level(entries)
+    scored = rank.score(store.load_history(runs_dir))
+    return close.place(scored, reviews, level), level, entries
+
+
 def _inspect(args: argparse.Namespace) -> None:
-    from core import rank, store
+    from core import store
     from core.incidents import DESCRIPTIVE, LINKS, SEPARATOR
 
-    scored = rank.score(store.load_history(args.runs_dir))
+    scored, _, _ = _scored(args.runs_dir)
     if args.run is not None:
         _, in_run = store.load_run(args.runs_dir, args.run)
         scored = scored[scored["IncidentId"].isin(in_run["IncidentId"])]
@@ -174,6 +212,7 @@ def _inspect(args: argparse.Namespace) -> None:
         ("MitreTechniques", row["MitreTechniques"].replace(SEPARATOR, ", ")),
         ("grade", row["IncidentGrade"] or "open"),
         ("score", f"{row['score']:.2f}"),
+        ("pile", row["pile"]),
         ("rule history", _rule_history(row)),
         *((name, row[name].replace(SEPARATOR, ", ")) for name in LINKS),
     ]

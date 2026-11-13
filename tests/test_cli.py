@@ -1,6 +1,7 @@
 # The four commands end to end, through main(), on a temporary runs directory.
 
 import contextlib
+import csv
 import io
 import json
 import subprocess
@@ -11,7 +12,7 @@ from pathlib import Path
 
 from meerkat import __version__
 from meerkat.cli import main
-from tests.fixtures import HEADER, ROWS, write_csv
+from tests.fixtures import HEADER, ROWS, calibration_rows, sampled_ids, write_csv
 
 
 class CliTests(unittest.TestCase):
@@ -44,6 +45,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("2 of 2 true positive", lines[1])
         self.assertIn("never graded", lines[2])
         self.assertIn("3 of 3 open incidents", lines[4])
+        self.assertEqual(lines[5], "Nothing closed yet: 0 of 19 graded true positives.")
         self.assertNotIn("100", [line.split()[1] for line in lines[1:4]])
 
     def test_queue_without_a_file_reopens_the_latest_run(self):
@@ -192,6 +194,131 @@ class CliTests(unittest.TestCase):
         code, _, err = self._run("inspect", "\x1b[2Jx")
         self.assertEqual(code, 1)
         self.assertNotIn("\x1b", err)
+
+    def _calibrate(self, audit: int, closed: int, graded: int = 19) -> None:
+        rows = calibration_rows(audit, closed)
+        self._run("queue", str(write_csv(self.tmp / "many.csv", rows)))
+        for number in range(graded):
+            self.assertEqual(self._run("review", f"t{number}", "tp")[0], 0)
+
+    def _queue_json(self, *argv: str) -> dict:
+        return json.loads(self._run("queue", "--json", *argv)[1])
+
+    def test_footer_without_a_level_counts_toward_the_needed_true_positives(self):
+        self._calibrate(2, 2, graded=18)
+        code, out, _ = self._run("queue")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[-1],
+                         "Nothing closed yet: 18 of 19 graded true positives.")
+        self.assertEqual(out.splitlines()[0].split()[:4], ["#", "incident", "score", "pile"])
+        report = self._queue_json()
+        self.assertEqual((report["closed"], report["audit"], report["close_level"]),
+                         (0, 0, None))
+        self.assertEqual(report["open"], 6)
+
+    def test_footer_with_a_level_and_the_audit_rows(self):
+        self._calibrate(3, 2)
+        audit_ids, closed_ids = sampled_ids(True, 3), sampled_ids(False, 2)
+        code, out, _ = self._run("queue")
+        lines = out.splitlines()
+        self.assertEqual(
+            lines[-1], "2 more are under the close level (at most 5% of true positives). "
+                       "3 others under it are above as audit.")
+        self.assertIn("4 of 4 open incidents", lines[-2])
+        shown = {line.split()[1]: line.split() for line in lines[1:-2]}
+        self.assertEqual(set(shown), {"t19", *audit_ids})
+        self.assertNotIn("audit", shown["t19"])
+        for incident in audit_ids:
+            self.assertEqual(shown[incident][3], "audit")
+        self.assertFalse(set(closed_ids) & set(shown))
+
+    def test_json_reports_the_level_and_the_pile_of_each_row(self):
+        self._calibrate(3, 2)
+        report = self._queue_json()
+        self.assertEqual(
+            {key: report[key] for key in
+             ("open", "closed", "audit", "close_level", "miss_rate", "audit_share")},
+            {"open": 6, "closed": 2, "audit": 3, "close_level": 0.5,
+             "miss_rate": 0.05, "audit_share": 0.1})
+        self.assertEqual(sorted(row["pile"] for row in report["queue"]),
+                         ["audit", "audit", "audit", "queue"])
+        closed = self._queue_json("--closed")
+        self.assertEqual({row["pile"] for row in closed["queue"]}, {"closed"})
+        self.assertEqual({row["IncidentId"] for row in closed["queue"]},
+                         set(sampled_ids(False, 2)))
+        self.assertEqual(closed["open"], 6)
+
+    def test_closed_lists_the_pile_with_limit_and_all(self):
+        self._calibrate(0, 3)
+        code, out, _ = self._run("queue", "--closed", "--limit", "2")
+        lines = out.splitlines()
+        self.assertEqual(lines[0].split()[:4], ["#", "incident", "score", "pile"])
+        self.assertEqual(len(lines), 5)
+        self.assertIn("2 of 3 open incidents", lines[3])
+        self.assertEqual(len(self._queue_json("--closed", "--all")["queue"]), 3)
+        self.assertEqual(len(self._queue_json("--closed", "--limit", "1")["queue"]), 1)
+
+    def test_an_empty_queue_with_closed_incidents_prints_the_footer_only(self):
+        self._calibrate(0, 3)
+        self._run("review", "t19", "tp")
+        code, out, _ = self._run("queue")
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            out, "3 more are under the close level (at most 5% of true positives). "
+                 "0 others under it are above as audit.\n")
+
+    def test_no_open_incident_at_all_keeps_the_old_message(self):
+        self._calibrate(0, 0)
+        self._run("review", "t19", "tp")
+        run = json.loads(self._run("runs", "--json")[1])[0]["run"]
+        self.assertEqual(self._run("queue")[1], f"No open incidents in run {run}.\n")
+
+    def test_review_records_the_score_and_pile_and_a_regrade_keeps_them(self):
+        self._calibrate(3, 2)
+        audit_id = sampled_ids(True, 1)[0]
+        score = json.loads(self._run("inspect", audit_id, "--json")[1])["score"]
+        self._run("review", audit_id, "bp")
+        self._run("review", "t19", "fp")
+        self._run("review", audit_id, "tp")
+        with (self.runs_dir / "grades.csv").open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        mine = [row for row in rows if row["IncidentId"] == audit_id]
+        self.assertEqual([row["grade"] for row in mine], ["BenignPositive", "TruePositive"])
+        self.assertEqual({row["pile"] for row in mine}, {"audit"})
+        self.assertEqual({round(float(row["score"]), 4) for row in mine}, {score})
+        last = next(row for row in rows if row["IncidentId"] == "t19")
+        self.assertEqual(last["pile"], "queue")
+        # a true positive found in the audit weighs 10 and takes the level away
+        report = self._queue_json()
+        self.assertIsNone(report["close_level"])
+        self.assertEqual((report["closed"], report["audit"]), (0, 0))
+
+    def test_a_graded_incident_shows_the_pile_of_its_grade_row(self):
+        self._calibrate(3, 2)
+        audit_id = sampled_ids(True, 1)[0]
+        self._run("review", audit_id, "fp")
+        code, out, _ = self._run("inspect", audit_id)
+        self.assertRegex(out, r"grade\s+FalsePositive\n")
+        self.assertRegex(out, r"pile\s+audit\n")
+        self.assertEqual(json.loads(self._run("inspect", audit_id, "--json")[1])["pile"],
+                         "audit")
+        self.assertEqual(json.loads(self._run("inspect", "t0", "--json")[1])["pile"],
+                         "queue")
+        closed_id = sampled_ids(False, 1)[0]
+        self.assertRegex(self._run("inspect", closed_id)[1], r"score\s+0\.\d\d\npile\s+closed\n")
+        self.assertEqual(json.loads(self._run("inspect", closed_id, "--json")[1])["pile"],
+                         "closed")
+
+    def test_a_grades_file_without_the_new_columns_is_refused(self):
+        self._run("queue", str(self.csv))
+        self.runs_dir.joinpath("grades.csv").write_text(
+            "time,IncidentId,grade,note\nt,200,TruePositive,\n")
+        for argv in (("queue",), ("review", "201", "tp"), ("inspect", "200")):
+            with self.subTest(argv):
+                code, out, err = self._run(*argv)
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn("expected columns", err)
+                self.assertEqual(err.count("\n"), 1)
 
     def test_version_and_help_do_not_load_pandas(self):
         code = ("import sys; from meerkat.cli import main\n"

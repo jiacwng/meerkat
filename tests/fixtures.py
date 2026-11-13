@@ -1,6 +1,7 @@
 # A small incident CSV in GUIDE's column names, shared by the tests.
 
 import csv
+import hashlib
 from pathlib import Path
 
 HEADER = (
@@ -27,6 +28,38 @@ ROWS = (
     ("1", "202", "a8", "2024-06-05T14:00:00.000Z", "42", "New rule",
      "Discovery", "", "", "frank", ""),
 )
+
+
+def plain_row(incident_id: str, rule: str, grade: str = "") -> tuple:
+    return ("1", incident_id, f"a{incident_id}", "2024-06-10T00:00:00Z", rule, "Title",
+            "Category", "", grade, "", "")
+
+
+# written out here again so that a change to the sampling rule fails a test
+def is_sampled(incident_id: str) -> bool:
+    digest = hashlib.sha256(incident_id.encode()).hexdigest()
+    return int(digest[:8], 16) / 2**32 < 0.10
+
+
+def sampled_ids(sampled: bool, count: int) -> list[str]:
+    found = []
+    number = 0
+    while len(found) < count:
+        number += 1
+        if is_sampled(f"o{number}") == sampled:
+            found.append(f"o{number}")
+    return found
+
+
+# rule 3 has 20 true positives and rule 9 has 20 false positives, so a rule 9 incident
+# scores about 0.13; 20 ungraded rule 7 incidents t0 to t19 are there to be graded
+def calibration_rows(audit: int, closed: int) -> tuple:
+    rows = [plain_row(f"p{i}", "3", "TruePositive") for i in range(20)]
+    rows += [plain_row(f"f{i}", "9", "FalsePositive") for i in range(20)]
+    rows += [plain_row(f"t{i}", "7") for i in range(20)]
+    rows += [plain_row(i, "9") for i in sampled_ids(True, audit)]
+    rows += [plain_row(i, "9") for i in sampled_ids(False, closed)]
+    return tuple(rows)
 
 
 def write_csv(path: Path, rows=ROWS, header=HEADER) -> Path:

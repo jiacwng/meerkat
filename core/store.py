@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pandas as pd
 
+from core.close import PILES
+
 GRADES_FILE = "grades.csv"
-GRADE_COLUMNS = ("time", "IncidentId", "grade", "note")
+GRADE_COLUMNS = ("time", "IncidentId", "grade", "note", "score", "pile")
 
 
 class StoreError(ValueError):
@@ -80,7 +82,8 @@ def load_history(runs_dir: Path) -> pd.DataFrame:
     return _apply_grades(runs_dir, history.reset_index(drop=True))
 
 
-def append_grade(runs_dir: Path, incident_id: str, grade: str, note: str) -> None:
+def append_grade(runs_dir: Path, incident_id: str, grade: str, note: str,
+                 score: float, pile: str) -> None:
     grades_file = runs_dir / GRADES_FILE
     is_new = not grades_file.exists()
     with grades_file.open("a", newline="", encoding="utf-8") as handle:
@@ -88,7 +91,27 @@ def append_grade(runs_dir: Path, incident_id: str, grade: str, note: str) -> Non
         if is_new:
             writer.writerow(GRADE_COLUMNS)
         now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        writer.writerow((now, incident_id, grade, note))
+        writer.writerow((now, incident_id, grade, note, repr(score), pile))
+
+
+def read_reviews(runs_dir: Path) -> pd.DataFrame:
+    grades_file = runs_dir / GRADES_FILE
+    if not grades_file.exists():
+        empty = pd.DataFrame({name: [] for name in GRADE_COLUMNS})
+        return empty.astype({"score": float})
+    reviews = _read_csv(grades_file)
+    if list(reviews.columns) != list(GRADE_COLUMNS):
+        raise StoreError(f"{grades_file}: expected columns {', '.join(GRADE_COLUMNS)}")
+    scores = pd.to_numeric(reviews["score"], errors="coerce")
+    scores = scores.where(scores.abs() != float("inf"))
+    bad_scores = reviews.loc[scores.isna(), "score"]
+    if len(bad_scores):
+        raise StoreError(f"{grades_file}: score {bad_scores.iloc[0]!r} is not a number")
+    bad_piles = reviews.loc[~reviews["pile"].isin(PILES), "pile"]
+    if len(bad_piles):
+        raise StoreError(
+            f"{grades_file}: pile {bad_piles.iloc[0]!r} is not one of {', '.join(PILES)}")
+    return reviews.assign(score=scores)
 
 
 def _read_run(runs_dir: Path, run_id: str) -> pd.DataFrame:
@@ -103,12 +126,9 @@ def _read_csv(path: Path) -> pd.DataFrame:
 
 
 def _apply_grades(runs_dir: Path, incidents: pd.DataFrame) -> pd.DataFrame:
-    grades_file = runs_dir / GRADES_FILE
-    if not grades_file.exists():
+    reviews = read_reviews(runs_dir)
+    if reviews.empty:
         return incidents
-    reviews = _read_csv(grades_file)
-    if list(reviews.columns) != list(GRADE_COLUMNS):
-        raise StoreError(f"{grades_file}: expected columns {', '.join(GRADE_COLUMNS)}")
     reviews = reviews.drop_duplicates("IncidentId", keep="last")
     latest = incidents["IncidentId"].map(reviews.set_index("IncidentId")["grade"])
     return incidents.assign(IncidentGrade=latest.fillna(incidents["IncidentGrade"]))
