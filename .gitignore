@@ -1,20 +1,12 @@
-# ============================================================
-# Data — raw AIT-ADS downloads stay local. NOTICE records what the
-# repository ships and how to attribute it.
-# ============================================================
-
 # local
-*.pkl
 project_local/
 local/
 *.local.md
 paper/
+docs/
 runs/
-# holds the indexer password for `meerkat pull`; never commit it
-meerkat.toml
-# ============================================================
+
 # Python
-# ============================================================
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -34,14 +26,3 @@ env/
 Thumbs.db
 .idea/
 .vscode/
-
-docs/report/meerkat.tex
-
-# experiment harnesses for the milestone studies; they exercise scripts in
-# project_local/, which is not published, so they cannot run from a clone
-tests/test_m8_*.py
-# only the demo company ships; the other seven stay local
-data/raw/*
-!data/raw/russellmitchell_wazuh.json
-!data/raw/russellmitchell_aminer.json
-!data/raw/inventory/
