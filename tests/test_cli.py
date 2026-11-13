@@ -12,7 +12,14 @@ from pathlib import Path
 
 from meerkat import __version__
 from meerkat.cli import main
-from tests.fixtures import HEADER, ROWS, calibration_rows, sampled_ids, write_csv
+from tests.fixtures import (
+    HEADER,
+    ROWS,
+    calibration_rows,
+    plain_row,
+    sampled_ids,
+    write_csv,
+)
 
 
 class CliTests(unittest.TestCase):
@@ -45,7 +52,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("2 of 2 true positive", lines[1])
         self.assertIn("never graded", lines[2])
         self.assertIn("3 of 3 open incidents", lines[4])
-        self.assertEqual(lines[5], "Nothing closed yet: 0 of 19 graded true positives.")
+        self.assertEqual(lines[5], "Nothing closed yet: 2 of 19 graded true positives.")
         self.assertNotIn("100", [line.split()[1] for line in lines[1:4]])
 
     def test_queue_without_a_file_reopens_the_latest_run(self):
@@ -205,16 +212,32 @@ class CliTests(unittest.TestCase):
         return json.loads(self._run("queue", "--json", *argv)[1])
 
     def test_footer_without_a_level_counts_toward_the_needed_true_positives(self):
-        self._calibrate(2, 2, graded=18)
-        code, out, _ = self._run("queue")
+        code, out, _ = self._run("queue", str(self.csv))
         self.assertEqual(code, 0)
         self.assertEqual(out.splitlines()[-1],
-                         "Nothing closed yet: 18 of 19 graded true positives.")
+                         "Nothing closed yet: 2 of 19 graded true positives.")
+        self._calibrate(2, 2, graded=0)
+        self.assertEqual(self._run("queue")[1].splitlines()[-1],
+                         "Nothing closed: too many graded true positives share the lowest score.")
         self.assertEqual(out.splitlines()[0].split()[:4], ["#", "incident", "score", "pile"])
         report = self._queue_json()
         self.assertEqual((report["closed"], report["audit"], report["close_level"]),
                          (0, 0, None))
-        self.assertEqual(report["open"], 6)
+        self.assertEqual(report["open"], 24)
+
+    def test_graded_history_in_the_file_closes_incidents_without_a_review(self):
+        closed_id = sampled_ids(False, 1)[0]
+        rows = [plain_row(f"p{i}", "3", "TruePositive") for i in range(19)]
+        rows += [plain_row("q0", "1", "TruePositive")]
+        rows += [plain_row(f"q{i}", "1", "FalsePositive") for i in range(1, 5)]
+        rows += [plain_row(f"f{i}", "5", "FalsePositive") for i in range(10)]
+        rows += [plain_row("keep", "1"), plain_row(closed_id, "5")]
+        self._run("queue", str(write_csv(self.tmp / "graded.csv", rows)))
+        report = self._queue_json("--closed")
+        self.assertIsNotNone(report["close_level"])
+        self.assertEqual([row["IncidentId"] for row in report["queue"]], [closed_id])
+        self.assertEqual([row["IncidentId"] for row in self._queue_json()["queue"]], ["keep"])
+        self.assertFalse((self.runs_dir / "grades.csv").exists())
 
     def test_footer_with_a_level_and_the_audit_rows(self):
         self._calibrate(3, 2)
@@ -235,11 +258,11 @@ class CliTests(unittest.TestCase):
     def test_json_reports_the_level_and_the_pile_of_each_row(self):
         self._calibrate(3, 2)
         report = self._queue_json()
+        self.assertAlmostEqual(report["close_level"], 0.5935, places=4)
         self.assertEqual(
             {key: report[key] for key in
-             ("open", "closed", "audit", "close_level", "miss_rate", "audit_share")},
-            {"open": 6, "closed": 2, "audit": 3, "close_level": 0.5,
-             "miss_rate": 0.05, "audit_share": 0.1})
+             ("open", "closed", "audit", "miss_rate", "audit_share")},
+            {"open": 6, "closed": 2, "audit": 3, "miss_rate": 0.05, "audit_share": 0.1})
         self.assertEqual(sorted(row["pile"] for row in report["queue"]),
                          ["audit", "audit", "audit", "queue"])
         closed = self._queue_json("--closed")

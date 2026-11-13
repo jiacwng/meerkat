@@ -146,7 +146,9 @@ def _queue(args: argparse.Namespace) -> None:
         _print_table(("#", "incident", "score", "pile", "rule", "rule history", "time",
                       "title"), rows)
         print(f"{len(shown)} of {len(listed)} open incidents, run {meta['run']}")
-    if level is None:
+    if level is None and len(entries) >= close.needed():
+        print("Nothing closed: too many graded true positives share the lowest score.")
+    elif level is None:
         print(f"Nothing closed yet: {len(entries)} of {close.needed()} "
               "graded true positives.")
     else:
@@ -178,9 +180,9 @@ def _scored(runs_dir: Path):
     from core import close, rank, store
 
     reviews = store.read_reviews(runs_dir)
-    entries = close.calibration(reviews)
-    level = close.close_level(entries)
     scored = rank.score(store.load_history(runs_dir))
+    entries = close.calibration(scored, reviews)
+    level = close.close_level(entries)
     return close.place(scored, reviews, level), level, entries
 
 
