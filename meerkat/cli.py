@@ -322,6 +322,34 @@ def _read_run_frame(path: Path) -> pd.DataFrame:
         ) from error
 
 
+def _python_text() -> pd.StringDtype:
+    return pd.StringDtype("python", na_value=np.nan)
+
+
+def _is_arrow_text(dtype) -> bool:
+    return isinstance(dtype, pd.StringDtype) and dtype.storage.startswith("pyarrow")
+
+
+def _python_text_index(index: pd.Index) -> pd.Index:
+    if _is_arrow_text(index.dtype):
+        return index.astype(_python_text())
+    return index
+
+
+def _python_text_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    frame = frame.copy()
+    for position, dtype in enumerate(frame.dtypes):
+        column = frame.iloc[:, position]
+        if isinstance(dtype, pd.CategoricalDtype):
+            categories = _python_text_index(dtype.categories)
+            frame.isetitem(position, column.cat.rename_categories(categories))
+        elif _is_arrow_text(dtype):
+            frame.isetitem(position, column.astype(_python_text()))
+    frame.index = _python_text_index(frame.index)
+    frame.columns = _python_text_index(frame.columns)
+    return frame
+
+
 def save_run(
     runs_dir: Path,
     run_id: str,
@@ -336,9 +364,9 @@ def save_run(
         suffix += 1
         directory = runs_dir / f"{run_id}-{suffix}"
     directory.mkdir(parents=True, exist_ok=True)
-    families.to_pickle(directory / "families.pkl")
-    sessions.to_pickle(directory / "sessions.pkl")
-    alerts.to_pickle(directory / "alerts.pkl")
+    _python_text_frame(families).to_pickle(directory / "families.pkl")
+    _python_text_frame(sessions).to_pickle(directory / "sessions.pkl")
+    _python_text_frame(alerts).to_pickle(directory / "alerts.pkl")
     (directory / "run.json").write_text(
         json.dumps({**meta, "run_id": run_id, "saved_at": _now_iso()}, indent=2),
         encoding="utf-8",
