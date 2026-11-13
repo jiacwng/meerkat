@@ -4,8 +4,9 @@ import unittest
 
 import pandas as pd
 
-from core import close, store
-from tests.fixtures import is_sampled, sampled_ids
+from core import close, rank, store
+from core.rank import EMPTY_BASE
+from tests.fixtures import HEADER, is_sampled, plain_row, sampled_ids
 
 
 def _reviews(*rows: tuple) -> pd.DataFrame:
@@ -16,8 +17,13 @@ def _tp(name: str, score: float, pile: str = "queue") -> tuple:
     return ("t", name, "TruePositive", "", score, pile)
 
 
+def _history(*graded: tuple[str, str, str]) -> pd.DataFrame:
+    rows = [plain_row(name, rule, grade) for name, rule, grade in graded]
+    return rank.score(pd.DataFrame(rows, columns=HEADER))
+
+
 def _level(*rows: tuple) -> float | None:
-    return close.close_level(close.calibration(_reviews(*rows)))
+    return close.close_level(close.calibration(_history(), _reviews(*rows)))
 
 
 class LevelTests(unittest.TestCase):
@@ -53,7 +59,41 @@ class LevelTests(unittest.TestCase):
         self.assertEqual(_level(*rows, _tp("closed", 0.1, "closed")), 1.0)
         regraded = [*rows, ("t", "0", "FalsePositive", "", 1.0, "queue")]
         self.assertIsNone(_level(*regraded))
-        self.assertEqual(len(close.calibration(_reviews(*regraded))), 18)
+        self.assertEqual(len(close.calibration(_history(), _reviews(*regraded))), 18)
+
+
+class ImportedGradeTests(unittest.TestCase):
+    def test_leave_one_out_score_on_a_hand_computed_history(self):
+        # 7 graded, 3 true positive: without its own grade the base is 2 / 6
+        history = _history(("a1", "A", "TruePositive"), ("a2", "A", "TruePositive"),
+                           ("a3", "A", "FalsePositive"), ("b1", "B", "TruePositive"),
+                           ("c1", "C", "FalsePositive"), ("c2", "C", "FalsePositive"),
+                           ("c3", "C", "FalsePositive"))
+        entries = close.calibration(history, _reviews())
+        # rule A keeps 1 of 2 graded: (1 + 5 / 3) / 7; rule B is left with none: (5 / 3) / 5
+        self.assertEqual(len(entries), 3)
+        self.assertEqual(set(entries["weight"]), {1.0})
+        self.assertAlmostEqual(entries["score"].min(), 1 / 3)
+        self.assertAlmostEqual(entries["score"].max(), 8 / 21)
+        self.assertEqual(entries["score"].round(6).tolist().count(round(8 / 21, 6)), 2)
+
+    def test_the_only_graded_incident_falls_back_to_the_empty_base(self):
+        history = _history(("a1", "A", "TruePositive"), ("a2", "A", ""))
+        entries = close.calibration(history, _reviews())
+        self.assertEqual(entries["score"].tolist(), [EMPTY_BASE])
+
+    def test_an_incident_graded_in_the_file_and_reviewed_counts_once(self):
+        history = _history(("a1", "A", "TruePositive"), ("a2", "A", "TruePositive"))
+        entries = close.calibration(history, _reviews(_tp("a1", 0.9)))
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries["score"].tolist().count(0.9), 1)
+
+    def test_a_true_positive_in_the_file_later_reviewed_as_false_positive_is_left_out(self):
+        history = _history(("a1", "A", "FalsePositive"), ("a2", "A", "TruePositive"))
+        reviews = _reviews(("t", "a1", "FalsePositive", "", 0.9, "queue"))
+        self.assertEqual(len(close.calibration(history, reviews)), 1)
+        history = _history(("a1", "A", "FalsePositive"))
+        self.assertEqual(len(close.calibration(history, reviews)), 0)
 
 
 class PileTests(unittest.TestCase):
