@@ -36,15 +36,15 @@ def compute(incidents: pd.DataFrame, prior: float) -> pd.DataFrame:
     linked = by_grade.sum(axis=0)
 
     columns = {
-        "org_true_positive_rate": _smooth(org_tp, org_graded, prior),
-        "rule_true_positive_rate": _smooth(rule_tp, rule_graded, prior),
+        "org_true_positive_rate": smooth(org_tp, org_graded, prior),
+        "rule_true_positive_rate": smooth(rule_tp, rule_graded, prior),
         "log_org_graded": np.log1p(org_graded),
         "log_rule_graded": np.log1p(rule_graded),
         "log_linked": np.log1p(linked),
         "log_linked_true_positive": np.log1p(by_grade[0]),
         "log_linked_benign_positive": np.log1p(by_grade[1]),
         "log_linked_false_positive": np.log1p(by_grade[2]),
-        "linked_true_positive_rate": _smooth(by_grade[0], linked, prior),
+        "linked_true_positive_rate": smooth(by_grade[0], linked, prior),
         "has_link": has_link.astype(np.float64),
         "linked": linked,
         "linked_true_positive": by_grade[0],
@@ -54,7 +54,7 @@ def compute(incidents: pd.DataFrame, prior: float) -> pd.DataFrame:
     return pd.DataFrame(columns, index=incidents.index)
 
 
-def _smooth(positives: np.ndarray, total: np.ndarray, prior: float) -> np.ndarray:
+def smooth(positives: np.ndarray, total: np.ndarray, prior: float) -> np.ndarray:
     return (positives + SMOOTH * prior) / (total + SMOOTH)
 
 

@@ -141,10 +141,10 @@ def _queue(args: argparse.Namespace) -> None:
         rows = [
             (str(position), row["IncidentId"], f"{row['score']:.2f}",
              "audit" if row["pile"] == "audit" else "", row["DetectorId"],
-             _rule_history(row), row["Timestamp"], row["AlertTitle"])
+             _rule_history(row), row["reason"], row["Timestamp"], row["AlertTitle"])
             for position, row in enumerate(shown.to_dict("records"), start=1)]
-        _print_table(("#", "incident", "score", "pile", "rule", "rule history", "time",
-                      "title"), rows)
+        _print_table(("#", "incident", "score", "pile", "rule", "rule history", "reason",
+                      "time", "title"), rows)
         print(f"{len(shown)} of {len(listed)} open incidents, run {meta['run']}")
     if level is None and len(entries) >= close.needed():
         print("Nothing closed: too many graded true positives share the lowest score.")
@@ -214,6 +214,9 @@ def _inspect(args: argparse.Namespace) -> None:
         ("MitreTechniques", row["MitreTechniques"].replace(SEPARATOR, ", ")),
         ("grade", row["IncidentGrade"] or "open"),
         ("score", f"{row['score']:.2f}"),
+        ("without links", f"{row['score_without_links']:.2f}"),
+        ("as a new rule", f"{row['score_as_new_rule']:.2f}"),
+        ("reason", row["reason"]),
         ("pile", row["pile"]),
         ("rule history", _rule_history(row)),
         ("linked incidents", _linked(row)),
@@ -256,7 +259,8 @@ def _linked(row: dict) -> str:
 
 def _as_record(row: dict, position: int | None = None) -> dict:
     record = dict(row)
-    record["score"] = round(float(row["score"]), 4)
+    for column in ("score", "score_without_links", "score_as_new_rule"):
+        record[column] = round(float(row[column]), 4)
     for column in ("rule_graded", "rule_true_positives", "linked", "linked_true_positive",
                    "linked_benign_positive", "linked_false_positive"):
         record[column] = int(row[column])
