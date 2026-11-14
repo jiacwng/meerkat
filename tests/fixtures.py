@@ -91,6 +91,16 @@ def calibration_rows(audit: int, closed: int) -> tuple:
     return tuple(rows)
 
 
+# calibration_rows where p0, a true positive, and the first closed incident share an account
+def linked_rows(audit: int, closed: int) -> tuple:
+    rows = [list(row) for row in calibration_rows(audit, closed)]
+    target = sampled_ids(False, 1)[0]
+    for row in rows:
+        if row[1] in ("p0", target):
+            row[9] = "ann"
+    return tuple(tuple(row) for row in rows)
+
+
 def write_csv(path: Path, rows=ROWS, header=HEADER) -> Path:
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)

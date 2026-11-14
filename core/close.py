@@ -6,6 +6,7 @@ import math
 import pandas as pd
 
 DEFAULT_MISS_RATE = 0.05
+DEFAULT_KEEP_LINKED = True
 AUDIT_SHARE = 0.10
 PILES = ("queue", "audit", "closed")
 
@@ -30,18 +31,24 @@ def close_level(entries: pd.DataFrame, miss_rate: float) -> float | None:
     within = cumulative[cumulative <= budget]
     return float(within.index.max()) if len(within) else None
 
-def pile_of(incident_id: str, score: float, level: float | None) -> str:
+def pile_of(incident_id: str, score: float, level: float | None,
+            linked_true_positive: int, keep_linked: bool) -> str:
     if level is None or score >= level:
+        return "queue"
+    if keep_linked and linked_true_positive >= 1:
         return "queue"
     return "audit" if _sampled(incident_id) else "closed"
 
-def place(scored: pd.DataFrame, reviews: pd.DataFrame, level: float | None) -> pd.DataFrame:
+def place(scored: pd.DataFrame, reviews: pd.DataFrame, level: float | None,
+          keep_linked: bool) -> pd.DataFrame:
     latest = reviews.drop_duplicates("IncidentId", keep="last")
     recorded = latest.set_index("IncidentId")["pile"]
     piles = []
-    for row in scored[["IncidentId", "IncidentGrade", "score"]].itertuples(index=False):
+    columns = ["IncidentId", "IncidentGrade", "score", "linked_true_positive"]
+    for row in scored[columns].itertuples(index=False):
         if row.IncidentGrade == "":
-            piles.append(pile_of(row.IncidentId, row.score, level))
+            piles.append(pile_of(row.IncidentId, row.score, level,
+                                 row.linked_true_positive, keep_linked))
         else:
             piles.append(recorded.get(row.IncidentId, ""))
     return scored.assign(pile=piles)

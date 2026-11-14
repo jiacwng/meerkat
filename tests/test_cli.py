@@ -18,6 +18,7 @@ from tests.fixtures import (
     HEADER,
     ROWS,
     calibration_rows,
+    linked_rows,
     plain_row,
     sampled_ids,
     use_weights,
@@ -250,6 +251,12 @@ class CliTests(unittest.TestCase):
     def _queue_json(self, *argv: str) -> dict:
         return json.loads(self._run("queue", "--json", *argv)[1])
 
+    def _calibrate_linked(self) -> str:
+        self._run("queue", str(write_csv(self.tmp / "many.csv", linked_rows(0, 2))))
+        for number in range(19):
+            self.assertEqual(self._run("review", f"t{number}", "tp")[0], 0)
+        return sampled_ids(False, 1)[0]
+
     def test_footer_without_a_level_counts_toward_the_needed_true_positives(self):
         code, out, _ = self._run("queue", str(self.csv))
         self.assertEqual(code, 0)
@@ -434,6 +441,59 @@ class CliTests(unittest.TestCase):
         self.assertTrue(lines[0].startswith("No open incidents in run"))
         self.assertEqual(lines[1], "Miss rate changed from 5% to 1%. "
                                    "Earlier grades keep the pile they were given.")
+
+    def test_no_keep_linked_is_saved_and_keeps_the_miss_rate(self):
+        self._run("queue", str(self.csv), "--miss-rate", "0.01")
+        self._run("queue", "--no-keep-linked")
+        saved = json.loads((self.runs_dir / "settings.json").read_text())
+        self.assertEqual(saved, {"miss_rate": 0.01, "keep_linked": False})
+        report = self._queue_json()
+        self.assertEqual((report["miss_rate"], report["keep_linked"]), (0.01, False))
+
+    def test_miss_rate_keeps_a_saved_keep_linked(self):
+        self._run("queue", str(self.csv), "--no-keep-linked")
+        self._run("queue", "--miss-rate", "0.02")
+        saved = json.loads((self.runs_dir / "settings.json").read_text())
+        self.assertEqual(saved, {"keep_linked": False, "miss_rate": 0.02})
+
+    def test_a_linked_true_positive_keeps_an_incident_under_the_level_in_the_queue(self):
+        linked_id = self._calibrate_linked()
+        lines = self._run("queue")[1].splitlines()
+        self.assertEqual(
+            lines[-2], "1 more are under the close level (at most 5% of true positives). "
+                       "0 others under it are above as audit.")
+        self.assertEqual(lines[-1], "1 others under it stay in the queue because a linked "
+                                    "incident was a true positive.")
+        report = self._queue_json()
+        self.assertEqual((report["keep_linked"], report["kept_linked"]), (True, 1))
+        self.assertIn(linked_id, [row["IncidentId"] for row in report["queue"]])
+
+    def test_without_the_rule_the_linked_incident_is_closed(self):
+        linked_id = self._calibrate_linked()
+        out = self._run("queue", "--no-keep-linked")[1]
+        self.assertNotIn("stay in the queue", out)
+        self.assertIn("2 more are under the close level", out)
+        report = self._queue_json()
+        self.assertEqual((report["keep_linked"], report["kept_linked"]), (False, 0))
+        self.assertNotIn(linked_id, [row["IncidentId"] for row in report["queue"]])
+
+    def test_review_records_the_queue_pile_of_a_linked_incident(self):
+        linked_id = self._calibrate_linked()
+        self._run("review", linked_id, "fp")
+        with (self.runs_dir / "grades.csv").open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(rows[-1]["pile"], "queue")
+
+    def test_the_keep_linked_message_appears_only_when_the_setting_differs(self):
+        kept = "Incidents linked to a true positive are now kept in the queue."
+        freed = "Incidents linked to a true positive can now be closed."
+        first = self._run("queue", str(self.csv), "--keep-linked")[1]
+        self.assertNotIn(kept, first)
+        self.assertNotIn(freed, first)
+        self.assertEqual(self._run("queue", "--no-keep-linked")[1].splitlines()[-1], freed)
+        self.assertNotIn(freed, self._run("queue", "--no-keep-linked")[1])
+        self.assertEqual(self._run("queue", "--keep-linked")[1].splitlines()[-1], kept)
+        self.assertNotIn(kept, self._run("queue", "--json", "--no-keep-linked")[1])
 
     def test_the_help_default_matches_the_constant(self):
         done = subprocess.run([sys.executable, "-m", "meerkat", "queue", "--help"],

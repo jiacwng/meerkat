@@ -120,27 +120,36 @@ class StoreTests(unittest.TestCase):
         with self.assertRaisesRegex(store.StoreError, "unreadable run"):
             store.list_runs(self.runs_dir)
 
-    def test_miss_rate_round_trip_and_absence(self):
-        self.assertIsNone(store.read_miss_rate(self.runs_dir))
-        store.write_miss_rate(self.runs_dir, 0.01)
-        self.assertEqual(store.read_miss_rate(self.runs_dir), 0.01)
+    def test_settings_round_trip_and_absence(self):
+        self.assertEqual(store.read_settings(self.runs_dir), {})
+        both = {"miss_rate": 0.01, "keep_linked": False}
+        store.write_settings(self.runs_dir, both)
+        self.assertEqual(store.read_settings(self.runs_dir), both)
         self.assertEqual((self.runs_dir / store.SETTINGS_FILE).read_text(),
-                         '{\n  "miss_rate": 0.01\n}\n')
+                         '{\n  "miss_rate": 0.01,\n  "keep_linked": false\n}\n')
+
+    def test_each_setting_can_be_saved_alone(self):
+        for alone in ({"miss_rate": 0.01}, {"keep_linked": True}, {}):
+            with self.subTest(alone):
+                store.write_settings(self.runs_dir, alone)
+                self.assertEqual(store.read_settings(self.runs_dir), alone)
 
     def test_a_bad_settings_file_is_refused(self):
         self.runs_dir.mkdir()
-        cases = ("not json", "[0.01]", "{}", '{"miss_rate": "0.05"}', '{"miss_rate": true}',
+        cases = ("not json", "[0.01]", '{"miss_rate": "0.05"}', '{"miss_rate": true}',
                  '{"miss_rate": 0}', '{"miss_rate": 1}', '{"miss_rate": -0.1}',
-                 '{"miss_rate": NaN}', '{"miss_rate": Infinity}')
+                 '{"miss_rate": NaN}', '{"miss_rate": Infinity}', '{"other": 1}',
+                 '{"miss_rate": 0.05, "other": 1}', '{"keep_linked": 1}',
+                 '{"keep_linked": "true"}', '{"keep_linked": null}')
         for text in cases:
             with self.subTest(text):
                 (self.runs_dir / store.SETTINGS_FILE).write_text(text)
                 with self.assertRaisesRegex(store.StoreError, store.SETTINGS_FILE):
-                    store.read_miss_rate(self.runs_dir)
+                    store.read_settings(self.runs_dir)
 
     def test_the_settings_file_is_not_a_run(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv")
-        store.write_miss_rate(self.runs_dir, 0.01)
+        store.write_settings(self.runs_dir, {"miss_rate": 0.01})
         self.assertEqual(len(store.list_runs(self.runs_dir)), 1)
         self.assertEqual(len(store.load_history(self.runs_dir)), 7)
 
