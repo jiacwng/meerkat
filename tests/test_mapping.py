@@ -1,0 +1,115 @@
+# Loading a mapping: the three presets, a site file, and every refusal.
+
+import re
+import tempfile
+import unittest
+from pathlib import Path
+
+from core.incidents import COLUMNS
+from core.mapping import PRESETS, MappingError, load_mapping
+
+
+class MappingTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def _site(self, text: str) -> str:
+        path = self.tmp / "site.toml"
+        path.write_text(text)
+        return str(path)
+
+    def _refused(self, text: str, pattern: str) -> None:
+        path = self._site(text)
+        with self.assertRaisesRegex(MappingError, f"^{re.escape(path)}: {pattern}"):
+            load_mapping(path)
+
+    def test_presets_are_the_three_shipped_files(self):
+        self.assertEqual(PRESETS, ("defender", "sentinel", "splunk"))
+
+    def test_every_preset_covers_every_tool_column(self):
+        for name in PRESETS:
+            with self.subTest(name):
+                mapping = load_mapping(name)
+                self.assertEqual(mapping.name, name)
+                self.assertEqual(list(mapping.columns), list(COLUMNS))
+                self.assertEqual(set(mapping.grades.values()) - {""},
+                                 {"TruePositive", "BenignPositive", "FalsePositive"})
+
+    def test_an_empty_file_equals_defender(self):
+        site = load_mapping(self._site(""))
+        defender = load_mapping("defender")
+        self.assertEqual((site.columns, site.grades), (defender.columns, defender.grades))
+        self.assertEqual(site.name, "site.toml")
+
+    def test_a_missing_path_is_refused_with_the_presets(self):
+        with self.assertRaisesRegex(
+                MappingError, "no such mapping; presets are defender, sentinel, splunk"):
+            load_mapping(str(self.tmp / "absent.toml"))
+
+    def test_a_name_with_a_parent_directory_is_a_path(self):
+        with self.assertRaisesRegex(MappingError, "no such mapping"):
+            load_mapping("../defender")
+
+    def test_a_directory_is_refused(self):
+        with self.assertRaisesRegex(MappingError, "not a readable file"):
+            load_mapping(str(self.tmp))
+
+    def test_invalid_toml(self):
+        self._refused("[columns\n", "not valid TOML")
+
+    def test_unknown_table(self):
+        self._refused("[extra]\n", "unknown table 'extra'")
+
+    def test_a_top_level_value_is_not_a_table(self):
+        self._refused("columns = 3\n", "columns must be a table")
+
+    def test_unknown_column_key(self):
+        self._refused('[columns]\nColour = "x"\n', r"\[columns\] has unknown column 'Colour'")
+
+    def test_column_value_must_be_a_non_empty_string(self):
+        for value in ('""', "3", '{ a = "b" }'):
+            with self.subTest(value):
+                self._refused(f"[columns]\nCategory = {value}\n",
+                              r"\[columns\] Category must be a non empty string")
+
+    def test_two_columns_cannot_read_one_source_column(self):
+        self._refused('[columns]\nCategory = "AlertTitle"\n',
+                      "AlertTitle and Category both read column 'AlertTitle'")
+
+    def test_unknown_grade_key(self):
+        self._refused('[grades]\nMaybe = ["x"]\n', r"\[grades\] has unknown key 'Maybe'")
+
+    def test_grade_value_must_be_a_list_of_strings(self):
+        for value in ('"x"', "[1]", '[""]'):
+            with self.subTest(value):
+                self._refused(f"[grades]\nopen = {value}\n",
+                              r"\[grades\] open must be a list of non empty strings")
+
+    def test_a_word_cannot_mean_two_grades(self):
+        self._refused('[grades]\nTruePositive = ["x"]\nFalsePositive = ["x"]\n',
+                      "grade word 'x' is listed under TruePositive and FalsePositive")
+        self._refused('[grades]\nopen = ["FalsePositive"]\n',
+                      "grade word 'FalsePositive' is listed under FalsePositive and open")
+
+    def test_a_word_listed_twice_under_one_grade(self):
+        self._refused('[grades]\nopen = ["x", "x"]\n',
+                      "grade word 'x' is listed twice under open")
+
+    def test_a_file_with_a_byte_order_mark(self):
+        path = self.tmp / "site.toml"
+        path.write_bytes(b'\xef\xbb\xbf[columns]\nDetectorId = "rule"\n')
+        self.assertEqual(load_mapping(str(path)).columns["DetectorId"], "rule")
+
+    def test_an_empty_name_is_not_a_preset(self):
+        with self.assertRaises(MappingError):
+            load_mapping("")
+
+    def test_an_unlisted_grade_keeps_its_own_name(self):
+        mapping = load_mapping(self._site('[grades]\nFalsePositive = ["Noise"]\n'))
+        self.assertEqual(mapping.grades, {
+            "TruePositive": "TruePositive", "BenignPositive": "BenignPositive",
+            "Noise": "FalsePositive"})
+
+
+if __name__ == "__main__":
+    unittest.main()

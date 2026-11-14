@@ -10,7 +10,7 @@ import pandas as pd
 from core import features
 from core.incidents import COLUMNS, read_incidents
 from core.rank import load_weights, score
-from tests.fixtures import ROWS, WEIGHTS, use_weights, write_csv
+from tests.fixtures import DEFENDER, ROWS, WEIGHTS, use_weights, write_csv
 
 
 def _open_row(name: str, minute: int, account: str) -> dict:
@@ -27,7 +27,7 @@ class ScoreTests(unittest.TestCase):
     def setUp(self):
         use_weights(self)
         tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        self.incidents = read_incidents(write_csv(tmp / "incidents.csv"))
+        self.incidents = read_incidents(write_csv(tmp / "incidents.csv"), DEFENDER)
 
     def test_score_is_the_logistic_of_the_weighted_inputs(self):
         scored = score(self.incidents).set_index("IncidentId")
@@ -67,7 +67,7 @@ class ScoreTests(unittest.TestCase):
         rows = list(ROWS[5:])
         rows.append(("1", "150", "a9", "2024-06-05T14:00:00Z", "8", "", "", "", "", "", ""))
         tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        scored = score(read_incidents(write_csv(tmp / "open.csv", rows)))
+        scored = score(read_incidents(write_csv(tmp / "open.csv", rows), DEFENDER))
         self.assertEqual(set(scored["score"]), {0.5})
         self.assertEqual(list(scored["IncidentId"]), ["150", "202", "201", "200"])
 
@@ -122,7 +122,7 @@ class ShippedWeightsTests(unittest.TestCase):
 
     def test_shipped_scores_are_probabilities(self):
         tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        scored = score(read_incidents(write_csv(tmp / "incidents.csv")))
+        scored = score(read_incidents(write_csv(tmp / "incidents.csv"), DEFENDER))
         self.assertTrue(scored["score"].between(0, 1, inclusive="neither").all())
 
     def test_links_to_open_incidents_change_nothing(self):

@@ -19,7 +19,8 @@ class StoreError(ValueError):
     pass
 
 
-def save_run(runs_dir: Path, incidents: pd.DataFrame, source: str) -> dict:
+def save_run(runs_dir: Path, incidents: pd.DataFrame, source: str,
+             mapping: str) -> dict:
     now = datetime.now(UTC)
     stamp = now.strftime("%Y%m%dT%H%M%SZ")
     run_id, attempt = stamp, 1
@@ -35,6 +36,7 @@ def save_run(runs_dir: Path, incidents: pd.DataFrame, source: str) -> dict:
         "run": run_id,
         "created": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source": source,
+        "mapping": mapping,
         "incidents": len(incidents),
     }
     incidents.to_csv(runs_dir / run_id / "incidents.csv", index=False)
