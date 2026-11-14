@@ -50,6 +50,17 @@ class ExampleTests(unittest.TestCase):
                   "--runs-dir", str(runs_dir)])
         self.assertGreater(len(json.loads(out.getvalue())["queue"]), 0)
 
+    def test_readme_quotes_the_footer_the_quick_start_prints(self):
+        runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            main(["queue", str(EXAMPLES / "incidents.csv"), "--runs-dir", str(runs_dir)])
+        count, closed, kept = out.getvalue().splitlines()[-3:]
+        readme = (EXAMPLES.parent / "README.md").read_text(encoding="utf-8")
+        self.assertIn(count.split(", run ")[0], readme)
+        self.assertIn(closed, readme)
+        self.assertIn(kept, readme)
+
 
 if __name__ == "__main__":
     unittest.main()
