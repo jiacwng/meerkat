@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from core import close
 from meerkat import __version__
 from meerkat.cli import main
 from tests.fixtures import (
@@ -380,6 +381,79 @@ class CliTests(unittest.TestCase):
                 code, out, err = self._run(*argv)
                 self.assertEqual((code, out), (1, ""))
                 self.assertIn("expected columns", err)
+                self.assertEqual(err.count("\n"), 1)
+
+    def test_miss_rate_is_saved_and_used_by_later_commands(self):
+        report = self._queue_json(str(self.csv), "--miss-rate", "0.01")
+        self.assertEqual(report["miss_rate"], 0.01)
+        self.assertTrue((self.runs_dir / "settings.json").exists())
+        self.assertEqual(self._queue_json()["miss_rate"], 0.01)
+        self.assertEqual(self._run("queue")[1].splitlines()[-1],
+                         "Nothing closed yet: 2 of 99 graded true positives.")
+        self.assertEqual(self._run("inspect", "200")[0], 0)
+
+    def test_a_quarter_percent_rate_is_shown_as_it_is(self):
+        self._calibrate(3, 2)
+        self._run("queue", "--miss-rate", "0.025")
+        self.assertIn("(at most 2.5% of true positives)", self._run("queue")[1])
+        self._run("queue", "--miss-rate", "0.005")
+        self.assertIn("of 199 graded", self._run("queue")[1])
+        self._run("queue", "--miss-rate", "0.1")
+        self.assertIn("(at most 10% of true positives)", self._run("queue")[1])
+
+    def test_review_records_the_pile_under_the_saved_miss_rate(self):
+        self._calibrate(3, 2)
+        closed_id = sampled_ids(False, 1)[0]
+        self.assertEqual(self._queue_json()["closed"], 2)
+        report = self._queue_json("--miss-rate", "0.01")
+        self.assertEqual((report["closed"], report["audit"], report["close_level"]),
+                         (0, 0, None))
+        self._run("review", closed_id, "fp")
+        with (self.runs_dir / "grades.csv").open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(rows[-1]["pile"], "queue")
+        self.assertEqual(json.loads(self._run("inspect", closed_id, "--json")[1])["pile"],
+                         "queue")
+
+    def test_the_change_message_appears_only_when_the_rate_differs(self):
+        message = "Miss rate changed from 1% to 10%. Earlier grades keep the pile they were given."
+        first = self._run("queue", str(self.csv), "--miss-rate", "0.01")[1]
+        self.assertNotIn("Miss rate changed", first)
+        self.assertNotIn("Miss rate changed", self._run("queue", "--miss-rate", "0.01")[1])
+        self.assertEqual(self._run("queue", "--miss-rate", "0.1")[1].splitlines()[-1], message)
+        self.assertNotIn("Miss rate changed", self._run("queue")[1])
+        self.assertNotIn("Miss rate changed",
+                         self._run("queue", "--json", "--miss-rate", "0.5")[1])
+
+    def test_the_change_message_also_follows_the_no_open_incidents_line(self):
+        self._run("queue", str(write_csv(self.tmp / "graded.csv", ROWS[:5])),
+                  "--miss-rate", "0.05")
+        code, out, _ = self._run("queue", "--miss-rate", "0.01")
+        self.assertEqual(code, 0)
+        lines = out.splitlines()
+        self.assertTrue(lines[0].startswith("No open incidents in run"))
+        self.assertEqual(lines[1], "Miss rate changed from 5% to 1%. "
+                                   "Earlier grades keep the pile they were given.")
+
+    def test_the_help_default_matches_the_constant(self):
+        done = subprocess.run([sys.executable, "-m", "meerkat", "queue", "--help"],
+                              capture_output=True, text=True, check=False)
+        self.assertIn(f"(default {close.DEFAULT_MISS_RATE})", " ".join(done.stdout.split()))
+
+    def test_a_bad_miss_rate_is_a_usage_error(self):
+        for value in ("0", "1", "abc", "-0.1", "nan"):
+            with self.subTest(value):
+                self.assertEqual(self._run("queue", str(self.csv), "--miss-rate", value)[0], 2)
+        self.assertFalse((self.runs_dir / "settings.json").exists())
+
+    def test_a_bad_settings_file_stops_every_scoring_command(self):
+        self._run("queue", str(self.csv))
+        (self.runs_dir / "settings.json").write_text("[]")
+        for argv in (("queue",), ("review", "200", "tp"), ("inspect", "200")):
+            with self.subTest(argv):
+                code, out, err = self._run(*argv)
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn("settings.json", err)
                 self.assertEqual(err.count("\n"), 1)
 
     def test_version_and_help_do_not_load_pandas(self):

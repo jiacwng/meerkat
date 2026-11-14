@@ -120,6 +120,30 @@ class StoreTests(unittest.TestCase):
         with self.assertRaisesRegex(store.StoreError, "unreadable run"):
             store.list_runs(self.runs_dir)
 
+    def test_miss_rate_round_trip_and_absence(self):
+        self.assertIsNone(store.read_miss_rate(self.runs_dir))
+        store.write_miss_rate(self.runs_dir, 0.01)
+        self.assertEqual(store.read_miss_rate(self.runs_dir), 0.01)
+        self.assertEqual((self.runs_dir / store.SETTINGS_FILE).read_text(),
+                         '{\n  "miss_rate": 0.01\n}\n')
+
+    def test_a_bad_settings_file_is_refused(self):
+        self.runs_dir.mkdir()
+        cases = ("not json", "[0.01]", "{}", '{"miss_rate": "0.05"}', '{"miss_rate": true}',
+                 '{"miss_rate": 0}', '{"miss_rate": 1}', '{"miss_rate": -0.1}',
+                 '{"miss_rate": NaN}', '{"miss_rate": Infinity}')
+        for text in cases:
+            with self.subTest(text):
+                (self.runs_dir / store.SETTINGS_FILE).write_text(text)
+                with self.assertRaisesRegex(store.StoreError, store.SETTINGS_FILE):
+                    store.read_miss_rate(self.runs_dir)
+
+    def test_the_settings_file_is_not_a_run(self):
+        store.save_run(self.runs_dir, self.incidents, "a.csv")
+        store.write_miss_rate(self.runs_dir, 0.01)
+        self.assertEqual(len(store.list_runs(self.runs_dir)), 1)
+        self.assertEqual(len(store.load_history(self.runs_dir)), 7)
+
 
 if __name__ == "__main__":
     unittest.main()

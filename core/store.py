@@ -2,6 +2,7 @@
 
 import csv
 import json
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pandas as pd
 from core.close import PILES
 
 GRADES_FILE = "grades.csv"
+SETTINGS_FILE = "settings.json"
 GRADE_COLUMNS = ("time", "IncidentId", "grade", "note", "score", "pile")
 
 
@@ -80,6 +82,29 @@ def load_history(runs_dir: Path) -> pd.DataFrame:
     history = pd.concat(frames, ignore_index=True)
     history = history.drop_duplicates("IncidentId", keep="last")
     return _apply_grades(runs_dir, history.reset_index(drop=True))
+
+
+def read_miss_rate(runs_dir: Path) -> float | None:
+    settings_file = runs_dir / SETTINGS_FILE
+    if not settings_file.exists():
+        return None
+    try:
+        settings = json.loads(settings_file.read_text())
+    except (OSError, ValueError) as error:
+        raise StoreError(f"{settings_file}: unreadable ({error})") from None
+    if not isinstance(settings, dict) or "miss_rate" not in settings:
+        raise StoreError(f"{settings_file}: expected an object with miss_rate")
+    rate = settings["miss_rate"]
+    if (isinstance(rate, bool) or not isinstance(rate, int | float)
+            or not math.isfinite(rate) or not 0 < rate < 1):
+        raise StoreError(f"{settings_file}: miss_rate must be a number between 0 and 1")
+    return float(rate)
+
+
+def write_miss_rate(runs_dir: Path, miss_rate: float) -> None:
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    (runs_dir / SETTINGS_FILE).write_text(
+        json.dumps({"miss_rate": miss_rate}, indent=2) + "\n")
 
 
 def append_grade(runs_dir: Path, incident_id: str, grade: str, note: str,

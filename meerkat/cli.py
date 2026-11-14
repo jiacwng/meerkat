@@ -51,6 +51,9 @@ def _build_parser() -> argparse.ArgumentParser:
     shown.add_argument("--all", action="store_true", help="every row instead of the first N")
     queue.add_argument("--closed", action="store_true",
                        help="incidents under the close level instead of the queue")
+    queue.add_argument("--miss-rate", type=_rate, metavar="RATE",
+                       help="share of true positives accepted under the close level; "
+                            "saved for later commands (default 0.05)")
     _add_run(queue)
     _add_json(queue)
     _add_runs_dir(queue)
@@ -103,6 +106,20 @@ def _positive(text: str) -> int:
     return value
 
 
+def _rate(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        value = 0.0
+    if not 0 < value < 1:
+        raise argparse.ArgumentTypeError("expected a number between 0 and 1")
+    return value
+
+
+def _percent(rate: float) -> str:
+    return f"{rate * 100:g}%"
+
+
 def _queue(args: argparse.Namespace) -> None:
     from core import close, store
     from core.incidents import read_incidents
@@ -113,8 +130,13 @@ def _queue(args: argparse.Namespace) -> None:
     else:
         meta, incidents = store.load_run(args.runs_dir, args.run)
 
+    previous = None
+    if args.miss_rate is not None:
+        previous = store.read_miss_rate(args.runs_dir)
+        store.write_miss_rate(args.runs_dir, args.miss_rate)
+
     # the rule's past rate comes from every run, the rows shown from this one
-    scored, level, entries = _scored(args.runs_dir)
+    scored, level, entries, miss_rate = _scored(args.runs_dir)
     in_run = scored["IncidentId"].isin(incidents["IncidentId"])
     open_incidents = scored[in_run & (scored["IncidentGrade"] == "")]
     closed = open_incidents[open_incidents["pile"] == "closed"]
@@ -130,37 +152,40 @@ def _queue(args: argparse.Namespace) -> None:
                 for position, row in enumerate(shown.to_dict("records"), start=1)]
         _print_json({
             "run": meta["run"], "open": len(open_incidents), "closed": len(closed),
-            "audit": len(audit), "close_level": level, "miss_rate": close.MISS_RATE,
+            "audit": len(audit), "close_level": level, "miss_rate": miss_rate,
             "audit_share": close.AUDIT_SHARE, "queue": rows})
         return
 
     if open_incidents.empty:
         print(f"No open incidents in run {meta['run']}.")
-        return
-    if not listed.empty:
-        rows = [
-            (str(position), row["IncidentId"], f"{row['score']:.2f}",
-             "audit" if row["pile"] == "audit" else "", row["DetectorId"],
-             _rule_history(row), row["reason"], row["Timestamp"], row["AlertTitle"])
-            for position, row in enumerate(shown.to_dict("records"), start=1)]
-        _print_table(("#", "incident", "score", "pile", "rule", "rule history", "reason",
-                      "time", "title"), rows)
-        print(f"{len(shown)} of {len(listed)} open incidents, run {meta['run']}")
-    if level is None and len(entries) >= close.needed():
-        print("Nothing closed: too many graded true positives share the lowest score.")
-    elif level is None:
-        print(f"Nothing closed yet: {len(entries)} of {close.needed()} "
-              "graded true positives.")
     else:
-        print(f"{len(closed)} more are under the close level "
-              f"(at most {close.MISS_RATE:.0%} of true positives). "
-              f"{len(audit)} others under it are above as audit.")
+        if not listed.empty:
+            rows = [
+                (str(position), row["IncidentId"], f"{row['score']:.2f}",
+                 "audit" if row["pile"] == "audit" else "", row["DetectorId"],
+                 _rule_history(row), row["reason"], row["Timestamp"], row["AlertTitle"])
+                for position, row in enumerate(shown.to_dict("records"), start=1)]
+            _print_table(("#", "incident", "score", "pile", "rule", "rule history", "reason",
+                          "time", "title"), rows)
+            print(f"{len(shown)} of {len(listed)} open incidents, run {meta['run']}")
+        if level is None and len(entries) >= close.needed(miss_rate):
+            print("Nothing closed: too many graded true positives share the lowest score.")
+        elif level is None:
+            print(f"Nothing closed yet: {len(entries)} of {close.needed(miss_rate)} "
+                  "graded true positives.")
+        else:
+            print(f"{len(closed)} more are under the close level "
+                  f"(at most {_percent(miss_rate)} of true positives). "
+                  f"{len(audit)} others under it are above as audit.")
+    if previous is not None and previous != miss_rate:
+        print(f"Miss rate changed from {_percent(previous)} to {_percent(miss_rate)}. "
+              "Earlier grades keep the pile they were given.")
 
 
 def _review(args: argparse.Namespace) -> None:
     from core import close, store
 
-    scored, level, _ = _scored(args.runs_dir)
+    scored, level, _, _ = _scored(args.runs_dir)
     found = scored[scored["IncidentId"] == args.incident]
     if found.empty:
         raise store.StoreError(f"no incident {args.incident!r} in {args.runs_dir}")
@@ -181,16 +206,17 @@ def _scored(runs_dir: Path):
 
     reviews = store.read_reviews(runs_dir)
     scored = rank.score(store.load_history(runs_dir))
+    miss_rate = store.read_miss_rate(runs_dir) or close.DEFAULT_MISS_RATE
     entries = close.calibration(scored, reviews)
-    level = close.close_level(entries)
-    return close.place(scored, reviews, level), level, entries
+    level = close.close_level(entries, miss_rate)
+    return close.place(scored, reviews, level), level, entries, miss_rate
 
 
 def _inspect(args: argparse.Namespace) -> None:
     from core import store
     from core.incidents import DESCRIPTIVE, LINKS, SEPARATOR
 
-    scored, _, _ = _scored(args.runs_dir)
+    scored, _, _, _ = _scored(args.runs_dir)
     if args.run is not None:
         _, in_run = store.load_run(args.runs_dir, args.run)
         scored = scored[scored["IncidentId"].isin(in_run["IncidentId"])]
