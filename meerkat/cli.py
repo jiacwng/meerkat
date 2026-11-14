@@ -22,14 +22,17 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.command == "queue" and args.file is not None and args.run is not None:
         parser.error("queue takes a FILE or --run, not both")
+    if args.command == "queue" and args.file is None and args.mapping is not None:
+        parser.error("--mapping needs FILE")
 
     # pandas loads here so that --help and --version stay instant
     from core.incidents import IncidentError
+    from core.mapping import MappingError
     from core.store import StoreError
 
     try:
         args.handler(args)
-    except (IncidentError, StoreError, OSError) as error:
+    except (IncidentError, MappingError, StoreError, OSError) as error:
         print(f"meerkat: error: {_printable(str(error))}", file=sys.stderr)
         raise SystemExit(EXIT_ERROR) from None
 
@@ -49,6 +52,9 @@ def _build_parser() -> argparse.ArgumentParser:
     shown.add_argument("--limit", type=_positive, default=DEFAULT_LIMIT, metavar="N",
                        help=f"rows shown (default {DEFAULT_LIMIT})")
     shown.add_argument("--all", action="store_true", help="every row instead of the first N")
+    queue.add_argument("--mapping", metavar="NAME_OR_PATH",
+                       help="column names and grade words of FILE: defender, sentinel, "
+                            "splunk or a TOML file (default defender)")
     queue.add_argument("--closed", action="store_true",
                        help="incidents under the close level instead of the queue")
     queue.add_argument("--miss-rate", type=_rate, metavar="RATE",
@@ -126,10 +132,12 @@ def _percent(rate: float) -> str:
 def _queue(args: argparse.Namespace) -> None:
     from core import close, store
     from core.incidents import read_incidents
+    from core.mapping import load_mapping
 
     if args.file is not None:
-        incidents = read_incidents(args.file)
-        meta = store.save_run(args.runs_dir, incidents, args.file.name)
+        mapping = load_mapping("defender" if args.mapping is None else args.mapping)
+        incidents = read_incidents(args.file, mapping)
+        meta = store.save_run(args.runs_dir, incidents, args.file.name, mapping.name)
     else:
         meta, incidents = store.load_run(args.runs_dir, args.run)
 

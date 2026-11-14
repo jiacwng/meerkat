@@ -24,7 +24,7 @@ meerkat = "meerkat.cli:main"
 packages = ["core", "meerkat"]
 
 [tool.setuptools.package-data]
-core = ["data/*.json"]
+core = ["data/*.json", "data/mappings/*.toml"]
 
 [tool.ruff]
 line-length = 88

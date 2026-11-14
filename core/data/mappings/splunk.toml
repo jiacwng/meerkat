@@ -1,0 +1,18 @@
+# Splunk Enterprise Security notable events.
+
+[columns]
+IncidentId = "rule_id"
+Timestamp = "_time"
+DetectorId = "rule_name"
+AlertTitle = "rule_title"
+Category = "security_domain"
+IncidentGrade = "disposition_label"
+IpAddress = "src"
+DeviceName = "dest"
+AccountName = "user"
+
+[grades]
+TruePositive = ["True Positive - Suspicious Activity"]
+BenignPositive = ["Benign Positive - Suspicious But Expected"]
+FalsePositive = ["False Positive - Incorrect Analytic Logic", "False Positive - Inaccurate Data"]
+open = ["Undetermined", "Other"]

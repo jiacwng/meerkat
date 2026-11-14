@@ -516,6 +516,29 @@ class CliTests(unittest.TestCase):
                 self.assertIn("settings.json", err)
                 self.assertEqual(err.count("\n"), 1)
 
+    def test_queue_reads_a_file_through_a_preset_mapping(self):
+        header = ("rule_id", "_time", "rule_name", "disposition_label")
+        rows = (("n1", "2024-06-01T00:00:00Z", "r1", "True Positive - Suspicious Activity"),
+                ("n2", "2024-06-02T00:00:00Z", "r1", "Undetermined"))
+        path = write_csv(self.tmp / "notables.csv", rows, header)
+        code, out, err = self._run("queue", str(path), "--mapping", "splunk")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("1 of 1 open incidents", out)
+        meta = json.loads(next(self.runs_dir.glob("*/meta.json")).read_text())
+        self.assertEqual(meta["mapping"], "splunk")
+
+    def test_mapping_without_a_file_is_a_usage_error(self):
+        code, out, err = self._run("queue", "--mapping", "splunk")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("--mapping needs FILE", err)
+
+    def test_a_bad_mapping_is_one_line_and_not_a_traceback(self):
+        code, out, err = self._run("queue", str(self.csv), "--mapping", "nowhere.toml")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("nowhere.toml: no such mapping", err)
+        self.assertEqual(err.count("\n"), 1)
+        self.assertFalse(self.runs_dir.exists())
+
     def test_version_and_help_do_not_load_pandas(self):
         code = ("import sys; from meerkat.cli import main\n"
                 "try:\n    main(sys.argv[1:])\n"

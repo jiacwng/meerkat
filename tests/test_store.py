@@ -6,29 +6,29 @@ from pathlib import Path
 
 from core import store
 from core.incidents import read_incidents
-from tests.fixtures import write_csv
+from tests.fixtures import DEFENDER, write_csv
 
 
 class StoreTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.runs_dir = self.tmp / "runs"
-        self.incidents = read_incidents(write_csv(self.tmp / "incidents.csv"))
+        self.incidents = read_incidents(write_csv(self.tmp / "incidents.csv"), DEFENDER)
 
     def _grade_of(self, incident_id: str) -> str:
         _, incidents = store.load_run(self.runs_dir)
         return incidents.set_index("IncidentId").loc[incident_id, "IncidentGrade"]
 
     def test_run_round_trip(self):
-        meta = store.save_run(self.runs_dir, self.incidents, "incidents.csv")
+        meta = store.save_run(self.runs_dir, self.incidents, "incidents.csv", "defender")
         loaded_meta, loaded = store.load_run(self.runs_dir)
-        self.assertEqual(loaded_meta, meta)
+        self.assertEqual(loaded_meta, {k: v for k, v in meta.items() if k != "mapping"})
         self.assertEqual(meta["incidents"], 7)
         self.assertTrue(loaded.equals(self.incidents))
 
     def test_two_runs_in_one_second_get_distinct_ids(self):
-        first = store.save_run(self.runs_dir, self.incidents, "a.csv")
-        second = store.save_run(self.runs_dir, self.incidents, "b.csv")
+        first = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
+        second = store.save_run(self.runs_dir, self.incidents, "b.csv", "defender")
         self.assertNotEqual(first["run"], second["run"])
         self.assertEqual([m["source"] for m in store.list_runs(self.runs_dir)],
                          ["a.csv", "b.csv"])
@@ -43,13 +43,13 @@ class StoreTests(unittest.TestCase):
             store.load_history(self.runs_dir)
 
     def test_unknown_run_id_cannot_leave_the_runs_directory(self):
-        store.save_run(self.runs_dir, self.incidents, "a.csv")
+        store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         for run_id in ("missing", "..", "../runs", ""):
             with self.subTest(run_id), self.assertRaisesRegex(store.StoreError, "no run"):
                 store.load_run(self.runs_dir, run_id)
 
     def test_latest_review_wins_over_the_file_and_over_earlier_reviews(self):
-        store.save_run(self.runs_dir, self.incidents, "a.csv")
+        store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         self.assertEqual(self._grade_of("200"), "")
         store.append_grade(self.runs_dir, "200", "FalsePositive", "", 0.5, "queue")
         store.append_grade(self.runs_dir, "200", "TruePositive", "second look, real",
@@ -60,14 +60,14 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self._grade_of("103"), "FalsePositive")
 
     def test_notes_with_commas_quotes_and_newlines_survive(self):
-        store.save_run(self.runs_dir, self.incidents, "a.csv")
+        store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         store.append_grade(self.runs_dir, "200", "TruePositive", 'a, "b"\nc', 0.5, "queue")
         store.append_grade(self.runs_dir, "201", "BenignPositive", "", 0.5, "queue")
         self.assertEqual(self._grade_of("200"), "TruePositive")
         self.assertEqual(self._grade_of("201"), "BenignPositive")
 
     def test_a_review_stores_the_score_and_pile_it_had(self):
-        store.save_run(self.runs_dir, self.incidents, "a.csv")
+        store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         self.assertTrue(store.read_reviews(self.runs_dir).empty)
         store.append_grade(self.runs_dir, "200", "TruePositive", "", 0.123456789, "audit")
         header = (self.runs_dir / store.GRADES_FILE).read_text().splitlines()[0]
@@ -77,7 +77,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(reviews["pile"].tolist(), ["audit"])
 
     def test_grades_with_missing_columns_a_bad_score_or_a_bad_pile_are_refused(self):
-        store.save_run(self.runs_dir, self.incidents, "a.csv")
+        store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         head = "time,IncidentId,grade,note"
         cases = (
             (f"{head}\nt,200,TruePositive,\n", "expected columns"),
@@ -95,20 +95,20 @@ class StoreTests(unittest.TestCase):
                     self.assertNotIn("\n", str(raised.exception))
 
     def test_history_joins_runs_and_keeps_the_latest_copy(self):
-        store.save_run(self.runs_dir, self.incidents, "a.csv")
+        store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         later = (
             ("1", "200", "a6", "2024-06-05T12:00:00Z", "7", "Retitled", "", "", "", "", ""),
             ("1", "300", "b1", "2024-06-06T00:00:00Z", "5", "New rule", "", "", "", "", ""),
         )
-        second = read_incidents(write_csv(self.tmp / "later.csv", later))
-        store.save_run(self.runs_dir, second, "later.csv")
+        second = read_incidents(write_csv(self.tmp / "later.csv", later), DEFENDER)
+        store.save_run(self.runs_dir, second, "later.csv", "defender")
         history = store.load_history(self.runs_dir).set_index("IncidentId")
         self.assertEqual(len(history), 8)
         self.assertEqual(history.loc["200", "AlertTitle"], "Retitled")
         self.assertIn("300", history.index)
 
     def test_damaged_files_are_reported(self):
-        meta = store.save_run(self.runs_dir, self.incidents, "a.csv")
+        meta = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         (self.runs_dir / store.GRADES_FILE).write_text("who,what\nx,y\n")
         with self.assertRaisesRegex(store.StoreError, "expected columns"):
             store.load_run(self.runs_dir)
@@ -148,7 +148,7 @@ class StoreTests(unittest.TestCase):
                     store.read_settings(self.runs_dir)
 
     def test_the_settings_file_is_not_a_run(self):
-        store.save_run(self.runs_dir, self.incidents, "a.csv")
+        store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         store.write_settings(self.runs_dir, {"miss_rate": 0.01})
         self.assertEqual(len(store.list_runs(self.runs_dir)), 1)
         self.assertEqual(len(store.load_history(self.runs_dir)), 7)

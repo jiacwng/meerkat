@@ -10,6 +10,9 @@ from unittest import mock
 
 from core import rank
 from core.features import INPUTS
+from core.mapping import load_mapping
+
+DEFENDER = load_mapping("defender")
 
 HEADER = (
     "OrgId", "IncidentId", "AlertId", "Timestamp", "DetectorId", "AlertTitle",
