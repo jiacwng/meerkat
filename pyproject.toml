@@ -10,7 +10,7 @@ description = "Rank a SOC's open incidents and learn from the grades analysts gi
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Wang Jiacheng", email = "jiacheng.wang@eurecom.fr" }]
 dependencies = [
     "numpy>=2.0",
