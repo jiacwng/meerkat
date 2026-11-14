@@ -13,6 +13,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Wang Jiacheng", email = "jiacheng.wang@eurecom.fr" }]
 dependencies = [
+    "numpy>=2.0",
     "pandas>=2.2.2",
 ]
 
@@ -21,6 +22,9 @@ meerkat = "meerkat.cli:main"
 
 [tool.setuptools]
 packages = ["core", "meerkat"]
+
+[tool.setuptools.package-data]
+core = ["data/*.json"]
 
 [tool.ruff]
 line-length = 88

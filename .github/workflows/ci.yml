@@ -55,4 +55,4 @@ jobs:
         run: python -m pip install ruff -c .github/constraints.txt
 
       - name: Check
-        run: ruff check core meerkat tests
+        run: ruff check core meerkat bench tests

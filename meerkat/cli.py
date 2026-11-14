@@ -216,6 +216,7 @@ def _inspect(args: argparse.Namespace) -> None:
         ("score", f"{row['score']:.2f}"),
         ("pile", row["pile"]),
         ("rule history", _rule_history(row)),
+        ("linked incidents", _linked(row)),
         *((name, row[name].replace(SEPARATOR, ", ")) for name in LINKS),
     ]
     for name, value in lines:
@@ -245,11 +246,20 @@ def _rule_history(row: dict) -> str:
     return f"{row['rule_true_positives']} of {row['rule_graded']} true positive"
 
 
+def _linked(row: dict) -> str:
+    if row["linked"] == 0:
+        return "none"
+    return (f"{row['linked']} earlier ({row['linked_true_positive']} true positive, "
+            f"{row['linked_benign_positive']} benign positive, "
+            f"{row['linked_false_positive']} false positive)")
+
+
 def _as_record(row: dict, position: int | None = None) -> dict:
     record = dict(row)
     record["score"] = round(float(row["score"]), 4)
-    record["rule_graded"] = int(row["rule_graded"])
-    record["rule_true_positives"] = int(row["rule_true_positives"])
+    for column in ("rule_graded", "rule_true_positives", "linked", "linked_true_positive",
+                   "linked_benign_positive", "linked_false_positive"):
+        record[column] = int(row[column])
     if position is not None:
         record = {"position": position, **record}
     return record
