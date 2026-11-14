@@ -107,16 +107,32 @@ class PileTests(unittest.TestCase):
     def test_pile_of_an_open_incident(self):
         audit_id = sampled_ids(True, 1)[0]
         closed_id = sampled_ids(False, 1)[0]
-        self.assertEqual(close.pile_of(closed_id, 0.1, None), "queue")
-        self.assertEqual(close.pile_of(closed_id, 0.5, 0.5), "queue")
-        self.assertEqual(close.pile_of(closed_id, 0.7, 0.5), "queue")
-        self.assertEqual(close.pile_of(closed_id, 0.4, 0.5), "closed")
-        self.assertEqual(close.pile_of(audit_id, 0.4, 0.5), "audit")
+        self.assertEqual(close.pile_of(closed_id, 0.1, None, 0, True), "queue")
+        self.assertEqual(close.pile_of(closed_id, 0.5, 0.5, 0, True), "queue")
+        self.assertEqual(close.pile_of(closed_id, 0.7, 0.5, 0, True), "queue")
+        self.assertEqual(close.pile_of(closed_id, 0.4, 0.5, 0, True), "closed")
+        self.assertEqual(close.pile_of(audit_id, 0.4, 0.5, 0, True), "audit")
+
+    def test_a_linked_true_positive_keeps_the_incident_in_the_queue(self):
+        audit_id = sampled_ids(True, 1)[0]
+        closed_id = sampled_ids(False, 1)[0]
+        for incident in (audit_id, closed_id):
+            self.assertEqual(close.pile_of(incident, 0.4, 0.5, 1, True), "queue")
+            self.assertEqual(close.pile_of(incident, 0.4, 0.5, 3, True), "queue")
+        self.assertEqual(close.pile_of(audit_id, 0.4, 0.5, 2, False), "audit")
+        self.assertEqual(close.pile_of(closed_id, 0.4, 0.5, 2, False), "closed")
+
+    def test_no_linked_true_positive_leaves_the_pile_alone(self):
+        audit_id = sampled_ids(True, 1)[0]
+        closed_id = sampled_ids(False, 1)[0]
+        for incident in (audit_id, closed_id):
+            self.assertEqual(close.pile_of(incident, 0.4, 0.5, 0, True),
+                             close.pile_of(incident, 0.4, 0.5, 0, False))
 
     def test_the_sample_is_stable_for_an_id_and_near_the_share(self):
         ids = [f"id{i}" for i in range(2000)]
-        first = [close.pile_of(i, 0.0, 1.0) for i in ids]
-        self.assertEqual(first, [close.pile_of(i, 0.0, 1.0) for i in ids])
+        first = [close.pile_of(i, 0.0, 1.0, 0, True) for i in ids]
+        self.assertEqual(first, [close.pile_of(i, 0.0, 1.0, 0, True) for i in ids])
         self.assertEqual([pile == "audit" for pile in first], [is_sampled(i) for i in ids])
         self.assertTrue(140 <= first.count("audit") <= 260)
 
@@ -124,11 +140,23 @@ class PileTests(unittest.TestCase):
         scored = pd.DataFrame({
             "IncidentId": ["a", "b", "c", "d"],
             "IncidentGrade": ["", "TruePositive", "TruePositive", ""],
-            "score": [0.9, 0.1, 0.1, 0.1]})
+            "score": [0.9, 0.1, 0.1, 0.1],
+            "linked_true_positive": [0, 0, 0, 0]})
         reviews = _reviews(("t", "b", "TruePositive", "", 0.8, "audit"))
-        piles = close.place(scored, reviews, 0.5)["pile"].tolist()
-        expected_open = close.pile_of("d", 0.1, 0.5)
+        piles = close.place(scored, reviews, 0.5, True)["pile"].tolist()
+        expected_open = close.pile_of("d", 0.1, 0.5, 0, True)
         self.assertEqual(piles, ["queue", "audit", "", expected_open])
+
+    def test_place_applies_the_rule_to_each_row(self):
+        scored = pd.DataFrame({
+            "IncidentId": sampled_ids(False, 2),
+            "IncidentGrade": ["", ""],
+            "score": [0.1, 0.1],
+            "linked_true_positive": [2, 0]})
+        self.assertEqual(close.place(scored, _reviews(), 0.5, True)["pile"].tolist(),
+                         ["queue", "closed"])
+        self.assertEqual(close.place(scored, _reviews(), 0.5, False)["pile"].tolist(),
+                         ["closed", "closed"])
 
 
 if __name__ == "__main__":

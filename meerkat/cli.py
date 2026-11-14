@@ -54,6 +54,9 @@ def _build_parser() -> argparse.ArgumentParser:
     queue.add_argument("--miss-rate", type=_rate, metavar="RATE",
                        help="share of true positives accepted under the close level; "
                             "saved for later commands (default 0.05)")
+    queue.add_argument("--keep-linked", action=argparse.BooleanOptionalAction,
+                       help="never close an incident linked to a graded true positive; "
+                            "saved for later commands (default on)")
     _add_run(queue)
     _add_json(queue)
     _add_runs_dir(queue)
@@ -131,16 +134,29 @@ def _queue(args: argparse.Namespace) -> None:
         meta, incidents = store.load_run(args.runs_dir, args.run)
 
     previous = None
-    if args.miss_rate is not None:
-        previous = store.read_miss_rate(args.runs_dir)
-        store.write_miss_rate(args.runs_dir, args.miss_rate)
+    previous_keep = None
+    if args.miss_rate is not None or args.keep_linked is not None:
+        saved = store.read_settings(args.runs_dir)
+        previous = saved.get("miss_rate")
+        previous_keep = saved.get("keep_linked")
+        if args.miss_rate is not None:
+            saved["miss_rate"] = args.miss_rate
+        if args.keep_linked is not None:
+            saved["keep_linked"] = args.keep_linked
+        store.write_settings(args.runs_dir, saved)
 
     # the rule's past rate comes from every run, the rows shown from this one
-    scored, level, entries, miss_rate = _scored(args.runs_dir)
+    scored, level, entries, settings = _scored(args.runs_dir)
+    miss_rate, keep_linked = settings["miss_rate"], settings["keep_linked"]
     in_run = scored["IncidentId"].isin(incidents["IncidentId"])
     open_incidents = scored[in_run & (scored["IncidentGrade"] == "")]
     closed = open_incidents[open_incidents["pile"] == "closed"]
     audit = open_incidents[open_incidents["pile"] == "audit"]
+    kept_linked = 0
+    if level is not None and keep_linked:
+        under = open_incidents[(open_incidents["score"] < level)
+                               & (open_incidents["linked_true_positive"] >= 1)]
+        kept_linked = len(under)
     if args.closed:
         listed = closed
     else:
@@ -153,7 +169,8 @@ def _queue(args: argparse.Namespace) -> None:
         _print_json({
             "run": meta["run"], "open": len(open_incidents), "closed": len(closed),
             "audit": len(audit), "close_level": level, "miss_rate": miss_rate,
-            "audit_share": close.AUDIT_SHARE, "queue": rows})
+            "audit_share": close.AUDIT_SHARE, "keep_linked": keep_linked,
+            "kept_linked": kept_linked, "queue": rows})
         return
 
     if open_incidents.empty:
@@ -177,15 +194,23 @@ def _queue(args: argparse.Namespace) -> None:
             print(f"{len(closed)} more are under the close level "
                   f"(at most {_percent(miss_rate)} of true positives). "
                   f"{len(audit)} others under it are above as audit.")
+            if kept_linked:
+                print(f"{kept_linked} others under it stay in the queue because a linked "
+                      "incident was a true positive.")
     if previous is not None and previous != miss_rate:
         print(f"Miss rate changed from {_percent(previous)} to {_percent(miss_rate)}. "
               "Earlier grades keep the pile they were given.")
+    if previous_keep is not None and previous_keep != keep_linked:
+        if keep_linked:
+            print("Incidents linked to a true positive are now kept in the queue.")
+        else:
+            print("Incidents linked to a true positive can now be closed.")
 
 
 def _review(args: argparse.Namespace) -> None:
     from core import close, store
 
-    scored, level, _, _ = _scored(args.runs_dir)
+    scored, level, _, settings = _scored(args.runs_dir)
     found = scored[scored["IncidentId"] == args.incident]
     if found.empty:
         raise store.StoreError(f"no incident {args.incident!r} in {args.runs_dir}")
@@ -193,7 +218,8 @@ def _review(args: argparse.Namespace) -> None:
     earlier = reviews[reviews["IncidentId"] == args.incident]
     if earlier.empty:
         score = float(found["score"].iloc[0])
-        pile = close.pile_of(args.incident, score, level)
+        linked = int(found["linked_true_positive"].iloc[0])
+        pile = close.pile_of(args.incident, score, level, linked, settings["keep_linked"])
     else:
         score, pile = float(earlier["score"].iloc[0]), earlier["pile"].iloc[0]
     grade = GRADE_CODES[args.grade]
@@ -206,10 +232,14 @@ def _scored(runs_dir: Path):
 
     reviews = store.read_reviews(runs_dir)
     scored = rank.score(store.load_history(runs_dir))
-    miss_rate = store.read_miss_rate(runs_dir) or close.DEFAULT_MISS_RATE
+    saved = store.read_settings(runs_dir)
+    settings = {
+        "miss_rate": saved.get("miss_rate", close.DEFAULT_MISS_RATE),
+        "keep_linked": saved.get("keep_linked", close.DEFAULT_KEEP_LINKED)}
     entries = close.calibration(scored, reviews)
-    level = close.close_level(entries, miss_rate)
-    return close.place(scored, reviews, level), level, entries, miss_rate
+    level = close.close_level(entries, settings["miss_rate"])
+    placed = close.place(scored, reviews, level, settings["keep_linked"])
+    return placed, level, entries, settings
 
 
 def _inspect(args: argparse.Namespace) -> None:
