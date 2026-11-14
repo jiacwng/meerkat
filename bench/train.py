@@ -106,16 +106,24 @@ def read_guide(path: Path) -> pd.DataFrame:
     return incidents.reset_index()
 
 
-def _blank_markers(incidents: pd.DataFrame) -> int:
-    # GUIDE writes a missing value as a fixed id; a real file leaves the cell blank
-    blanked = 0
+def markers(incidents: pd.DataFrame) -> dict[str, pd.Index]:
+    found = {}
     for column in LINKS:
         values = incidents[column].str.split(SEPARATOR).explode()
         values = values[values != ""]
         share = values.value_counts() / len(incidents)
-        markers = share[share > features.PLACEHOLDER_SHARE].index
-        blanked += len(markers)
-        kept = values[~values.isin(markers)]
+        found[column] = share[share > features.PLACEHOLDER_SHARE].index
+    return found
+
+
+def _blank_markers(incidents: pd.DataFrame) -> int:
+    # GUIDE writes a missing value as a fixed id; a real file leaves the cell blank
+    blanked = 0
+    for column, found in markers(incidents).items():
+        values = incidents[column].str.split(SEPARATOR).explode()
+        values = values[values != ""]
+        blanked += len(found)
+        kept = values[~values.isin(found)]
         incidents[column] = (kept.groupby(level=0).agg(SEPARATOR.join)
                              .reindex(incidents.index).fillna(""))
     return blanked

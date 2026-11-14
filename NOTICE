@@ -1,0 +1,19 @@
+meerkat
+Copyright (c) 2026 Wang Jiacheng
+Released under the MIT License. See LICENSE.
+
+This repository redistributes third-party material. The notice below applies to
+that material and not to the rest of the project.
+
+GUIDE
+-----
+
+`examples/incidents.csv` and `examples/grades.csv` are organisation 225 of
+`GUIDE_Train.csv` from GUIDE, the Microsoft Security Incident Prediction
+dataset (Microsoft, 2024), cut by `bench/slice.py`. The grades of the last
+three days are moved from the first file to the second, and GUIDE's
+placeholder ids for missing values are left blank.
+
+  Paper    https://arxiv.org/abs/2407.09017
+  License  Community Data License Agreement, Permissive, Version 2.0
+           https://cdla.dev/permissive-2-0/
