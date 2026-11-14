@@ -4,6 +4,7 @@ import contextlib
 import csv
 import io
 import json
+import math
 import subprocess
 import sys
 import tempfile
@@ -18,12 +19,14 @@ from tests.fixtures import (
     calibration_rows,
     plain_row,
     sampled_ids,
+    use_weights,
     write_csv,
 )
 
 
 class CliTests(unittest.TestCase):
     def setUp(self):
+        use_weights(self)
         self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.runs_dir = self.tmp / "runs"
         self.csv = write_csv(self.tmp / "incidents.csv")
@@ -108,10 +111,25 @@ class CliTests(unittest.TestCase):
         self.assertRegex(out, r"grade\s+TruePositive\n")
         self.assertRegex(out, r"IpAddress\s+10.0.0.1, 10.0.0.2\n")
         self.assertNotIn("Sha256", out)
+        self.assertRegex(out, r"rule history\s+2 of 2 true positive\nlinked incidents\s+none\n")
         code, out, _ = self._run("inspect", "100", "--json")
         record = json.loads(out)
         self.assertEqual(record["IpAddress"], ["10.0.0.1", "10.0.0.2"])
         self.assertEqual(record["Sha256"], [])
+
+    def test_linked_incidents_in_inspect_and_json(self):
+        self._run("queue", str(self.csv))
+        code, out, _ = self._run("inspect", "201")
+        self.assertRegex(out, r"\nlinked incidents\s+1 earlier \(1 true positive, "
+                              r"0 benign positive, 0 false positive\)\n")
+        record = json.loads(self._run("inspect", "201", "--json")[1])
+        keys = ("linked", "linked_true_positive", "linked_benign_positive",
+                "linked_false_positive")
+        self.assertEqual([record[key] for key in keys], [1, 1, 0, 0])
+        rows = json.loads(self._run("queue", "--json")[1])["queue"]
+        self.assertEqual([[row[key] for key in keys] for row in rows],
+                         [[1, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
+        self.assertTrue(all(type(row[key]) is int for row in rows for key in keys))
 
     def test_inspect_limited_to_a_run(self):
         self._run("queue", str(self.csv))
@@ -227,11 +245,12 @@ class CliTests(unittest.TestCase):
 
     def test_graded_history_in_the_file_closes_incidents_without_a_review(self):
         closed_id = sampled_ids(False, 1)[0]
-        rows = [plain_row(f"p{i}", "3", "TruePositive") for i in range(19)]
-        rows += [plain_row("q0", "1", "TruePositive")]
-        rows += [plain_row(f"q{i}", "1", "FalsePositive") for i in range(1, 5)]
-        rows += [plain_row(f"f{i}", "5", "FalsePositive") for i in range(10)]
-        rows += [plain_row("keep", "1"), plain_row(closed_id, "5")]
+        first, second, third = (f"2024-06-0{day}T00:00:00Z" for day in (7, 8, 9))
+        rows = [plain_row(f"p{i}", "3", "TruePositive", first) for i in range(19)]
+        rows += [plain_row("q0", "1", "TruePositive", second)]
+        rows += [plain_row(f"q{i}", "1", "FalsePositive", first) for i in range(1, 5)]
+        rows += [plain_row(f"f{i}", "5", "FalsePositive", first) for i in range(10)]
+        rows += [plain_row("keep", "1", time=third), plain_row(closed_id, "5", time=third)]
         self._run("queue", str(write_csv(self.tmp / "graded.csv", rows)))
         report = self._queue_json("--closed")
         self.assertIsNotNone(report["close_level"])
@@ -258,7 +277,7 @@ class CliTests(unittest.TestCase):
     def test_json_reports_the_level_and_the_pile_of_each_row(self):
         self._calibrate(3, 2)
         report = self._queue_json()
-        self.assertAlmostEqual(report["close_level"], 0.5935, places=4)
+        self.assertAlmostEqual(report["close_level"], 1 / (1 + math.exp(0.25)))
         self.assertEqual(
             {key: report[key] for key in
              ("open", "closed", "audit", "miss_rate", "audit_share")},
@@ -347,7 +366,7 @@ class CliTests(unittest.TestCase):
         code = ("import sys; from meerkat.cli import main\n"
                 "try:\n    main(sys.argv[1:])\n"
                 "except SystemExit:\n    pass\n"
-                "assert 'pandas' not in sys.modules")
+                "assert 'pandas' not in sys.modules and 'numpy' not in sys.modules")
         for argv in (["--version"], ["--help"], ["queue", "--help"]):
             with self.subTest(argv):
                 done = subprocess.run([sys.executable, "-c", code, *argv],

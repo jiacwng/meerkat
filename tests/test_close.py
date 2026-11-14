@@ -5,7 +5,7 @@ import unittest
 import pandas as pd
 
 from core import close, rank, store
-from core.rank import EMPTY_BASE
+from core.incidents import COLUMNS
 from tests.fixtures import HEADER, is_sampled, plain_row, sampled_ids
 
 
@@ -18,8 +18,10 @@ def _tp(name: str, score: float, pile: str = "queue") -> tuple:
 
 
 def _history(*graded: tuple[str, str, str]) -> pd.DataFrame:
-    rows = [plain_row(name, rule, grade) for name, rule, grade in graded]
-    return rank.score(pd.DataFrame(rows, columns=HEADER))
+    rows = [plain_row(name, rule, grade, f"2024-06-10T00:{minute:02d}:00Z")
+            for minute, (name, rule, grade) in enumerate(graded)]
+    frame = pd.DataFrame(rows, columns=HEADER)
+    return rank.score(frame.reindex(columns=list(COLUMNS), fill_value=""))
 
 
 def _level(*rows: tuple) -> float | None:
@@ -63,24 +65,20 @@ class LevelTests(unittest.TestCase):
 
 
 class ImportedGradeTests(unittest.TestCase):
-    def test_leave_one_out_score_on_a_hand_computed_history(self):
-        # 7 graded, 3 true positive: without its own grade the base is 2 / 6
+    def test_a_true_positive_in_the_file_enters_with_its_own_score(self):
         history = _history(("a1", "A", "TruePositive"), ("a2", "A", "TruePositive"),
                            ("a3", "A", "FalsePositive"), ("b1", "B", "TruePositive"),
-                           ("c1", "C", "FalsePositive"), ("c2", "C", "FalsePositive"),
-                           ("c3", "C", "FalsePositive"))
+                           ("c1", "C", ""))
         entries = close.calibration(history, _reviews())
-        # rule A keeps 1 of 2 graded: (1 + 5 / 3) / 7; rule B is left with none: (5 / 3) / 5
-        self.assertEqual(len(entries), 3)
+        own = history[history["IncidentGrade"] == "TruePositive"]
+        self.assertEqual(sorted(entries["score"]), sorted(own["score"]))
         self.assertEqual(set(entries["weight"]), {1.0})
-        self.assertAlmostEqual(entries["score"].min(), 1 / 3)
-        self.assertAlmostEqual(entries["score"].max(), 8 / 21)
-        self.assertEqual(entries["score"].round(6).tolist().count(round(8 / 21, 6)), 2)
 
-    def test_the_only_graded_incident_falls_back_to_the_empty_base(self):
-        history = _history(("a1", "A", "TruePositive"), ("a2", "A", ""))
-        entries = close.calibration(history, _reviews())
-        self.assertEqual(entries["score"].tolist(), [EMPTY_BASE])
+    def test_a_score_never_holds_the_incident_own_grade(self):
+        graded = _history(("a1", "A", "TruePositive"), ("a2", "A", "TruePositive"))
+        open_ = _history(("a1", "A", "TruePositive"), ("a2", "A", ""))
+        self.assertEqual(graded.set_index("IncidentId").loc["a2", "score"],
+                         open_.set_index("IncidentId").loc["a2", "score"])
 
     def test_an_incident_graded_in_the_file_and_reviewed_counts_once(self):
         history = _history(("a1", "A", "TruePositive"), ("a2", "A", "TruePositive"))

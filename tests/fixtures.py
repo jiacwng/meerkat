@@ -2,7 +2,14 @@
 
 import csv
 import hashlib
+import json
+import tempfile
+import unittest
 from pathlib import Path
+from unittest import mock
+
+from core import rank
+from core.features import INPUTS
 
 HEADER = (
     "OrgId", "IncidentId", "AlertId", "Timestamp", "DetectorId", "AlertTitle",
@@ -30,9 +37,28 @@ ROWS = (
 )
 
 
-def plain_row(incident_id: str, rule: str, grade: str = "") -> tuple:
-    return ("1", incident_id, f"a{incident_id}", "2024-06-10T00:00:00Z", rule, "Title",
+def plain_row(incident_id: str, rule: str, grade: str = "",
+              time: str = "2024-06-10T00:00:00Z") -> tuple:
+    return ("1", incident_id, f"a{incident_id}", time, rule, "Title",
             "Category", "", grade, "", "")
+
+
+# the score is logistic(4 * rule rate - 2), so a rule never graded before scores 0.5
+WEIGHTS = {
+    "inputs": list(INPUTS),
+    "mean": [0.0] * len(INPUTS),
+    "scale": [1.0] * len(INPUTS),
+    "coefficients": [4.0 if name == "rule_true_positive_rate" else 0.0 for name in INPUTS],
+    "intercept": -2.0,
+    "prior": 0.5,
+}
+
+
+def use_weights(test: unittest.TestCase, weights: dict = WEIGHTS) -> None:
+    folder = Path(test.enterContext(tempfile.TemporaryDirectory()))
+    path = folder / "weights.json"
+    path.write_text(json.dumps(weights))
+    test.enterContext(mock.patch.object(rank, "WEIGHTS", path))
 
 
 # written out here again so that a change to the sampling rule fails a test
@@ -51,14 +77,17 @@ def sampled_ids(sampled: bool, count: int) -> list[str]:
     return found
 
 
-# rule 3 has 20 true positives and rule 9 has 20 false positives, so a rule 9 incident
-# scores about 0.13; 20 ungraded rule 7 incidents t0 to t19 are there to be graded
+# a day of history: 20 rule 3 true positives at one time, 20 rule 9 and 2 rule 7 false
+# positives; then rule 7 incidents t0 to t19 a minute apart, to be graded, and a day later
+# open rule 9 incidents, which score about 0.17 under WEIGHTS
 def calibration_rows(audit: int, closed: int) -> tuple:
-    rows = [plain_row(f"p{i}", "3", "TruePositive") for i in range(20)]
-    rows += [plain_row(f"f{i}", "9", "FalsePositive") for i in range(20)]
-    rows += [plain_row(f"t{i}", "7") for i in range(20)]
-    rows += [plain_row(i, "9") for i in sampled_ids(True, audit)]
-    rows += [plain_row(i, "9") for i in sampled_ids(False, closed)]
+    history, later = "2024-06-09T00:00:00Z", "2024-06-11T00:00:00Z"
+    rows = [plain_row(f"p{i}", "3", "TruePositive", history) for i in range(20)]
+    rows += [plain_row(f"f{i}", "9", "FalsePositive", history) for i in range(20)]
+    rows += [plain_row(f"g{i}", "7", "FalsePositive", history) for i in range(2)]
+    rows += [plain_row(f"t{i}", "7", time=f"2024-06-10T00:{i:02d}:00Z") for i in range(20)]
+    rows += [plain_row(i, "9", time=later) for i in sampled_ids(True, audit)]
+    rows += [plain_row(i, "9", time=later) for i in sampled_ids(False, closed)]
     return tuple(rows)
 
 
