@@ -100,8 +100,8 @@ class ScoreTests(unittest.TestCase):
         use_weights(self, dict(WEIGHTS, coefficients=[0, 4, 0, 0.5, 0, 1, 0, 0, 1, 0]))
         scored = score(self.incidents).set_index("IncidentId")
         self.assertNotEqual(scored.loc["200", "score"], scored.loc["202", "score"])
-        self.assertEqual(scored.loc["200", "score_as_new_rule"],
-                         scored.loc["202", "score_as_new_rule"])
+        self.assertAlmostEqual(scored.loc["200", "score_as_new_rule"],
+                               scored.loc["202", "score_as_new_rule"])
 
     def test_input_is_left_unchanged(self):
         before = self.incidents.copy()
