@@ -58,6 +58,26 @@ class CliTests(unittest.TestCase):
         self.assertEqual(lines[5], "Nothing closed yet: 2 of 19 graded true positives.")
         self.assertNotIn("100", [line.split()[1] for line in lines[1:4]])
 
+    def test_queue_table_and_json_carry_the_reason(self):
+        code, out, _ = self._run("queue", str(self.csv))
+        lines = out.splitlines()
+        self.assertRegex(lines[0], r"rule history\s+reason\s+time")
+        self.assertIn("rule history raises it", lines[1])
+        self.assertIn("no history", lines[2])
+        rows = json.loads(self._run("queue", "--json")[1])["queue"]
+        self.assertEqual([row["reason"] for row in rows],
+                         ["rule history raises it", "no history", "rule history lowers it"])
+
+    def test_inspect_shows_the_score_without_links_and_as_a_new_rule(self):
+        self._run("queue", str(self.csv))
+        out = self._run("inspect", "201")[1]
+        self.assertRegex(out, r"score\s+0\.\d\d\nwithout links\s+0\.\d\d\n"
+                              r"as a new rule\s+0\.\d\d\nreason\s+rule history raises it\n")
+        record = json.loads(self._run("inspect", "201", "--json")[1])
+        self.assertEqual(record["reason"], "rule history raises it")
+        self.assertEqual(record["score_without_links"], record["score"])
+        self.assertEqual(record["score_as_new_rule"], 0.5)
+
     def test_queue_without_a_file_reopens_the_latest_run(self):
         self._run("queue", str(self.csv))
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
@@ -347,7 +367,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(json.loads(self._run("inspect", "t0", "--json")[1])["pile"],
                          "queue")
         closed_id = sampled_ids(False, 1)[0]
-        self.assertRegex(self._run("inspect", closed_id)[1], r"score\s+0\.\d\d\npile\s+closed\n")
+        self.assertRegex(self._run("inspect", closed_id)[1], r"reason\s+rule history lowers it\npile\s+closed\n")
         self.assertEqual(json.loads(self._run("inspect", closed_id, "--json")[1])["pile"],
                          "closed")
 

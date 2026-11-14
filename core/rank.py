@@ -9,6 +9,9 @@ import pandas as pd
 from core import features
 
 WEIGHTS = Path(__file__).parent / "data" / "weights.json"
+LINK_INPUTS = ("log_linked", "log_linked_true_positive", "log_linked_benign_positive",
+               "log_linked_false_positive", "linked_true_positive_rate")
+RULE_INPUTS = ("rule_true_positive_rate", "log_rule_graded")
 
 
 def load_weights() -> dict:
@@ -25,17 +28,43 @@ def score(incidents: pd.DataFrame) -> pd.DataFrame:
                 / np.array(weights["scale"]))
     logit = standard @ np.array(weights["coefficients"]) + weights["intercept"]
 
+    unseen = features.smooth(0, 0, weights["prior"])
+    links = _shift(found, weights, LINK_INPUTS, [0.0, 0.0, 0.0, 0.0, unseen])
+    rule = _shift(found, weights, RULE_INPUTS, [unseen, 0.0])
+
     graded = incidents[incidents["IncidentGrade"] != ""]
     true_positive = graded["IncidentGrade"] == "TruePositive"
     by_rule = true_positive.groupby(graded["DetectorId"]).agg(["size", "sum"])
 
     scored = incidents.copy()
-    rule = scored["DetectorId"]
-    scored["rule_graded"] = rule.map(by_rule["size"]).fillna(0).astype(int)
-    scored["rule_true_positives"] = rule.map(by_rule["sum"]).fillna(0).astype(int)
+    detector = scored["DetectorId"]
+    scored["rule_graded"] = detector.map(by_rule["size"]).fillna(0).astype(int)
+    scored["rule_true_positives"] = detector.map(by_rule["sum"]).fillna(0).astype(int)
     for column in features.LINKED:
         scored[column] = found[column].to_numpy()
-    scored["score"] = 1 / (1 + np.exp(-logit))
+    scored["score"] = _logistic(logit)
+    scored["score_without_links"] = _logistic(logit - links)
+    scored["score_as_new_rule"] = _logistic(logit - rule)
+    scored["reason"] = [_reason(a, b) for a, b in zip(links, rule, strict=True)]
     return scored.sort_values(
         ["score", "Timestamp", "IncidentId"], ascending=[False, False, True],
         kind="stable").reset_index(drop=True)
+
+
+def _logistic(logit: np.ndarray) -> np.ndarray:
+    return 1 / (1 + np.exp(-logit))
+
+
+def _shift(found: pd.DataFrame, weights: dict, group: tuple[str, ...],
+           base: list[float]) -> np.ndarray:
+    at = [features.INPUTS.index(name) for name in group]
+    standard = (found[list(group)].to_numpy() - np.array(base)) / np.array(weights["scale"])[at]
+    return standard @ np.array(weights["coefficients"])[at]
+
+
+def _reason(links: float, rule: float) -> str:
+    if links == 0.0 and rule == 0.0:
+        return "no history"
+    if abs(links) >= abs(rule):
+        return "linked incidents " + ("raise" if links > 0 else "lower") + " it"
+    return "rule history " + ("raises" if rule > 0 else "lowers") + " it"
