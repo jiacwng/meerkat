@@ -25,12 +25,21 @@ def _history(*graded: tuple[str, str, str]) -> pd.DataFrame:
 
 
 def _level(*rows: tuple) -> float | None:
-    return close.close_level(close.calibration(_history(), _reviews(*rows)))
+    return close.close_level(close.calibration(_history(), _reviews(*rows)),
+                             close.DEFAULT_MISS_RATE)
 
 
 class LevelTests(unittest.TestCase):
     def test_needed_follows_the_miss_rate(self):
-        self.assertEqual(close.needed(), 19)
+        self.assertEqual(close.needed(0.05), 19)
+        self.assertEqual(close.needed(0.01), 99)
+        self.assertEqual(close.needed(0.10), 9)
+
+    def test_a_lower_miss_rate_never_raises_the_level(self):
+        entries = close.calibration(_history(), _reviews(*(_tp(str(i), i + 1.0)
+                                                           for i in range(120))))
+        levels = [close.close_level(entries, rate) for rate in (0.01, 0.05, 0.10)]
+        self.assertEqual(levels, [1.0, 6.0, 12.0])
 
     def test_fewer_entries_than_needed_give_no_level(self):
         self.assertIsNone(_level())

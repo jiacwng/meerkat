@@ -5,12 +5,12 @@ import math
 
 import pandas as pd
 
-MISS_RATE = 0.05
+DEFAULT_MISS_RATE = 0.05
 AUDIT_SHARE = 0.10
 PILES = ("queue", "audit", "closed")
 
-def needed() -> int:
-    return math.ceil(1 / MISS_RATE - 1)
+def needed(miss_rate: float) -> int:
+    return math.ceil(1 / miss_rate - 1)
 
 def calibration(scored: pd.DataFrame, reviews: pd.DataFrame) -> pd.DataFrame:
     latest = reviews.drop_duplicates("IncidentId", keep="last")
@@ -24,8 +24,8 @@ def calibration(scored: pd.DataFrame, reviews: pd.DataFrame) -> pd.DataFrame:
     imported = pd.DataFrame({"score": own["score"], "weight": 1.0})
     return pd.concat([reviewed, imported], ignore_index=True)
 
-def close_level(entries: pd.DataFrame) -> float | None:
-    budget = MISS_RATE * (entries["weight"].sum() + 1)
+def close_level(entries: pd.DataFrame, miss_rate: float) -> float | None:
+    budget = miss_rate * (entries["weight"].sum() + 1)
     cumulative = entries.groupby("score")["weight"].sum().cumsum()
     within = cumulative[cumulative <= budget]
     return float(within.index.max()) if len(within) else None
