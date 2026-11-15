@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from core import close
+from core import close, store
 from core.incidents import COLUMNS
 from meerkat import __version__, cli
 from meerkat.cli import main
@@ -95,6 +95,45 @@ class CliTests(unittest.TestCase):
         code, out, _ = self._run("queue", "--limit", "1")
         self.assertIn("1 of 3 open incidents", out)
 
+    def _three_runs(self) -> list[str]:
+        days = ("2024-06-01", "2024-06-02", "2024-06-03")
+        for day, ids in zip(days, (("a1", "a2"), ("b1", "b2"), ("c1",)), strict=True):
+            rows = [plain_row(i, "5", time=f"{day}T00:00:00Z") for i in ids]
+            self._run("queue", str(write_csv(self.tmp / f"{day}.csv", rows)))
+        return [meta["run"] for meta in json.loads(self._run("runs", "--json")[1])]
+
+    def test_queue_lists_the_open_incidents_of_every_run(self):
+        first, _, _ = self._three_runs()
+        self.assertEqual(self._queue_ids(), ["c1", "b1", "b2", "a1", "a2"])
+        out = self._run("queue")[1]
+        self.assertIn("\n5 of 5 open incidents\n", out)
+        report = json.loads(self._run("queue", "--json")[1])
+        self.assertEqual((report["run"], report["open"], report["closed"], report["audit"]),
+                         (None, 5, 0, 0))
+        self.assertEqual(self._queue_ids("--limit", "2"), ["c1", "b1"])
+        self.assertIn("2 of 5 open incidents", self._run("queue", "--limit", "2")[1])
+        self.assertEqual(self._queue_ids("--run", first), ["a1", "a2"])
+        self.assertIn(f"\n2 of 2 open incidents, run {first}\n",
+                      self._run("queue", "--run", first)[1])
+        report = json.loads(self._run("queue", "--run", first, "--json")[1])
+        self.assertEqual((report["run"], report["open"]), (first, 2))
+
+    def test_queue_with_a_file_lists_the_new_and_the_earlier_incidents(self):
+        self._three_runs()
+        fourth = write_csv(self.tmp / "d.csv", [plain_row("d1", "5", time="2024-06-04T00:00:00Z")])
+        self.assertEqual(self._queue_ids(str(fourth)), ["d1", "c1", "b1", "b2", "a1", "a2"])
+        report = json.loads(self._run("queue", "--json")[1])
+        self.assertEqual(report["open"], 6)
+        self.assertEqual(report["run"], None)
+        saved = json.loads(self._run("queue", str(fourth), "--json")[1])
+        self.assertEqual(saved["run"], store.list_runs(self.runs_dir)[-1]["run"])
+
+    def test_a_reviewed_incident_leaves_the_list_of_every_run(self):
+        self._three_runs()
+        self._run("review", "b1", "fp")
+        self.assertEqual(self._queue_ids(), ["b2", "a1", "a2", "c1"])
+        self.assertEqual(json.loads(self._run("queue", "--json")[1])["open"], 4)
+
     def test_review_moves_the_queue(self):
         self._run("queue", str(self.csv))
         code, out, _ = self._run("review", "201", "fp", "--note", "test account")
@@ -111,7 +150,7 @@ class CliTests(unittest.TestCase):
         later = (("1", "900", "z1", "2024-06-09T00:00:00Z", "42", "New rule", "", "",
                   "", "", ""),)
         later_csv = write_csv(self.tmp / "later.csv", later)
-        self.assertEqual(self._queue_ids(str(later_csv)), ["900"])
+        self.assertEqual(self._queue_ids(str(later_csv)), ["201", "900", "202", "200"])
         code, out, _ = self._run("inspect", "900", "--json")
         self.assertEqual(json.loads(out)["score"], 0.5)
         self._run("review", "202", "tp")
@@ -119,13 +158,15 @@ class CliTests(unittest.TestCase):
         record = json.loads(out)
         self.assertEqual((record["rule_graded"], record["rule_true_positives"]), (1, 1))
         self.assertGreater(record["score"], 0.5)
-        self.assertEqual(self._queue_ids(), ["900"])
+        self.assertEqual(self._queue_ids(), ["201", "900", "200"])
 
     def test_queue_with_nothing_open(self):
         self._run("queue", str(write_csv(self.tmp / "graded.csv", ROWS[:5])))
         code, out, _ = self._run("queue")
-        self.assertEqual(code, 0)
-        self.assertIn("No open incidents", out)
+        self.assertEqual((code, out), (0, "No open incidents.\n"))
+        run = store.list_runs(self.runs_dir)[-1]["run"]
+        self.assertEqual(self._run("queue", "--run", run)[1],
+                         f"No open incidents in run {run}.\n")
 
     def test_inspect_text_and_json(self):
         self._run("queue", str(self.csv))
@@ -272,7 +313,7 @@ class CliTests(unittest.TestCase):
         report = self._queue_json()
         self.assertEqual((report["closed"], report["audit"], report["close_level"]),
                          (0, 0, None))
-        self.assertEqual(report["open"], 24)
+        self.assertEqual(report["open"], 27)
 
     def test_graded_history_in_the_file_closes_incidents_without_a_review(self):
         closed_id = sampled_ids(False, 1)[0]
@@ -343,8 +384,7 @@ class CliTests(unittest.TestCase):
     def test_no_open_incident_at_all_keeps_the_old_message(self):
         self._calibrate(0, 0)
         self._run("review", "t19", "tp")
-        run = json.loads(self._run("runs", "--json")[1])[0]["run"]
-        self.assertEqual(self._run("queue")[1], f"No open incidents in run {run}.\n")
+        self.assertEqual(self._run("queue")[1], "No open incidents.\n")
 
     def test_review_records_the_score_and_pile_and_a_regrade_keeps_them(self):
         self._calibrate(3, 2)
@@ -441,7 +481,7 @@ class CliTests(unittest.TestCase):
         code, out, _ = self._run("queue", "--miss-rate", "0.01")
         self.assertEqual(code, 0)
         lines = out.splitlines()
-        self.assertTrue(lines[0].startswith("No open incidents in run"))
+        self.assertTrue(lines[0].startswith("No open incidents."))
         self.assertEqual(lines[1], "Miss rate changed from 5% to 1%. "
                                    "Earlier grades keep the pile they were given.")
 

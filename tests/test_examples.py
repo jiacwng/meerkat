@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from core import features
+from core import features, store
 from core.incidents import GRADES, LINKS, SEPARATOR, read_incidents
 from meerkat.cli import main
 from tests.fixtures import DEFENDER, use_weights
@@ -41,6 +41,20 @@ class ExampleTests(unittest.TestCase):
             self.assertTrue((counts / len(self.incidents)
                              <= features.PLACEHOLDER_SHARE).all(), column)
 
+    def test_incidents_split_by_alert_day_merge_back_into_the_single_file(self):
+        rows = pd.read_csv(EXAMPLES / "incidents.csv", dtype=str, keep_default_na=False)
+        days = pd.to_datetime(rows["Timestamp"], utc=True, format="ISO8601").dt.date
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        runs_dir = folder / "runs"
+        for day, part in rows.groupby(days):
+            path = folder / f"{day}.csv"
+            part.to_csv(path, index=False)
+            store.save_run(runs_dir, read_incidents(path, DEFENDER), path.name, "defender")
+        merged = store.load_history(runs_dir).sort_values("IncidentId")
+        single = self.incidents.sort_values("IncidentId")
+        pd.testing.assert_frame_equal(merged.reset_index(drop=True),
+                                      single.reset_index(drop=True))
+
     def test_queue_lists_incidents(self):
         use_weights(self)
         runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -57,7 +71,7 @@ class ExampleTests(unittest.TestCase):
             main(["queue", str(EXAMPLES / "incidents.csv"), "--runs-dir", str(runs_dir)])
         count, closed, kept = out.getvalue().splitlines()[-3:]
         readme = (EXAMPLES.parent / "README.md").read_text(encoding="utf-8")
-        self.assertIn(count.split(", run ")[0], readme)
+        self.assertIn(count, readme)
         self.assertIn(closed, readme)
         self.assertIn(kept, readme)
 
