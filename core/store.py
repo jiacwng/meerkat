@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.close import PILES
+from core.incidents import COLUMNS
 
 GRADES_FILE = "grades.csv"
 SETTINGS_FILE = "settings.json"
@@ -75,12 +76,14 @@ def load_run(runs_dir: Path, run_id: str | None = None) -> tuple[dict, pd.DataFr
     return meta, _apply_grades(runs_dir, _read_run(runs_dir, meta["run"]))
 
 
-def load_history(runs_dir: Path) -> pd.DataFrame:
+def load_history(runs_dir: Path, incoming: pd.DataFrame | None = None) -> pd.DataFrame:
     # an incident present in several runs is taken from the latest one
     runs = list_runs(runs_dir)
-    if not runs:
+    if not runs and incoming is None:
         raise StoreError(f"no runs in {runs_dir}; score a file with: meerkat queue FILE")
     frames = [_read_run(runs_dir, meta["run"]) for meta in runs]
+    if incoming is not None:
+        frames.append(incoming)
     history = pd.concat(frames, ignore_index=True)
     history = history.drop_duplicates("IncidentId", keep="last")
     return _apply_grades(runs_dir, history.reset_index(drop=True))
@@ -147,7 +150,15 @@ def read_reviews(runs_dir: Path) -> pd.DataFrame:
 
 
 def _read_run(runs_dir: Path, run_id: str) -> pd.DataFrame:
-    return _read_csv(runs_dir / run_id / "incidents.csv")
+    path = runs_dir / run_id / "incidents.csv"
+    incidents = _read_csv(path)
+    if list(incidents.columns) != list(COLUMNS):
+        raise StoreError(f"{path}: expected columns {', '.join(COLUMNS)}")
+    times = pd.to_datetime(incidents["Timestamp"], utc=True, format="ISO8601", errors="coerce")
+    if times.isna().any():
+        bad = incidents.loc[times.isna(), "Timestamp"].iloc[0]
+        raise StoreError(f"{path}: Timestamp {bad!r} is not ISO 8601")
+    return incidents
 
 
 def _read_csv(path: Path) -> pd.DataFrame:

@@ -156,11 +156,99 @@ class ReadIncidentsTests(unittest.TestCase):
         self.assertEqual(sorted(incidents["IncidentId"]),
                          ["100", "101", "102", "103", "200", "201", "202"])
 
-    def test_unparseable_timestamp(self):
-        for value in ("yesterday", "99999-01-01T00:00:00Z"):
-            with self.subTest(value), self.assertRaisesRegex(
-                    IncidentError, "Timestamp is not ISO 8601"):
-                read_incidents(write_csv(self.path, (self._row(Timestamp=value),)), DEFENDER)
+    def _refusal(self, mapping=DEFENDER) -> str:
+        with self.assertRaises(IncidentError) as raised:
+            read_incidents(self.path, mapping)
+        self.assertNotIn("\n", str(raised.exception))
+        return str(raised.exception)
+
+    def test_unparseable_timestamp_names_the_first_value_in_one_line(self):
+        for value in ("yesterday", "99999-01-01T00:00:00Z", "15/06/2024 10:00"):
+            with self.subTest(value):
+                rows = (self._row(), self._row(IncidentId="300", Timestamp=value),
+                        self._row(IncidentId="301", Timestamp="never"))
+                write_csv(self.path, rows)
+                self.assertEqual(
+                    self._refusal(),
+                    f"{self.path}: Timestamp '{value}' is not ISO 8601, "
+                    "like 2024-06-15T10:00:00Z")
+
+    def test_unparseable_timestamp_uses_the_mapped_column_name(self):
+        header = ("rule_id", "_time", "rule_name")
+        write_csv(self.path, (("1", "15/06/2024 10:00", "r"),), header)
+        self.assertEqual(self._refusal(load_mapping("splunk")),
+                         f"{self.path}: _time '15/06/2024 10:00' is not ISO 8601, "
+                         "like 2024-06-15T10:00:00Z")
+
+    def test_a_time_that_cannot_be_saved_and_read_back_is_refused(self):
+        for value in ("9999-12-31T23:00:00-02:00", "9999-12-31T23:59:59-00:01"):
+            with self.subTest(value):
+                write_csv(self.path, (self._row(), self._row(IncidentId="300", Timestamp=value)))
+                self.assertEqual(self._refusal(),
+                                 f"{self.path}: Timestamp '{value}' is outside the times "
+                                 "meerkat can score")
+
+    def test_distant_times_are_accepted_and_survive_a_round_trip(self):
+        for value in ("9999-12-31T23:59:59Z", "0001-01-01T00:00:00Z", "0999-05-05T01:02:03Z",
+                      "2300-01-01T00:00:00Z"):
+            with self.subTest(value):
+                write_csv(self.path, (self._row(Timestamp=value),))
+                incidents = read_incidents(self.path, DEFENDER)
+                self.assertEqual(incidents.loc[0, "Timestamp"], value)
+
+    def test_saved_text_drops_fractions_and_converts_offsets_to_utc(self):
+        cases = (("2024-06-15T10:00:00Z", "2024-06-15T10:00:00Z"),
+                 ("2024-06-15T10:00:00.987Z", "2024-06-15T10:00:00Z"),
+                 ("2024-06-15T10:00:00+02:00", "2024-06-15T08:00:00Z"),
+                 ("0001-01-01T00:00:00+02:00", "0000-12-31T22:00:00Z"))
+        for value, saved in cases:
+            with self.subTest(value):
+                write_csv(self.path, (self._row(Timestamp=value),))
+                self.assertEqual(read_incidents(self.path, DEFENDER).loc[0, "Timestamp"], saved)
+
+    def test_a_utf16_file_is_named_as_utf16(self):
+        text = ",".join(HEADER) + "\n" + ",".join(ROWS[5]) + "\n"
+        for name, data in (("utf-16", text.encode("utf-16")),
+                           ("utf-16-be", b"\xfe\xff" + text.encode("utf-16-be"))):
+            with self.subTest(name):
+                self.path.write_bytes(data)
+                self.assertEqual(self._refusal(), f"{self.path}: is UTF-16, save it as UTF-8")
+
+    def test_a_file_that_is_not_utf8_is_named(self):
+        text = ",".join(HEADER) + "\n" + ",".join(ROWS[5]).replace("Mail", "Caf\xe9") + "\n"
+        self.path.write_bytes(text.encode("latin-1"))
+        self.assertEqual(self._refusal(), f"{self.path}: is not UTF-8, save it as UTF-8")
+
+    def test_a_utf8_byte_order_mark_is_read(self):
+        text = ",".join(HEADER) + "\n" + ",".join(ROWS[5]) + "\n"
+        self.path.write_bytes(b"\xef\xbb\xbf" + text.encode())
+        self.assertEqual(list(read_incidents(self.path, DEFENDER)["IncidentId"]), ["200"])
+
+    def test_a_semicolon_or_tab_header_names_the_separator(self):
+        for separator, shown in ((";", "';'"), ("\t", "'\\t'")):
+            with self.subTest(shown):
+                lines = (separator.join(HEADER), separator.join(ROWS[5]))
+                self.path.write_text("\n".join(lines) + "\n")
+                self.assertEqual(self._refusal(),
+                                 f"{self.path}: columns are separated by {shown}, expected ','")
+
+    def test_a_quoted_semicolon_header_names_the_separator(self):
+        self.path.write_text('"IncidentId";"Timestamp";"DetectorId"\n1;2024-06-01;7\n')
+        self.assertIn("columns are separated by ';'", self._refusal())
+
+    def test_a_header_that_would_still_lack_a_column_keeps_the_missing_column_message(self):
+        self.path.write_text("IncidentId;Timestamp\n1;2024-06-01\n")
+        self.assertEqual(self._refusal(),
+                         f"{self.path}: missing column IncidentId, Timestamp, DetectorId")
+        self.path.write_text("a,b\n1,2\n")
+        self.assertEqual(self._refusal(),
+                         f"{self.path}: missing column IncidentId, Timestamp, DetectorId")
+
+    def test_a_blank_organisation_does_not_count_as_one(self):
+        rows = (self._row(), self._row(IncidentId="300", OrgId=""),
+                self._row(IncidentId="301", OrgId=" "))
+        incidents = read_incidents(write_csv(self.path, rows), DEFENDER)
+        self.assertEqual(sorted(incidents["IncidentId"]), ["200", "300", "301"])
 
     def test_many_rows(self):
         rows = [self._row(IncidentId=str(n % 20_000), AlertId=str(n),

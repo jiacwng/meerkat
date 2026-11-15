@@ -1,5 +1,6 @@
 # Reads an incident CSV through a column mapping into one row per incident.
 
+import csv
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -44,20 +45,31 @@ def _read_rows(path, mapping: "Mapping") -> pd.DataFrame:
                            usecols=lambda name: name in wanted)
     except FileNotFoundError:
         raise IncidentError(f"{path}: no such file") from None
-    except (OSError, UnicodeDecodeError, pd.errors.ParserError,
-            pd.errors.EmptyDataError) as error:
+    except UnicodeDecodeError:
+        with open(path, "rb") as handle:
+            utf16 = handle.read(2) in (b"\xff\xfe", b"\xfe\xff")
+        raise IncidentError(
+            f"{path}: is {'UTF-16' if utf16 else 'not UTF-8'}, save it as UTF-8") from None
+    except (OSError, pd.errors.ParserError, pd.errors.EmptyDataError) as error:
         raise IncidentError(f"{path}: not a readable CSV ({error})") from None
 
     missing = [mapping.columns[name] for name in REQUIRED
                if mapping.columns[name] not in rows.columns]
     if missing:
+        separator = _header_separator(path, mapping)
+        if separator is not None:
+            raise IncidentError(
+                f"{path}: columns are separated by {separator!r}, expected ','")
         raise IncidentError(f"{path}: missing column {', '.join(missing)}")
     if rows.empty:
         raise IncidentError(f"{path}: no incident rows")
-    if "OrgId" in rows.columns and rows["OrgId"].nunique() > 1:
-        raise IncidentError(
-            f"{path}: {rows['OrgId'].nunique()} organisations in OrgId, "
-            "a file holds one organisation")
+    if "OrgId" in rows.columns:
+        organisations = rows["OrgId"].str.strip()
+        organisations = organisations[organisations != ""]
+        if organisations.nunique() > 1:
+            raise IncidentError(
+                f"{path}: {organisations.nunique()} organisations in OrgId, "
+                "a file holds one organisation")
 
     rows = rows.rename(columns={source: name for name, source in mapping.columns.items()})
     rows = rows.reindex(columns=list(COLUMNS), fill_value="")
@@ -73,13 +85,32 @@ def _read_rows(path, mapping: "Mapping") -> pd.DataFrame:
             f"{path}: {mapping.columns['IncidentGrade']} {unknown.iloc[0]!r} "
             f"is not one of {', '.join(mapping.grades)}")
     rows["IncidentGrade"] = rows["IncidentGrade"].map(words)
-    try:
-        times = pd.to_datetime(rows["Timestamp"], utc=True, format="ISO8601")
-    except ValueError as error:
+    name = mapping.columns["Timestamp"]
+    times = pd.to_datetime(rows["Timestamp"], utc=True, format="ISO8601", errors="coerce")
+    if times.isna().any():
         raise IncidentError(
-            f"{path}: {mapping.columns['Timestamp']} is not ISO 8601 ({error})") from None
-    rows["Timestamp"] = times.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            f"{path}: {name} {rows['Timestamp'][times.isna()].iloc[0]!r} is not ISO 8601, "
+            "like 2024-06-15T10:00:00Z")
+    # a time is kept only if its saved text parses back, so every saved run can be scored
+    seconds = times.dt.tz_localize(None).to_numpy().astype("datetime64[s]")
+    text = pd.Series(seconds.astype(str), index=rows.index) + "Z"
+    held = pd.to_datetime(text, utc=True, format="ISO8601", errors="coerce").notna()
+    if not held.all():
+        raise IncidentError(
+            f"{path}: {name} {rows['Timestamp'][~held].iloc[0]!r} is outside the times "
+            "meerkat can score")
+    rows["Timestamp"] = text
     return rows
+
+
+def _header_separator(path, mapping: "Mapping") -> str | None:
+    with open(path, encoding="utf-8-sig", newline="") as handle:
+        header = handle.readline()
+    for separator in (";", "\t"):
+        names = next(csv.reader([header], delimiter=separator))
+        if all(mapping.columns[name] in names for name in REQUIRED):
+            return separator
+    return None
 
 
 def _distinct(rows: pd.DataFrame, column: str, split: str | None = None) -> pd.Series:
