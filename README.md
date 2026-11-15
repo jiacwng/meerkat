@@ -41,14 +41,15 @@ the 10 that were set aside.
 
 | Command | What it does |
 | --- | --- |
-| `meerkat queue FILE` | Scores an incident CSV and saves it as a run. Without FILE it reopens the latest run. |
+| `meerkat queue [FILE]` | Scores an incident CSV and saves it as a run. Without FILE it lists the open incidents of every saved run. |
 | `meerkat review INCIDENT GRADE` | Records a grade: `tp`, `bp` or `fp`. |
 | `meerkat inspect INCIDENT` | Shows one incident with its score, its rule history and its linked incidents. |
 | `meerkat runs` | Lists the saved runs. |
 
-`queue --closed` lists the incidents that were set aside. `--json` gives
-machine readable output on `queue`, `inspect` and `runs`. Runs, grades and
-settings are kept in `runs/`, or in the folder given by `--runs-dir`.
+`queue --closed` lists the incidents that were set aside. `queue --run ID` lists
+one run only. `--json` gives machine readable output on `queue`, `inspect` and
+`runs`. Runs, grades and settings are kept in `runs/`, or in the folder given
+by `--runs-dir`.
 
 A grade changes the next queue:
 

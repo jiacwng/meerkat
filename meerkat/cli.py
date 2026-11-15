@@ -98,7 +98,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _add_run(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--run", metavar="ID", help="run id (default: the latest)")
+    parser.add_argument("--run", metavar="ID", help="only the incidents of this run")
 
 
 def _add_json(parser: argparse.ArgumentParser) -> None:
