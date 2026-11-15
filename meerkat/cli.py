@@ -140,12 +140,15 @@ def _queue(args: argparse.Namespace) -> None:
     from core.mapping import load_mapping
 
     incoming = None
+    run = None
+    run_ids = None
     if args.file is not None:
         mapping = load_mapping("defender" if args.mapping is None else args.mapping)
         incoming = read_incidents(args.file, mapping)
-        incidents = incoming
-    else:
-        meta, incidents = store.load_run(args.runs_dir, args.run)
+    elif args.run is not None:
+        _, in_run = store.load_run(args.runs_dir, args.run)
+        run = args.run
+        run_ids = in_run["IncidentId"]
 
     saved = store.read_settings(args.runs_dir)
     previous = saved.get("miss_rate")
@@ -155,15 +158,15 @@ def _queue(args: argparse.Namespace) -> None:
     if args.keep_linked is not None:
         saved["keep_linked"] = args.keep_linked
 
-    # the rule's past rate comes from every run, the rows shown from this one
     scored, level, entries, settings = _scored(args.runs_dir, incoming, saved)
     if incoming is not None:
-        meta = store.save_run(args.runs_dir, incidents, args.file.name, mapping.name)
+        run = store.save_run(args.runs_dir, incoming, args.file.name, mapping.name)["run"]
     if args.miss_rate is not None or args.keep_linked is not None:
         store.write_settings(args.runs_dir, saved)
     miss_rate, keep_linked = settings["miss_rate"], settings["keep_linked"]
-    in_run = scored["IncidentId"].isin(incidents["IncidentId"])
-    open_incidents = scored[in_run & (scored["IncidentGrade"] == "")]
+    open_incidents = scored[scored["IncidentGrade"] == ""]
+    if run_ids is not None:
+        open_incidents = open_incidents[open_incidents["IncidentId"].isin(run_ids)]
     closed = open_incidents[open_incidents["pile"] == "closed"]
     audit = open_incidents[open_incidents["pile"] == "audit"]
     kept_linked = 0
@@ -181,14 +184,15 @@ def _queue(args: argparse.Namespace) -> None:
         rows = [_as_record(row, position)
                 for position, row in enumerate(shown.to_dict("records"), start=1)]
         _print_json({
-            "run": meta["run"], "open": len(open_incidents), "closed": len(closed),
+            "run": run, "open": len(open_incidents), "closed": len(closed),
             "audit": len(audit), "close_level": level, "miss_rate": miss_rate,
             "audit_share": close.AUDIT_SHARE, "keep_linked": keep_linked,
             "kept_linked": kept_linked, "queue": rows})
         return
 
     if open_incidents.empty:
-        print(f"No open incidents in run {meta['run']}.")
+        print("No open incidents." if run_ids is None
+              else f"No open incidents in run {run}.")
     else:
         if not listed.empty:
             rows = [
@@ -199,7 +203,8 @@ def _queue(args: argparse.Namespace) -> None:
             _print_table(("#", "incident", "score", "pile", "rule", "rule history", "reason",
                           "time", "title"), rows)
             kind = "closed" if args.closed else "open"
-            print(f"{len(shown)} of {len(listed)} {kind} incidents, run {meta['run']}")
+            where = "" if run_ids is None else f", run {run}"
+            print(f"{len(shown)} of {len(listed)} {kind} incidents{where}")
         if level is None and len(entries) >= close.needed(miss_rate):
             print("Nothing closed: too many graded true positives share the lowest score.")
         elif level is None:

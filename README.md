@@ -27,7 +27,7 @@ incidents over 28 days, of which the 42 from the last three days are open.
 ...
 18  145885    0.76         3     13 of 37 true positive    linked incidents raise it  2024-06-15T23:31:40Z  4
 19  54866     0.73         1     4 of 4 true positive      rule history raises it     2024-06-16T19:48:26Z  1
-20 of 32 open incidents, run 20261114T223615Z
+20 of 32 open incidents
 10 more are under the close level (at most 5% of true positives). 4 others under it are above as audit.
 5 others under it stay in the queue because a linked incident was a true positive.
 ```

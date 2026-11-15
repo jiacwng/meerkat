@@ -32,9 +32,9 @@ def read_incidents(path, mapping: "Mapping") -> pd.DataFrame:
     incidents = by_incident[["Timestamp", "DetectorId", *DESCRIPTIVE]].first()
     grades = rows["IncidentGrade"].replace("", pd.NA)
     incidents["IncidentGrade"] = grades.groupby(rows["IncidentId"]).first()
-    incidents["MitreTechniques"] = _distinct(rows, "MitreTechniques", split=";")
+    incidents["MitreTechniques"] = distinct(rows, "MitreTechniques", split=";")
     for column in LINKS:
-        incidents[column] = _distinct(rows, column)
+        incidents[column] = distinct(rows, column)
     return incidents.fillna("").reset_index()[list(COLUMNS)]
 
 
@@ -113,7 +113,7 @@ def _header_separator(path, mapping: "Mapping") -> str | None:
     return None
 
 
-def _distinct(rows: pd.DataFrame, column: str, split: str | None = None) -> pd.Series:
+def distinct(rows: pd.DataFrame, column: str, split: str | None = None) -> pd.Series:
     values = rows[["IncidentId", column]]
     if split:
         values = values.assign(**{column: values[column].str.split(split)})

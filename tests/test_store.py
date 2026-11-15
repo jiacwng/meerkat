@@ -4,9 +4,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pandas as pd
+
 from core import store
 from core.incidents import read_incidents
-from tests.fixtures import DEFENDER, write_csv
+from tests.fixtures import DEFENDER, ROWS, write_csv
 
 
 class StoreTests(unittest.TestCase):
@@ -94,7 +96,7 @@ class StoreTests(unittest.TestCase):
                         read(self.runs_dir)
                     self.assertNotIn("\n", str(raised.exception))
 
-    def test_history_joins_runs_and_keeps_the_latest_copy(self):
+    def test_history_has_one_row_per_incident_and_the_earlier_run_wins_a_tie(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         later = (
             ("1", "200", "a6", "2024-06-05T12:00:00Z", "7", "Retitled", "", "", "", "", ""),
@@ -104,8 +106,54 @@ class StoreTests(unittest.TestCase):
         store.save_run(self.runs_dir, second, "later.csv", "defender")
         history = store.load_history(self.runs_dir).set_index("IncidentId")
         self.assertEqual(len(history), 8)
-        self.assertEqual(history.loc["200", "AlertTitle"], "Retitled")
+        self.assertEqual(history.loc["200", "AlertTitle"], "Mail forwarding rule")
         self.assertIn("300", history.index)
+
+    def _merged(self, *parts: tuple) -> pd.DataFrame:
+        for number, rows in enumerate(parts):
+            path = write_csv(self.tmp / f"part{number}.csv", rows)
+            store.save_run(self.runs_dir, read_incidents(path, DEFENDER), path.name, "defender")
+        return store.load_history(self.runs_dir).set_index("IncidentId")
+
+    def test_an_incident_in_two_runs_takes_rule_and_title_from_the_earlier_time(self):
+        later = ("1", "500", "b", "2024-06-02T00:00:00Z", "8", "Second", "Late", "", "", "", "")
+        earlier = ("1", "500", "a", "2024-06-01T00:00:00Z", "7", "First", "Early", "", "", "", "")
+        row = self._merged((later,), (earlier,)).loc["500"]
+        self.assertEqual((row["Timestamp"], row["DetectorId"], row["AlertTitle"],
+                          row["Category"]), ("2024-06-01T00:00:00Z", "7", "First", "Early"))
+
+    def test_on_a_tie_the_earlier_run_gives_the_rule(self):
+        first = ("1", "500", "a", "2024-06-01T00:00:00Z", "7", "First", "", "", "", "", "")
+        second = ("1", "500", "b", "2024-06-01T00:00:00Z", "8", "Second", "", "", "", "", "")
+        row = self._merged((first,), (second,)).loc["500"]
+        self.assertEqual((row["DetectorId"], row["AlertTitle"]), ("7", "First"))
+
+    def test_links_and_techniques_are_the_sorted_union_of_the_runs(self):
+        first = ("1", "500", "a", "2024-06-01T00:00:00Z", "7", "", "", "T1114;T1078", "",
+                 "bob", "10.0.0.2")
+        second = ("1", "500", "b", "2024-06-02T00:00:00Z", "7", "", "", "T1078;T1566", "",
+                  "alice", "10.0.0.2")
+        row = self._merged((first,), (second,)).loc["500"]
+        self.assertEqual(row["MitreTechniques"], "T1078|T1114|T1566")
+        self.assertEqual(row["AccountName"], "alice|bob")
+        self.assertEqual(row["IpAddress"], "10.0.0.2")
+        self.assertEqual(row["Sha256"], "")
+
+    def test_a_later_grade_is_kept_and_an_earlier_one_survives_a_blank(self):
+        graded = ("1", "500", "a", "2024-06-01T00:00:00Z", "7", "", "", "", "FalsePositive",
+                  "", "")
+        regraded = ("1", "500", "b", "2024-06-02T00:00:00Z", "7", "", "", "", "TruePositive",
+                    "", "")
+        blank = ("1", "500", "c", "2024-06-03T00:00:00Z", "7", "", "", "", "", "", "")
+        self.assertEqual(self._merged((graded,), (regraded,)).loc["500", "IncidentGrade"],
+                         "TruePositive")
+        self.assertEqual(self._merged((regraded,), (blank,)).loc["500", "IncidentGrade"],
+                         "TruePositive")
+
+    def test_an_incident_in_one_run_comes_out_unchanged(self):
+        history = self._merged(ROWS)
+        expected = self.incidents.set_index("IncidentId")
+        self.assertTrue(history.sort_index().equals(expected.sort_index()))
 
     def test_damaged_files_are_reported(self):
         meta = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")

@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.close import PILES
-from core.incidents import COLUMNS
+from core.incidents import COLUMNS, DESCRIPTIVE, LINKS, SEPARATOR, distinct
 
 GRADES_FILE = "grades.csv"
 SETTINGS_FILE = "settings.json"
@@ -77,7 +77,7 @@ def load_run(runs_dir: Path, run_id: str | None = None) -> tuple[dict, pd.DataFr
 
 
 def load_history(runs_dir: Path, incoming: pd.DataFrame | None = None) -> pd.DataFrame:
-    # an incident present in several runs is taken from the latest one
+    # an incident present in several runs becomes one row, as if all its alerts came in one file
     runs = list_runs(runs_dir)
     if not runs and incoming is None:
         raise StoreError(f"no runs in {runs_dir}; score a file with: meerkat queue FILE")
@@ -85,8 +85,7 @@ def load_history(runs_dir: Path, incoming: pd.DataFrame | None = None) -> pd.Dat
     if incoming is not None:
         frames.append(incoming)
     history = pd.concat(frames, ignore_index=True)
-    history = history.drop_duplicates("IncidentId", keep="last")
-    return _apply_grades(runs_dir, history.reset_index(drop=True))
+    return _apply_grades(runs_dir, _merge_repeats(history))
 
 
 def read_settings(runs_dir: Path) -> dict:
@@ -166,6 +165,24 @@ def _read_csv(path: Path) -> pd.DataFrame:
         return pd.read_csv(path, dtype=str, keep_default_na=False)
     except (OSError, ValueError) as error:
         raise StoreError(f"{path}: unreadable ({error})") from None
+
+
+def _merge_repeats(history: pd.DataFrame) -> pd.DataFrame:
+    repeated = history["IncidentId"].duplicated(keep=False)
+    if not repeated.any():
+        return history.reset_index(drop=True)
+    rows = history[repeated]
+    grades = rows["IncidentGrade"].replace("", pd.NA).groupby(rows["IncidentId"]).last()
+
+    times = pd.to_datetime(rows["Timestamp"], utc=True, format="ISO8601")
+    earliest_first = rows.loc[times.sort_values(kind="stable").index]
+    merged = earliest_first.groupby("IncidentId", sort=False)[
+        ["Timestamp", "DetectorId", *DESCRIPTIVE]].first()
+    merged["IncidentGrade"] = grades
+    for column in ("MitreTechniques", *LINKS):
+        merged[column] = distinct(rows, column, split=SEPARATOR)
+    merged = merged.fillna("").reset_index()[list(COLUMNS)]
+    return pd.concat([history[~repeated], merged], ignore_index=True)
 
 
 def _apply_grades(runs_dir: Path, incidents: pd.DataFrame) -> pd.DataFrame:
