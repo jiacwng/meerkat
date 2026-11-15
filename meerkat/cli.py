@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -32,6 +33,10 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         args.handler(args)
+        sys.stdout.flush()
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        raise SystemExit(EXIT_ERROR) from None
     except (IncidentError, MappingError, StoreError, OSError) as error:
         print(f"meerkat: error: {_printable(str(error))}", file=sys.stderr)
         raise SystemExit(EXIT_ERROR) from None
@@ -134,27 +139,28 @@ def _queue(args: argparse.Namespace) -> None:
     from core.incidents import read_incidents
     from core.mapping import load_mapping
 
+    incoming = None
     if args.file is not None:
         mapping = load_mapping("defender" if args.mapping is None else args.mapping)
-        incidents = read_incidents(args.file, mapping)
-        meta = store.save_run(args.runs_dir, incidents, args.file.name, mapping.name)
+        incoming = read_incidents(args.file, mapping)
+        incidents = incoming
     else:
         meta, incidents = store.load_run(args.runs_dir, args.run)
 
-    previous = None
-    previous_keep = None
-    if args.miss_rate is not None or args.keep_linked is not None:
-        saved = store.read_settings(args.runs_dir)
-        previous = saved.get("miss_rate")
-        previous_keep = saved.get("keep_linked")
-        if args.miss_rate is not None:
-            saved["miss_rate"] = args.miss_rate
-        if args.keep_linked is not None:
-            saved["keep_linked"] = args.keep_linked
-        store.write_settings(args.runs_dir, saved)
+    saved = store.read_settings(args.runs_dir)
+    previous = saved.get("miss_rate")
+    previous_keep = saved.get("keep_linked")
+    if args.miss_rate is not None:
+        saved["miss_rate"] = args.miss_rate
+    if args.keep_linked is not None:
+        saved["keep_linked"] = args.keep_linked
 
     # the rule's past rate comes from every run, the rows shown from this one
-    scored, level, entries, settings = _scored(args.runs_dir)
+    scored, level, entries, settings = _scored(args.runs_dir, incoming, saved)
+    if incoming is not None:
+        meta = store.save_run(args.runs_dir, incidents, args.file.name, mapping.name)
+    if args.miss_rate is not None or args.keep_linked is not None:
+        store.write_settings(args.runs_dir, saved)
     miss_rate, keep_linked = settings["miss_rate"], settings["keep_linked"]
     in_run = scored["IncidentId"].isin(incidents["IncidentId"])
     open_incidents = scored[in_run & (scored["IncidentGrade"] == "")]
@@ -192,16 +198,20 @@ def _queue(args: argparse.Namespace) -> None:
                 for position, row in enumerate(shown.to_dict("records"), start=1)]
             _print_table(("#", "incident", "score", "pile", "rule", "rule history", "reason",
                           "time", "title"), rows)
-            print(f"{len(shown)} of {len(listed)} open incidents, run {meta['run']}")
+            kind = "closed" if args.closed else "open"
+            print(f"{len(shown)} of {len(listed)} {kind} incidents, run {meta['run']}")
         if level is None and len(entries) >= close.needed(miss_rate):
             print("Nothing closed: too many graded true positives share the lowest score.")
         elif level is None:
             print(f"Nothing closed yet: {len(entries)} of {close.needed(miss_rate)} "
                   "graded true positives.")
         else:
-            print(f"{len(closed)} more are under the close level "
-                  f"(at most {_percent(miss_rate)} of true positives). "
-                  f"{len(audit)} others under it are above as audit.")
+            if args.closed:
+                print(f"{len(audit)} others under the close level are in the queue as audit.")
+            else:
+                print(f"{len(closed)} more are under the close level "
+                      f"(at most {_percent(miss_rate)} of true positives). "
+                      f"{len(audit)} others under it are above as audit.")
             if kept_linked:
                 print(f"{kept_linked} others under it stay in the queue because a linked "
                       "incident was a true positive.")
@@ -235,12 +245,13 @@ def _review(args: argparse.Namespace) -> None:
     print(f"{_printable(args.incident)} graded {grade}")
 
 
-def _scored(runs_dir: Path):
+def _scored(runs_dir: Path, incoming=None, saved: dict | None = None):
     from core import close, rank, store
 
     reviews = store.read_reviews(runs_dir)
-    scored = rank.score(store.load_history(runs_dir))
-    saved = store.read_settings(runs_dir)
+    scored = rank.score(store.load_history(runs_dir, incoming))
+    if saved is None:
+        saved = store.read_settings(runs_dir)
     settings = {
         "miss_rate": saved.get("miss_rate", close.DEFAULT_MISS_RATE),
         "keep_linked": saved.get("keep_linked", close.DEFAULT_KEEP_LINKED)}
@@ -340,8 +351,11 @@ def _print_json(value) -> None:
 def _print_table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
     rows = [tuple(_printable(cell) for cell in row) for row in rows]
     widths = [max(len(cell) for cell in column) for column in zip(header, *rows, strict=True)]
-    # on a terminal a long last column is cut at the edge; a pipe gets every character
+    # on a terminal only the last column is cut to fit; a pipe gets every character
+    fixed = sum(widths[:-1]) + 2 * (len(widths) - 1)
     edge = shutil.get_terminal_size().columns if sys.stdout.isatty() else None
+    if edge is not None and edge <= fixed:
+        edge = None
     for line in (header, *rows):
         cells = (cell.ljust(width) for cell, width in zip(line, widths, strict=True))
         print("  ".join(cells).rstrip()[:edge])

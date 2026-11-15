@@ -120,6 +120,29 @@ class StoreTests(unittest.TestCase):
         with self.assertRaisesRegex(store.StoreError, "unreadable run"):
             store.list_runs(self.runs_dir)
 
+    def test_a_run_with_wrong_columns_or_a_bad_time_is_refused_naming_the_file(self):
+        meta = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
+        path = self.runs_dir / meta["run"] / "incidents.csv"
+        good = path.read_text()
+        cases = (
+            ("a,b\n1,2\n", "expected columns"),
+            (good.replace("IncidentId,", "Incident,", 1), "expected columns"),
+            (good.replace("2024-06-05T12:00:00Z", "1-01-01T00:00:00Z"), "is not ISO 8601"),
+        )
+        for text, message in cases:
+            with self.subTest(message):
+                path.write_text(text)
+                for read in (store.load_run, store.load_history):
+                    with self.assertRaisesRegex(store.StoreError, message) as raised:
+                        read(self.runs_dir)
+                    self.assertIn(str(path), str(raised.exception))
+                    self.assertNotIn("\n", str(raised.exception))
+
+    def test_history_with_an_incoming_file_needs_no_saved_run(self):
+        history = store.load_history(self.runs_dir, self.incidents)
+        self.assertEqual(len(history), 7)
+        self.assertFalse(self.runs_dir.exists())
+
     def test_settings_round_trip_and_absence(self):
         self.assertEqual(store.read_settings(self.runs_dir), {})
         both = {"miss_rate": 0.01, "keep_linked": False}

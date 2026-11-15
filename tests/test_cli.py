@@ -5,14 +5,17 @@ import csv
 import io
 import json
 import math
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from core import close
-from meerkat import __version__
+from core.incidents import COLUMNS
+from meerkat import __version__, cli
 from meerkat.cli import main
 from tests.fixtures import (
     HEADER,
@@ -324,7 +327,7 @@ class CliTests(unittest.TestCase):
         lines = out.splitlines()
         self.assertEqual(lines[0].split()[:4], ["#", "incident", "score", "pile"])
         self.assertEqual(len(lines), 5)
-        self.assertIn("2 of 3 open incidents", lines[3])
+        self.assertIn("2 of 3 closed incidents", lines[3])
         self.assertEqual(len(self._queue_json("--closed", "--all")["queue"]), 3)
         self.assertEqual(len(self._queue_json("--closed", "--limit", "1")["queue"]), 1)
 
@@ -538,6 +541,132 @@ class CliTests(unittest.TestCase):
         self.assertIn("nowhere.toml: no such mapping", err)
         self.assertEqual(err.count("\n"), 1)
         self.assertFalse(self.runs_dir.exists())
+
+    def _assert_one_line_error(self, argv, needle: str) -> None:
+        code, out, err = self._run(*argv)
+        self.assertEqual((code, out), (1, ""))
+        self.assertTrue(err.startswith("meerkat: error: "))
+        self.assertEqual(err.count("\n"), 1)
+        self.assertIn(needle, err)
+
+    def test_a_time_scoring_cannot_hold_is_refused_and_leaves_no_run(self):
+        bad = write_csv(self.tmp / "bad.csv", (plain_row(
+            "900", "7", time="9999-12-31T23:00:00-02:00"),))
+        self._assert_one_line_error(("queue", str(bad)), "9999-12-31T23:00:00-02:00")
+        self.assertFalse(self.runs_dir.exists())
+
+    def test_year_one_is_scored_saved_and_reopened_by_every_command(self):
+        rows = (*ROWS, plain_row("900", "7", time="0001-01-01T00:00:00Z"))
+        self.assertEqual(self._run("queue", str(write_csv(self.tmp / "old.csv", rows)))[0], 0)
+        self.assertEqual(self._run("queue")[0], 0)
+        self.assertEqual(self._run("review", "900", "tp")[0], 0)
+        self.assertEqual(self._run("inspect", "900")[0], 0)
+
+    def test_a_refused_time_leaves_earlier_runs_and_settings_alone(self):
+        self._run("queue", str(self.csv))
+        before = sorted(path.name for path in self.runs_dir.iterdir())
+        bad = write_csv(self.tmp / "bad.csv", (plain_row(
+            "900", "7", time="9999-12-31T23:00:00-02:00"),))
+        self._assert_one_line_error(("queue", str(bad), "--miss-rate", "0.5"), "bad.csv")
+        self.assertEqual(sorted(path.name for path in self.runs_dir.iterdir()), before)
+        self.assertEqual(self._queue_ids(), ["201", "202", "200"])
+        self.assertEqual(self._run("inspect", "200")[0], 0)
+
+    def test_a_file_is_not_saved_when_scoring_fails(self):
+        self._run("queue", str(self.csv))
+        run = next(self.runs_dir.glob("*/incidents.csv"))
+        run.write_text("a,b\n1,2\n")
+        before = sorted(path.name for path in self.runs_dir.iterdir())
+        later = write_csv(self.tmp / "later.csv", (plain_row("900", "7"),))
+        self._assert_one_line_error(("queue", str(later), "--miss-rate", "0.5"), "incidents.csv")
+        self.assertEqual(sorted(path.name for path in self.runs_dir.iterdir()), before)
+
+    def test_a_damaged_saved_run_is_one_line_for_every_command(self):
+        self._run("queue", str(self.csv))
+        run = next(self.runs_dir.glob("*/incidents.csv"))
+        damaged = (
+            "a,b\n1,2\n",
+            ",".join(COLUMNS[:-1]) + "\n",
+            ",".join(COLUMNS) + "\n" + ",".join(["x", "1-01-01T00:00:00Z", "7", *[""] * 13]) + "\n",
+        )
+        for text in damaged:
+            run.write_text(text)
+            for argv in (("queue",), ("review", "200", "tp"), ("inspect", "200")):
+                with self.subTest(text=text, argv=argv):
+                    self._assert_one_line_error(argv, "incidents.csv")
+
+    def test_a_closed_pipe_exits_quietly(self):
+        rows = [plain_row(str(n), str(n % 40), time=f"2024-06-{1 + n % 28:02d}T00:{n % 60:02d}:00Z")
+                for n in range(3000)]
+        big = write_csv(self.tmp / "big.csv", rows)
+        command = [sys.executable, "-m", "meerkat", "queue", str(big), "--all",
+                   "--runs-dir", str(self.runs_dir)]
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True) as process:
+            process.stdout.readline()
+            process.stdout.close()
+            error = process.stderr.read()
+            self.assertEqual(process.wait(), 1)
+        self.assertEqual(error, "")
+
+    def test_a_pipe_closed_before_a_small_output_exits_quietly(self):
+        command = [sys.executable, "-m", "meerkat", "queue", str(self.csv),
+                   "--runs-dir", str(self.runs_dir)]
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True) as process:
+            process.stdout.close()
+            error = process.stderr.read()
+            self.assertEqual(process.wait(), 1)
+        self.assertEqual(error, "")
+
+    def test_closed_footer_names_the_list_and_the_audit_rows(self):
+        self._calibrate(3, 2)
+        lines = self._run("queue", "--closed")[1].splitlines()
+        self.assertEqual(lines[-2].split(", run ")[0], "2 of 2 closed incidents")
+        self.assertEqual(lines[-1],
+                         "3 others under the close level are in the queue as audit.")
+        plain = self._run("queue")[1].splitlines()
+        self.assertEqual(plain[-1], "2 more are under the close level (at most 5% of true "
+                                    "positives). 3 others under it are above as audit.")
+        self.assertIn("4 of 4 open incidents", plain[-2])
+
+    def test_closed_footer_keeps_the_linked_line(self):
+        self._calibrate_linked()
+        lines = self._run("queue", "--closed")[1].splitlines()
+        self.assertEqual(lines[-3].split(", run ")[0], "1 of 1 closed incidents")
+        self.assertEqual(lines[-2], "0 others under the close level are in the queue as audit.")
+        self.assertEqual(lines[-1], "1 others under it stay in the queue because a linked "
+                                    "incident was a true positive.")
+
+    def _table(self, columns: int | None, rows: list[tuple[str, ...]]) -> list[str]:
+        class Terminal(io.StringIO):
+            def isatty(self) -> bool:
+                return columns is not None
+
+        out = Terminal()
+        size = os.terminal_size((columns or 80, 24))
+        with (contextlib.redirect_stdout(out),
+              mock.patch.object(cli.shutil, "get_terminal_size", return_value=size)):
+            cli._print_table(("id", "score", "title"), rows)
+        return out.getvalue().splitlines()
+
+    def test_a_terminal_shortens_only_the_last_column(self):
+        rows = [("1", "0.50", "x" * 100), ("22", "0.75", "short")]
+        lines = self._table(30, rows)
+        self.assertEqual(lines[0], "id  score  title")
+        self.assertEqual(lines[1], "1   0.50   " + "x" * 19)
+        self.assertEqual(lines[2], "22  0.75   short")
+        self.assertTrue(all(len(line) <= 30 for line in lines))
+
+    def test_a_terminal_narrower_than_the_fixed_columns_cuts_nothing_else(self):
+        rows = [("1", "0.50", "x" * 100)]
+        lines = self._table(8, rows)
+        self.assertEqual(lines[0], "id  score  title")
+        self.assertEqual(lines[1], "1   0.50   " + "x" * 100)
+
+    def test_a_pipe_gets_every_character(self):
+        rows = [("1", "0.50", "x" * 300)]
+        self.assertEqual(self._table(None, rows)[1], "1   0.50   " + "x" * 300)
 
     def test_version_and_help_do_not_load_pandas(self):
         code = ("import sys; from meerkat.cli import main\n"
