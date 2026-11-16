@@ -16,8 +16,6 @@ LINKED = ("linked", "linked_true_positive", "linked_benign_positive",
 SMOOTH = 5.0
 PLACEHOLDER_SHARE = 0.5
 CAP = 50
-# link entries expanded per pass; at most CAP pairs each, so this bounds memory
-CHUNK = 200_000
 
 
 def compute(incidents: pd.DataFrame, prior: float) -> pd.DataFrame:
@@ -71,49 +69,41 @@ def _earlier_totals(key: np.ndarray, rank: np.ndarray, graded: np.ndarray,
 def _links(incidents: pd.DataFrame, rank: np.ndarray,
            grade: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     count = len(incidents)
-    owner, value = _entries(incidents)
-    common = np.bincount(value)[value] / count > PLACEHOLDER_SHARE
-    owner, value = owner[~common], value[~common]
-    has_link = np.bincount(owner, minlength=count) > 0
+    entries = _entries(incidents, rank)
+    share = entries.groupby("value")["owner"].transform("size") / count
+    entries = entries[share <= PLACEHOLDER_SHARE]
+    has_link = np.zeros(count, bool)
+    has_link[entries["owner"]] = True
 
-    # each value's entries in time order; an entry links to the CAP entries before its time
-    times = int(rank.max()) + 1 if count else 1
-    key = value * times + rank[owner]
-    order = np.argsort(key, kind="stable")
-    key, owner, value = key[order], owner[order], value[order]
-    group_start = np.searchsorted(key, value * times)
-    time_start = np.searchsorted(key, key)
-    window_start = np.maximum(group_start, time_start - CAP)
+    entries = entries.sort_values(["value", "rank"], kind="stable", ignore_index=True)
+    owner = entries["owner"].to_numpy()
+    row = entries.index.to_numpy()
+    value_start = row - entries.groupby("value").cumcount().to_numpy()
+    time_start = row - entries.groupby(["value", "rank"]).cumcount().to_numpy()
 
-    by_owner = np.argsort(owner, kind="stable")
-    pointer = np.searchsorted(owner[by_owner], np.arange(count + 1))
-    bounds = np.unique(np.append(np.searchsorted(pointer, np.arange(0, len(owner), CHUNK)),
-                                 count))
+    # the entry `back` rows before the first row of its own time is one of its CAP predecessors
+    pairs = []
+    for back in range(1, CAP + 1):
+        before = time_start - back
+        inside = before >= value_start
+        pairs.append(owner[inside] * count + owner[before[inside]])
+    pairs = np.unique(np.concatenate(pairs))
+    incident, other = pairs // count, pairs % count
     by_grade = np.zeros((len(GRADES), count), np.int64)
-    for first, last in zip(bounds[:-1], bounds[1:], strict=True):
-        mine = by_owner[pointer[first]:pointer[last]]
-        row, earlier = _expand(window_start[mine], time_start[mine])
-        pairs = np.unique(owner[mine][row] * count + owner[earlier])
-        incident, other = pairs // count, pairs % count
-        for code in range(len(GRADES)):
-            by_grade[code] += np.bincount(incident[grade[other] == code], minlength=count)
+    for code in range(len(GRADES)):
+        by_grade[code] = np.bincount(incident[grade[other] == code], minlength=count)
     return by_grade, has_link
 
 
-def _entries(incidents: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
-    owners, values, offset = [], [], 0
+def _entries(incidents: pd.DataFrame, rank: np.ndarray) -> pd.DataFrame:
+    parts, offset = [], 0
     for column in LINKS:
         cells = incidents[column].reset_index(drop=True)
         split = cells[cells != ""].str.split(SEPARATOR).explode()
         codes, distinct = pd.factorize(split)
-        owners.append(split.index.to_numpy(np.int64))
-        values.append(codes.astype(np.int64) + offset)
+        parts.append(pd.DataFrame({"owner": split.index.to_numpy(np.int64),
+                                   "value": codes.astype(np.int64) + offset}))
         offset += len(distinct)
-    return np.concatenate(owners), np.concatenate(values)
-
-
-def _expand(start: np.ndarray, stop: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    lengths = stop - start
-    row = np.repeat(np.arange(len(start)), lengths)
-    offset = np.cumsum(lengths) - lengths
-    return row, np.arange(int(lengths.sum())) - offset[row] + start[row]
+    entries = pd.concat(parts, ignore_index=True)
+    entries["rank"] = rank[entries["owner"].to_numpy()]
+    return entries

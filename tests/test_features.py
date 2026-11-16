@@ -107,6 +107,18 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(inputs.iloc[-1][list(LINKED)].tolist(), [CAP, 0, 0, CAP])
         self.assertEqual(inputs.iloc[CAP + 1]["linked"], CAP)
 
+    def test_a_pair_sharing_several_values_counts_once(self):
+        inputs = compute(_frame(
+            _incident("a", 0, "TruePositive", AccountName="alice", IpAddress="10.0.0.1|10.0.0.2",
+                      DeviceName="alice"),
+            _incident("b", 1, AccountName="alice", IpAddress="10.0.0.1|10.0.0.2",
+                      DeviceName="alice"),
+            _incident("c", 2),
+            _incident("d", 3),
+        ), PRIOR)
+        self.assertEqual(inputs["linked"].tolist(), [0, 1, 0, 0])
+        self.assertEqual(inputs["linked_true_positive"].tolist(), [0, 1, 0, 0])
+
     def test_a_frame_without_link_values(self):
         inputs = compute(_frame(_incident("a", 0, "TruePositive"), _incident("b", 1)), PRIOR)
         self.assertEqual(inputs["linked"].tolist(), [0, 0])
