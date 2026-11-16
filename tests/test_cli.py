@@ -406,6 +406,33 @@ class CliTests(unittest.TestCase):
         self.assertIsNone(report["close_level"])
         self.assertEqual((report["closed"], report["audit"]), (0, 0))
 
+    def test_reviewing_a_true_positive_graded_in_the_file_keeps_the_close_level(self):
+        graded_id = sampled_ids(True, 1)[0]
+        first, second, third = (f"2024-06-0{day}T00:00:00Z" for day in (7, 8, 9))
+        rows = [plain_row(f"p{i}", "3", "TruePositive", first) for i in range(38)]
+        rows += [plain_row(f"f{i}", "5", "FalsePositive", first) for i in range(10)]
+        rows += [plain_row(graded_id, "5", "TruePositive", second),
+                 plain_row("mid", "6", "TruePositive", second),
+                 plain_row("other", "6", "FalsePositive", first),
+                 plain_row("open", "3", time=third)]
+        self._run("queue", str(write_csv(self.tmp / "graded.csv", rows)))
+        level = self._queue_json()["close_level"]
+        self.assertIsNotNone(level)
+        score = json.loads(self._run("inspect", graded_id, "--json")[1])["score"]
+        self.assertLess(score, level)
+        self._run("review", graded_id, "tp")
+        self.assertEqual(self._queue_json()["close_level"], level)
+        with (self.runs_dir / "grades.csv").open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual([row["pile"] for row in rows], ["queue"])
+
+    def test_footer_names_the_audit_sample_when_it_removes_the_level(self):
+        self._calibrate(3, 2)
+        self._run("review", sampled_ids(True, 1)[0], "tp")
+        self.assertEqual(
+            self._run("queue")[1].splitlines()[-1],
+            "Nothing closed: a true positive found in the audit sample counts for ten.")
+
     def test_a_graded_incident_shows_the_pile_of_its_grade_row(self):
         self._calibrate(3, 2)
         audit_id = sampled_ids(True, 1)[0]

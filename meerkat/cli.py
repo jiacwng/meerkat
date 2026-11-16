@@ -216,7 +216,11 @@ def _queue(args: argparse.Namespace) -> None:
             where = "" if run_ids is None else f", run {run}"
             print(f"{len(shown)} of {len(listed)} {kind} incidents{where}")
         if level is None and len(entries) >= close.needed(miss_rate):
-            print("Nothing closed: too many graded true positives share the lowest score.")
+            lowest = entries[entries["score"] == entries["score"].min()]
+            if (lowest["weight"] > 1).any():
+                print("Nothing closed: a true positive found in the audit sample counts for ten.")
+            else:
+                print("Nothing closed: too many graded true positives share the lowest score.")
         elif level is None:
             print(f"Nothing closed yet: {len(entries)} of {close.needed(miss_rate)} "
                   "graded true positives.")
@@ -280,7 +284,10 @@ def _review(args: argparse.Namespace) -> None:
     if earlier.empty:
         score = float(found["score"].iloc[0])
         linked = int(found["linked_true_positive"].iloc[0])
-        pile = close.pile_of(args.incident, score, level, linked, settings["keep_linked"])
+        if found["IncidentGrade"].iloc[0] != "":
+            pile = "queue"
+        else:
+            pile = close.pile_of(args.incident, score, level, linked, settings["keep_linked"])
     else:
         score, pile = float(earlier["score"].iloc[0]), earlier["pile"].iloc[0]
     grade = GRADE_CODES[args.grade]
