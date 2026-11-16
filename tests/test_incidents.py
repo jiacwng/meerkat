@@ -4,7 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.incidents import COLUMNS, IncidentError, read_incidents
+from core.features import compute
+from core.incidents import COLUMNS, SEPARATOR, IncidentError, read_incidents
 from core.mapping import load_mapping
 from tests.fixtures import DEFENDER, HEADER, ROWS, write_csv
 
@@ -51,6 +52,25 @@ class ReadIncidentsTests(unittest.TestCase):
         rows = (self._row(AlertId="x"), self._row(IncidentGrade="FalsePositive"))
         incidents = read_incidents(write_csv(self.path, rows), DEFENDER)
         self.assertEqual(incidents.loc[0, "IncidentGrade"], "FalsePositive")
+
+    def test_a_separator_inside_a_link_value_does_not_link_incidents(self):
+        header = ("IncidentId", "Timestamp", "DetectorId", "IncidentGrade", "Url")
+        rows = (("1", "2024-06-01T08:00:00Z", "7", "TruePositive", "http://a/x|shared"),
+                ("2", "2024-06-02T08:00:00Z", "7", "", "http://b/y|shared"))
+        incidents = read_incidents(write_csv(self.path, rows, header), DEFENDER)
+        urls = [set(value.split(SEPARATOR)) for value in incidents["Url"]]
+        self.assertEqual(urls[0] & urls[1], set())
+        self.assertEqual(urls[0], {"http://a/x%7Cshared"})
+        self.assertEqual(compute(incidents, 0.5)["linked"].tolist(), [0, 0])
+
+    def test_grade_is_the_latest_one_and_a_later_blank_does_not_erase_it(self):
+        rows = (self._row(AlertId="x", Timestamp="2024-06-01T00:00:00Z",
+                          IncidentGrade="FalsePositive"),
+                self._row(AlertId="y", Timestamp="2024-06-02T00:00:00Z",
+                          IncidentGrade="TruePositive"),
+                self._row(AlertId="z", Timestamp="2024-06-03T00:00:00Z", IncidentGrade=""))
+        incidents = read_incidents(write_csv(self.path, rows), DEFENDER)
+        self.assertEqual(incidents.loc[0, "IncidentGrade"], "TruePositive")
 
     def test_timestamps_are_normalised_to_utc(self):
         rows = (self._row(Timestamp="2024-06-05T14:00:00+02:00"),)

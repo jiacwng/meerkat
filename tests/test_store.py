@@ -5,7 +5,9 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 
@@ -39,6 +41,21 @@ class StoreTests(unittest.TestCase):
                          ["a.csv", "b.csv"])
         self.assertEqual(store.load_run(self.runs_dir)[0]["source"], "b.csv")
         self.assertEqual(store.load_run(self.runs_dir, first["run"])[0]["source"], "a.csv")
+
+    def test_runs_of_the_same_second_stay_in_saving_order(self):
+        clock = self.enterContext(mock.patch.object(store, "datetime"))
+        clock.now.return_value = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC)
+        for number in range(11):
+            store.save_run(self.runs_dir, self.incidents, f"{number}.csv", "defender")
+        self.assertEqual([m["source"] for m in store.list_runs(self.runs_dir)],
+                         [f"{number}.csv" for number in range(11)])
+
+    def test_a_grade_that_is_not_a_grade_is_refused(self):
+        store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
+        (self.runs_dir / store.GRADES_FILE).write_text(
+            "time,IncidentId,grade,note,score,pile\nt,200,Malicious,,0.5,queue\n")
+        with self.assertRaisesRegex(store.StoreError, "grade 'Malicious' is not one of"):
+            store.read_reviews(self.runs_dir)
 
     def test_no_runs(self):
         self.assertEqual(store.list_runs(self.runs_dir), [])

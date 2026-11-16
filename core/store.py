@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.close import PILES
-from core.incidents import COLUMNS, DESCRIPTIVE, LINKS, SEPARATOR, distinct
+from core.incidents import COLUMNS, DESCRIPTIVE, GRADES, LINKS, SEPARATOR, distinct
 
 if sys.platform == "win32":
     import msvcrt
@@ -68,7 +68,7 @@ def list_runs(runs_dir: Path) -> list[dict]:
             })
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise StoreError(f"{meta_file}: unreadable run ({error!r})") from None
-    return sorted(runs, key=lambda meta: (meta["created"], meta["run"]))
+    return sorted(runs, key=lambda meta: (meta["created"], len(meta["run"]), meta["run"]))
 
 
 def load_run(runs_dir: Path, run_id: str | None = None) -> tuple[dict, pd.DataFrame]:
@@ -166,6 +166,10 @@ def read_reviews(runs_dir: Path) -> pd.DataFrame:
     bad_scores = reviews.loc[scores.isna(), "score"]
     if len(bad_scores):
         raise StoreError(f"{grades_file}: score {bad_scores.iloc[0]!r} is not a number")
+    bad_grades = reviews.loc[~reviews["grade"].isin(GRADES), "grade"]
+    if len(bad_grades):
+        raise StoreError(
+            f"{grades_file}: grade {bad_grades.iloc[0]!r} is not one of {', '.join(GRADES)}")
     bad_piles = reviews.loc[~reviews["pile"].isin(PILES), "pile"]
     if len(bad_piles):
         raise StoreError(
