@@ -71,16 +71,13 @@ def list_runs(runs_dir: Path) -> list[dict]:
     return sorted(runs, key=lambda meta: (meta["created"], len(meta["run"]), meta["run"]))
 
 
-def load_run(runs_dir: Path, run_id: str | None = None) -> tuple[dict, pd.DataFrame]:
+def load_run(runs_dir: Path, run_id: str) -> tuple[dict, pd.DataFrame]:
     runs = list_runs(runs_dir)
     if not runs:
         raise StoreError(f"no runs in {runs_dir}; score a file with: meerkat queue FILE")
-    if run_id is None:
-        meta = runs[-1]
-    else:
-        meta = next((run for run in runs if run["run"] == run_id), None)
-        if meta is None:
-            raise StoreError(f"no run {run_id!r} in {runs_dir}")
+    meta = next((run for run in runs if run["run"] == run_id), None)
+    if meta is None:
+        raise StoreError(f"no run {run_id!r} in {runs_dir}")
     return meta, _apply_grades(runs_dir, _read_run(runs_dir, meta["run"]))
 
 
