@@ -3,6 +3,9 @@
 import csv
 import json
 import math
+import os
+import sys
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -10,6 +13,11 @@ import pandas as pd
 
 from core.close import PILES
 from core.incidents import COLUMNS, DESCRIPTIVE, LINKS, SEPARATOR, distinct
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 GRADES_FILE = "grades.csv"
 SETTINGS_FILE = "settings.json"
@@ -116,13 +124,30 @@ def write_settings(runs_dir: Path, settings: dict) -> None:
     (runs_dir / SETTINGS_FILE).write_text(json.dumps(settings, indent=2) + "\n")
 
 
+@contextmanager
+def _locked(grades_file: Path):
+    with grades_file.with_name(grades_file.name + ".lock").open("a") as lock:
+        if sys.platform == "win32":
+            lock.seek(0)
+            try:
+                msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+            except OSError:
+                raise StoreError(f"{grades_file} is in use, try again") from None
+            try:
+                yield
+            finally:
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
+
+
 def append_grade(runs_dir: Path, incident_id: str, grade: str, note: str,
                  score: float, pile: str) -> None:
     grades_file = runs_dir / GRADES_FILE
-    is_new = not grades_file.exists()
-    with grades_file.open("a", newline="", encoding="utf-8") as handle:
+    with _locked(grades_file), grades_file.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        if is_new:
+        if os.fstat(handle.fileno()).st_size == 0:
             writer.writerow(GRADE_COLUMNS)
         now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         writer.writerow((now, incident_id, grade, note, repr(score), pile))
