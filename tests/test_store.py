@@ -1,6 +1,9 @@
 # Runs and grades on disk: what is written, what is read back, what is refused.
 
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -60,6 +63,26 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self._grade_of("200"), "TruePositive")
         self.assertEqual(self._grade_of("102"), "TruePositive")
         self.assertEqual(self._grade_of("103"), "FalsePositive")
+
+    def test_eight_reviews_at_the_same_instant_are_all_kept(self):
+        script = (
+            "import sys, time\n"
+            "from pathlib import Path\n"
+            "from core import store\n"
+            "time.sleep(max(0.0, float(sys.argv[3]) - time.time()))\n"
+            "store.append_grade(Path(sys.argv[1]), sys.argv[2], 'TruePositive', '', 0.5, 'queue')\n"
+        )
+        self.runs_dir.mkdir()
+        start = str(time.time() + 1)
+        root = Path(__file__).resolve().parents[1]
+        workers = [
+            subprocess.Popen([sys.executable, "-c", script, str(self.runs_dir), str(n), start],
+                             cwd=root)
+            for n in range(8)
+        ]
+        self.assertEqual([worker.wait() for worker in workers], [0] * 8)
+        reviews = store.read_reviews(self.runs_dir)
+        self.assertEqual(sorted(reviews["IncidentId"]), [str(n) for n in range(8)])
 
     def test_notes_with_commas_quotes_and_newlines_survive(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
