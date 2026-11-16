@@ -23,12 +23,12 @@ class StoreTests(unittest.TestCase):
         self.incidents = read_incidents(write_csv(self.tmp / "incidents.csv"), DEFENDER)
 
     def _grade_of(self, incident_id: str) -> str:
-        _, incidents = store.load_run(self.runs_dir)
+        _, incidents = store.load_run(self.runs_dir, store.list_runs(self.runs_dir)[-1]["run"])
         return incidents.set_index("IncidentId").loc[incident_id, "IncidentGrade"]
 
     def test_run_round_trip(self):
         meta = store.save_run(self.runs_dir, self.incidents, "incidents.csv", "defender")
-        loaded_meta, loaded = store.load_run(self.runs_dir)
+        loaded_meta, loaded = store.load_run(self.runs_dir, meta["run"])
         self.assertEqual(loaded_meta, {k: v for k, v in meta.items() if k != "mapping"})
         self.assertEqual(meta["incidents"], 7)
         self.assertTrue(loaded.equals(self.incidents))
@@ -39,7 +39,7 @@ class StoreTests(unittest.TestCase):
         self.assertNotEqual(first["run"], second["run"])
         self.assertEqual([m["source"] for m in store.list_runs(self.runs_dir)],
                          ["a.csv", "b.csv"])
-        self.assertEqual(store.load_run(self.runs_dir)[0]["source"], "b.csv")
+        self.assertEqual(store.load_run(self.runs_dir, second["run"])[0]["source"], "b.csv")
         self.assertEqual(store.load_run(self.runs_dir, first["run"])[0]["source"], "a.csv")
 
     def test_runs_of_the_same_second_stay_in_saving_order(self):
@@ -60,7 +60,7 @@ class StoreTests(unittest.TestCase):
     def test_no_runs(self):
         self.assertEqual(store.list_runs(self.runs_dir), [])
         with self.assertRaisesRegex(store.StoreError, "no runs"):
-            store.load_run(self.runs_dir)
+            store.load_run(self.runs_dir, "missing")
         with self.assertRaisesRegex(store.StoreError, "no runs"):
             store.load_history(self.runs_dir)
 
@@ -131,7 +131,10 @@ class StoreTests(unittest.TestCase):
         for text, message in cases:
             with self.subTest(text):
                 (self.runs_dir / store.GRADES_FILE).write_text(text)
-                for read in (store.read_reviews, store.load_run, store.load_history):
+                run_id = store.list_runs(self.runs_dir)[0]["run"]
+                reads = (store.read_reviews, lambda d: store.load_run(d, run_id),
+                         store.load_history)
+                for read in reads:
                     with self.assertRaisesRegex(store.StoreError, message) as raised:
                         read(self.runs_dir)
                     self.assertNotIn("\n", str(raised.exception))
@@ -199,11 +202,11 @@ class StoreTests(unittest.TestCase):
         meta = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         (self.runs_dir / store.GRADES_FILE).write_text("who,what\nx,y\n")
         with self.assertRaisesRegex(store.StoreError, "expected columns"):
-            store.load_run(self.runs_dir)
+            store.load_run(self.runs_dir, meta["run"])
         (self.runs_dir / store.GRADES_FILE).unlink()
         (self.runs_dir / meta["run"] / "incidents.csv").unlink()
         with self.assertRaisesRegex(store.StoreError, "unreadable"):
-            store.load_run(self.runs_dir)
+            store.load_run(self.runs_dir, meta["run"])
         (self.runs_dir / meta["run"] / "meta.json").write_text('{"run": "../x"}')
         with self.assertRaisesRegex(store.StoreError, "unreadable run"):
             store.list_runs(self.runs_dir)
@@ -220,7 +223,8 @@ class StoreTests(unittest.TestCase):
         for text, message in cases:
             with self.subTest(message):
                 path.write_text(text)
-                for read in (store.load_run, store.load_history):
+                reads = (lambda d: store.load_run(d, meta["run"]), store.load_history)
+                for read in reads:
                     with self.assertRaisesRegex(store.StoreError, message) as raised:
                         read(self.runs_dir)
                     self.assertIn(str(path), str(raised.exception))
