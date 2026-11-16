@@ -434,8 +434,8 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(err.count("\n"), 1)
 
     def test_miss_rate_is_saved_and_used_by_later_commands(self):
-        report = self._queue_json(str(self.csv), "--miss-rate", "0.01")
-        self.assertEqual(report["miss_rate"], 0.01)
+        self._run("queue", str(self.csv))
+        self._run("config", "miss_rate", "0.01")
         self.assertTrue((self.runs_dir / "settings.json").exists())
         self.assertEqual(self._queue_json()["miss_rate"], 0.01)
         self.assertEqual(self._run("queue")[1].splitlines()[-1],
@@ -444,18 +444,19 @@ class CliTests(unittest.TestCase):
 
     def test_a_quarter_percent_rate_is_shown_as_it_is(self):
         self._calibrate(3, 2)
-        self._run("queue", "--miss-rate", "0.025")
+        self._run("config", "miss_rate", "0.025")
         self.assertIn("(at most 2.5% of true positives)", self._run("queue")[1])
-        self._run("queue", "--miss-rate", "0.005")
+        self._run("config", "miss_rate", "0.005")
         self.assertIn("of 199 graded", self._run("queue")[1])
-        self._run("queue", "--miss-rate", "0.1")
+        self._run("config", "miss_rate", "0.1")
         self.assertIn("(at most 10% of true positives)", self._run("queue")[1])
 
     def test_review_records_the_pile_under_the_saved_miss_rate(self):
         self._calibrate(3, 2)
         closed_id = sampled_ids(False, 1)[0]
         self.assertEqual(self._queue_json()["closed"], 2)
-        report = self._queue_json("--miss-rate", "0.01")
+        self._run("config", "miss_rate", "0.01")
+        report = self._queue_json()
         self.assertEqual((report["closed"], report["audit"], report["close_level"]),
                          (0, 0, None))
         self._run("review", closed_id, "fp")
@@ -465,39 +466,87 @@ class CliTests(unittest.TestCase):
         self.assertEqual(json.loads(self._run("inspect", closed_id, "--json")[1])["pile"],
                          "queue")
 
-    def test_the_change_message_appears_only_when_the_rate_differs(self):
-        message = "Miss rate changed from 1% to 10%. Earlier grades keep the pile they were given."
-        first = self._run("queue", str(self.csv), "--miss-rate", "0.01")[1]
-        self.assertNotIn("Miss rate changed", first)
-        self.assertNotIn("Miss rate changed", self._run("queue", "--miss-rate", "0.01")[1])
-        self.assertEqual(self._run("queue", "--miss-rate", "0.1")[1].splitlines()[-1], message)
-        self.assertNotIn("Miss rate changed", self._run("queue")[1])
-        self.assertNotIn("Miss rate changed",
-                         self._run("queue", "--json", "--miss-rate", "0.5")[1])
+    def test_config_prints_the_defaults_on_an_empty_runs_folder(self):
+        code, out, err = self._run("config")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out, f"miss_rate={close.DEFAULT_MISS_RATE}\nkeep_linked=true\n")
+        self.assertFalse(self.runs_dir.exists())
 
-    def test_the_change_message_also_follows_the_no_open_incidents_line(self):
-        self._run("queue", str(write_csv(self.tmp / "graded.csv", ROWS[:5])),
-                  "--miss-rate", "0.05")
-        code, out, _ = self._run("queue", "--miss-rate", "0.01")
-        self.assertEqual(code, 0)
-        lines = out.splitlines()
-        self.assertTrue(lines[0].startswith("No open incidents."))
-        self.assertEqual(lines[1], "Miss rate changed from 5% to 1%. "
-                                   "Earlier grades keep the pile they were given.")
+    def test_config_sets_and_shows_each_setting(self):
+        self.assertEqual(self._run("config", "miss_rate", "0.02")[1].splitlines()[0],
+                         "miss_rate=0.02")
+        self.assertEqual(self._run("config", "keep_linked", "false")[1].splitlines()[0],
+                         "keep_linked=false")
+        self.assertEqual(self._run("config")[1], "miss_rate=0.02\nkeep_linked=false\n")
+        saved = json.loads((self.runs_dir / "settings.json").read_text())
+        self.assertEqual(saved, {"miss_rate": 0.02, "keep_linked": False})
 
-    def test_no_keep_linked_is_saved_and_keeps_the_miss_rate(self):
-        self._run("queue", str(self.csv), "--miss-rate", "0.01")
-        self._run("queue", "--no-keep-linked")
+    def test_the_miss_rate_message_appears_only_when_the_rate_differs(self):
+        message = "Miss rate changed from 5% to 1%. Earlier grades keep the pile they were given."
+        self.assertEqual(self._run("config", "miss_rate", "0.01")[1],
+                         f"miss_rate=0.01\n{message}\n")
+        self.assertEqual(self._run("config", "miss_rate", "0.01")[1], "miss_rate=0.01\n")
+        self.assertEqual(self._run("config", "miss_rate", "0.05")[1].splitlines()[1],
+                         "Miss rate changed from 1% to 5%. "
+                         "Earlier grades keep the pile they were given.")
+        self.assertEqual(self._run("config", "miss_rate", "0.05")[1], "miss_rate=0.05\n")
+
+    def test_the_keep_linked_message_appears_only_when_the_setting_differs(self):
+        kept = "Incidents linked to a true positive are now kept in the queue."
+        freed = "Incidents linked to a true positive can now be closed."
+        self.assertEqual(self._run("config", "keep_linked", "true")[1], "keep_linked=true\n")
+        self.assertEqual(self._run("config", "keep_linked", "false")[1],
+                         f"keep_linked=false\n{freed}\n")
+        self.assertEqual(self._run("config", "keep_linked", "false")[1], "keep_linked=false\n")
+        self.assertEqual(self._run("config", "keep_linked", "true")[1],
+                         f"keep_linked=true\n{kept}\n")
+
+    def test_one_setting_changes_and_the_other_is_kept(self):
+        self._run("config", "miss_rate", "0.01")
+        self._run("config", "keep_linked", "false")
         saved = json.loads((self.runs_dir / "settings.json").read_text())
         self.assertEqual(saved, {"miss_rate": 0.01, "keep_linked": False})
-        report = self._queue_json()
+        report = self._queue_json(str(self.csv))
         self.assertEqual((report["miss_rate"], report["keep_linked"]), (0.01, False))
 
-    def test_miss_rate_keeps_a_saved_keep_linked(self):
-        self._run("queue", str(self.csv), "--no-keep-linked")
-        self._run("queue", "--miss-rate", "0.02")
-        saved = json.loads((self.runs_dir / "settings.json").read_text())
-        self.assertEqual(saved, {"keep_linked": False, "miss_rate": 0.02})
+    def test_config_with_one_argument_is_a_usage_error(self):
+        for setting in ("miss_rate", "keep_linked"):
+            with self.subTest(setting):
+                code, out, err = self._run("config", setting)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("config takes SETTING and VALUE, or nothing", err)
+
+    def test_an_unknown_setting_is_a_usage_error(self):
+        self.assertEqual(self._run("config", "budget", "3")[0], 2)
+        self.assertFalse((self.runs_dir / "settings.json").exists())
+
+    def test_a_bad_value_is_a_usage_error(self):
+        bad = {"miss_rate": ("0", "1", "abc", "-0.1", "nan", "inf", "1.5"),
+               "keep_linked": ("yes", "True", "1", "on", "")}
+        expected = {"miss_rate": "miss_rate: expected a number between 0 and 1",
+                    "keep_linked": "keep_linked: expected true or false"}
+        for setting, values in bad.items():
+            for value in values:
+                with self.subTest(setting, value=value):
+                    code, out, err = self._run("config", setting, value)
+                    self.assertEqual((code, out), (2, ""))
+                    self.assertIn(expected[setting], err)
+        self.assertFalse((self.runs_dir / "settings.json").exists())
+
+    def test_the_settings_flags_are_gone_from_queue(self):
+        for flag in (["--miss-rate", "0.02"], ["--keep-linked"], ["--no-keep-linked"]):
+            with self.subTest(flag):
+                self.assertEqual(self._run("queue", str(self.csv), *flag)[0], 2)
+        self.assertFalse(self.runs_dir.exists())
+
+    def test_a_bad_settings_file_stops_config(self):
+        self._run("queue", str(self.csv))
+        (self.runs_dir / "settings.json").write_text("[]")
+        for argv in (("config",), ("config", "miss_rate", "0.1")):
+            with self.subTest(argv):
+                code, out, err = self._run(*argv)
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn("settings.json", err)
 
     def test_a_linked_true_positive_keeps_an_incident_under_the_level_in_the_queue(self):
         linked_id = self._calibrate_linked()
@@ -513,7 +562,8 @@ class CliTests(unittest.TestCase):
 
     def test_without_the_rule_the_linked_incident_is_closed(self):
         linked_id = self._calibrate_linked()
-        out = self._run("queue", "--no-keep-linked")[1]
+        self._run("config", "keep_linked", "false")
+        out = self._run("queue")[1]
         self.assertNotIn("stay in the queue", out)
         self.assertIn("2 more are under the close level", out)
         report = self._queue_json()
@@ -526,28 +576,6 @@ class CliTests(unittest.TestCase):
         with (self.runs_dir / "grades.csv").open(newline="", encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
         self.assertEqual(rows[-1]["pile"], "queue")
-
-    def test_the_keep_linked_message_appears_only_when_the_setting_differs(self):
-        kept = "Incidents linked to a true positive are now kept in the queue."
-        freed = "Incidents linked to a true positive can now be closed."
-        first = self._run("queue", str(self.csv), "--keep-linked")[1]
-        self.assertNotIn(kept, first)
-        self.assertNotIn(freed, first)
-        self.assertEqual(self._run("queue", "--no-keep-linked")[1].splitlines()[-1], freed)
-        self.assertNotIn(freed, self._run("queue", "--no-keep-linked")[1])
-        self.assertEqual(self._run("queue", "--keep-linked")[1].splitlines()[-1], kept)
-        self.assertNotIn(kept, self._run("queue", "--json", "--no-keep-linked")[1])
-
-    def test_the_help_default_matches_the_constant(self):
-        done = subprocess.run([sys.executable, "-m", "meerkat", "queue", "--help"],
-                              capture_output=True, text=True, check=False)
-        self.assertIn(f"(default {close.DEFAULT_MISS_RATE})", " ".join(done.stdout.split()))
-
-    def test_a_bad_miss_rate_is_a_usage_error(self):
-        for value in ("0", "1", "abc", "-0.1", "nan"):
-            with self.subTest(value):
-                self.assertEqual(self._run("queue", str(self.csv), "--miss-rate", value)[0], 2)
-        self.assertFalse((self.runs_dir / "settings.json").exists())
 
     def test_a_bad_settings_file_stops_every_scoring_command(self):
         self._run("queue", str(self.csv))
@@ -604,10 +632,11 @@ class CliTests(unittest.TestCase):
 
     def test_a_refused_time_leaves_earlier_runs_and_settings_alone(self):
         self._run("queue", str(self.csv))
+        self._run("config", "keep_linked", "false")
         before = sorted(path.name for path in self.runs_dir.iterdir())
         bad = write_csv(self.tmp / "bad.csv", (plain_row(
             "900", "7", time="9999-12-31T23:00:00-02:00"),))
-        self._assert_one_line_error(("queue", str(bad), "--miss-rate", "0.5"), "bad.csv")
+        self._assert_one_line_error(("queue", str(bad)), "bad.csv")
         self.assertEqual(sorted(path.name for path in self.runs_dir.iterdir()), before)
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
         self.assertEqual(self._run("inspect", "200")[0], 0)
@@ -618,7 +647,7 @@ class CliTests(unittest.TestCase):
         run.write_text("a,b\n1,2\n")
         before = sorted(path.name for path in self.runs_dir.iterdir())
         later = write_csv(self.tmp / "later.csv", (plain_row("900", "7"),))
-        self._assert_one_line_error(("queue", str(later), "--miss-rate", "0.5"), "incidents.csv")
+        self._assert_one_line_error(("queue", str(later)), "incidents.csv")
         self.assertEqual(sorted(path.name for path in self.runs_dir.iterdir()), before)
 
     def test_a_damaged_saved_run_is_one_line_for_every_command(self):

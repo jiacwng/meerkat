@@ -12,15 +12,10 @@
 
 ### Added
 
-- `queue`, `review`, `inspect` and `runs`.
+- `queue`, `review`, `inspect`, `runs` and `config`.
 - The score is a logistic regression on ten inputs, fitted on GUIDE, with the
   reason shown beside each score.
 - Incidents under a close level leave the queue, and one in ten is audited.
-  `queue --miss-rate` sets the share of true positives accepted under it.
-- `queue --keep-linked` keeps incidents linked to a graded true positive in
-  the queue.
-- `queue --mapping` reads other column names and grade words, with presets
-  for Defender, Sentinel and Splunk.
 - `examples/incidents.csv`, one organisation of GUIDE.
 
 ## 1.3.0 - 2026-10-22

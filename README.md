@@ -45,6 +45,7 @@ the 10 that were set aside.
 | `meerkat review INCIDENT GRADE` | Records a grade: `tp`, `bp` or `fp`. |
 | `meerkat inspect INCIDENT` | Shows one incident with its score, its rule history and its linked incidents. |
 | `meerkat runs` | Lists the saved runs. |
+| `meerkat config [SETTING VALUE]` | Shows the settings, or changes one. |
 
 `queue --closed` lists the incidents that were set aside. `queue --run ID` lists
 one run only. `--json` gives machine readable output on `queue`, `inspect` and
@@ -86,10 +87,16 @@ An incident linked to a graded true positive is never set aside.
 
 ## Settings
 
-| Flag on `queue` | Meaning | Default |
+| Setting | Meaning | Default |
 | --- | --- | --- |
-| `--miss-rate RATE` | Share of true positives accepted under the close level. | 0.05 |
-| `--keep-linked`, `--no-keep-linked` | Keep incidents linked to a graded true positive in the queue. | on |
+| `miss_rate` | Share of true positives accepted under the close level. | 0.05 |
+| `keep_linked` | Keep incidents linked to a graded true positive in the queue. | true |
+
+```bash
+meerkat config
+meerkat config miss_rate 0.02
+meerkat config keep_linked false
+```
 
 Both are saved in `runs/settings.json` and apply to later commands.
 
