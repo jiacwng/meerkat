@@ -31,7 +31,7 @@ def read_incidents(path, mapping: "Mapping") -> pd.DataFrame:
 
     incidents = by_incident[["Timestamp", "DetectorId", *DESCRIPTIVE]].first()
     grades = rows["IncidentGrade"].replace("", pd.NA)
-    incidents["IncidentGrade"] = grades.groupby(rows["IncidentId"]).first()
+    incidents["IncidentGrade"] = grades.groupby(rows["IncidentId"]).last()
     incidents["MitreTechniques"] = distinct(rows, "MitreTechniques", split=";")
     for column in LINKS:
         incidents[column] = distinct(rows, column)
@@ -74,6 +74,8 @@ def _read_rows(path, mapping: "Mapping") -> pd.DataFrame:
     rows = rows.rename(columns={source: name for name, source in mapping.columns.items()})
     rows = rows.reindex(columns=list(COLUMNS), fill_value="")
     rows = rows.apply(lambda column: column.str.strip())
+    for name in LINKS:
+        rows[name] = rows[name].str.replace(SEPARATOR, "%7C", regex=False)
     for name in REQUIRED:
         blank = int((rows[name] == "").sum())
         if blank:
