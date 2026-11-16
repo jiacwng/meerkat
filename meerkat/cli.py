@@ -1,4 +1,4 @@
-# The meerkat command line: queue, review, inspect and runs.
+# The meerkat command line: queue, review, inspect, runs and config.
 
 import argparse
 import json
@@ -25,6 +25,14 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("queue takes a FILE or --run, not both")
     if args.command == "queue" and args.file is None and args.mapping is not None:
         parser.error("--mapping needs FILE")
+    if args.command == "config":
+        if (args.setting is None) != (args.value is None):
+            parser.error("config takes SETTING and VALUE, or nothing")
+        if args.value is not None:
+            try:
+                args.value = SETTINGS[args.setting](args.value)
+            except argparse.ArgumentTypeError as error:
+                parser.error(f"{args.setting}: {error}")
 
     # pandas loads here so that --help and --version stay instant
     from core.incidents import IncidentError
@@ -62,12 +70,6 @@ def _build_parser() -> argparse.ArgumentParser:
                             "splunk or a TOML file (default defender)")
     queue.add_argument("--closed", action="store_true",
                        help="incidents under the close level instead of the queue")
-    queue.add_argument("--miss-rate", type=_rate, metavar="RATE",
-                       help="share of true positives accepted under the close level; "
-                            "saved for later commands (default 0.05)")
-    queue.add_argument("--keep-linked", action=argparse.BooleanOptionalAction,
-                       help="never close an incident linked to a graded true positive; "
-                            "saved for later commands (default on)")
     _add_run(queue)
     _add_json(queue)
     _add_runs_dir(queue)
@@ -94,6 +96,15 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_json(runs)
     _add_runs_dir(runs)
     runs.set_defaults(handler=_runs)
+
+    config = sub.add_parser("config", help="show the settings, or change one")
+    config.add_argument("setting", nargs="?", choices=("miss_rate", "keep_linked"),
+                        metavar="SETTING", help="miss_rate or keep_linked")
+    config.add_argument("value", nargs="?", metavar="VALUE",
+                        help="a number between 0 and 1 for miss_rate, true or false "
+                             "for keep_linked")
+    _add_runs_dir(config)
+    config.set_defaults(handler=_config)
     return parser
 
 
@@ -130,6 +141,15 @@ def _rate(text: str) -> float:
     return value
 
 
+def _flag(text: str) -> bool:
+    if text not in ("true", "false"):
+        raise argparse.ArgumentTypeError("expected true or false")
+    return text == "true"
+
+
+SETTINGS = {"miss_rate": _rate, "keep_linked": _flag}
+
+
 def _percent(rate: float) -> str:
     return f"{rate * 100:g}%"
 
@@ -150,19 +170,9 @@ def _queue(args: argparse.Namespace) -> None:
         run = args.run
         run_ids = in_run["IncidentId"]
 
-    saved = store.read_settings(args.runs_dir)
-    previous = saved.get("miss_rate")
-    previous_keep = saved.get("keep_linked")
-    if args.miss_rate is not None:
-        saved["miss_rate"] = args.miss_rate
-    if args.keep_linked is not None:
-        saved["keep_linked"] = args.keep_linked
-
-    scored, level, entries, settings = _scored(args.runs_dir, incoming, saved)
+    scored, level, entries, settings = _scored(args.runs_dir, incoming)
     if incoming is not None:
         run = store.save_run(args.runs_dir, incoming, args.file.name, mapping.name)["run"]
-    if args.miss_rate is not None or args.keep_linked is not None:
-        store.write_settings(args.runs_dir, saved)
     miss_rate, keep_linked = settings["miss_rate"], settings["keep_linked"]
     open_incidents = scored[scored["IncidentGrade"] == ""]
     if run_ids is not None:
@@ -220,14 +230,42 @@ def _queue(args: argparse.Namespace) -> None:
             if kept_linked:
                 print(f"{kept_linked} others under it stay in the queue because a linked "
                       "incident was a true positive.")
-    if previous is not None and previous != miss_rate:
-        print(f"Miss rate changed from {_percent(previous)} to {_percent(miss_rate)}. "
+
+
+def _config(args: argparse.Namespace) -> None:
+    from core import store
+
+    settings = _settings(args.runs_dir)
+    if args.setting is None:
+        for name, value in settings.items():
+            print(_setting_line(name, value))
+        return
+
+    previous = settings[args.setting]
+    saved = store.read_settings(args.runs_dir)
+    saved[args.setting] = args.value
+    store.write_settings(args.runs_dir, saved)
+    print(_setting_line(args.setting, args.value))
+    if previous == args.value:
+        return
+    if args.setting == "miss_rate":
+        print(f"Miss rate changed from {_percent(previous)} to {_percent(args.value)}. "
               "Earlier grades keep the pile they were given.")
-    if previous_keep is not None and previous_keep != keep_linked:
-        if keep_linked:
-            print("Incidents linked to a true positive are now kept in the queue.")
-        else:
-            print("Incidents linked to a true positive can now be closed.")
+    elif args.value:
+        print("Incidents linked to a true positive are now kept in the queue.")
+    else:
+        print("Incidents linked to a true positive can now be closed.")
+
+
+def _setting_line(name: str, value: float | bool) -> str:
+    return f"{name}={str(value).lower()}"
+
+
+def _settings(runs_dir: Path) -> dict:
+    from core import close, store
+
+    return {"miss_rate": close.DEFAULT_MISS_RATE, "keep_linked": close.DEFAULT_KEEP_LINKED,
+            **store.read_settings(runs_dir)}
 
 
 def _review(args: argparse.Namespace) -> None:
@@ -250,16 +288,12 @@ def _review(args: argparse.Namespace) -> None:
     print(f"{_printable(args.incident)} graded {grade}")
 
 
-def _scored(runs_dir: Path, incoming=None, saved: dict | None = None):
+def _scored(runs_dir: Path, incoming=None):
     from core import close, rank, store
 
     reviews = store.read_reviews(runs_dir)
     scored = rank.score(store.load_history(runs_dir, incoming))
-    if saved is None:
-        saved = store.read_settings(runs_dir)
-    settings = {
-        "miss_rate": saved.get("miss_rate", close.DEFAULT_MISS_RATE),
-        "keep_linked": saved.get("keep_linked", close.DEFAULT_KEEP_LINKED)}
+    settings = _settings(runs_dir)
     entries = close.calibration(scored, reviews)
     level = close.close_level(entries, settings["miss_rate"])
     placed = close.place(scored, reviews, level, settings["keep_linked"])
