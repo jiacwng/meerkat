@@ -32,6 +32,5 @@ target-version = "py312"
 
 [tool.ruff.lint]
 # pycodestyle errors, pyflakes, import order, modern syntax and comprehensions.
-# Rules that would force verbose idioms into hand-written code are left out.
 select = ["E", "F", "I", "UP", "C4"]
-ignore = ["E501"]   # long lines are hand-wrapped to match the surrounding code
+ignore = ["E501"]   # long lines are wrapped by eye

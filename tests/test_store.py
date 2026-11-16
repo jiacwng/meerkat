@@ -118,7 +118,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(reviews["score"].tolist(), [0.123456789])
         self.assertEqual(reviews["pile"].tolist(), ["audit"])
 
-    def test_grades_with_missing_columns_a_bad_score_or_a_bad_pile_are_refused(self):
+    def test_bad_grades_file_is_refused(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         head = "time,IncidentId,grade,note"
         cases = (
@@ -139,7 +139,7 @@ class StoreTests(unittest.TestCase):
                         read(self.runs_dir)
                     self.assertNotIn("\n", str(raised.exception))
 
-    def test_history_has_one_row_per_incident_and_the_earlier_run_wins_a_tie(self):
+    def test_history_merges_repeats_to_one_row(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         later = (
             ("1", "200", "a6", "2024-06-05T12:00:00Z", "7", "Retitled", "", "", "", "", ""),
@@ -158,7 +158,7 @@ class StoreTests(unittest.TestCase):
             store.save_run(self.runs_dir, read_incidents(path, DEFENDER), path.name, "defender")
         return store.load_history(self.runs_dir).set_index("IncidentId")
 
-    def test_an_incident_in_two_runs_takes_rule_and_title_from_the_earlier_time(self):
+    def test_incident_in_two_runs_takes_rule_from_earlier_time(self):
         later = ("1", "500", "b", "2024-06-02T00:00:00Z", "8", "Second", "Late", "", "", "", "")
         earlier = ("1", "500", "a", "2024-06-01T00:00:00Z", "7", "First", "Early", "", "", "", "")
         row = self._merged((later,), (earlier,)).loc["500"]
@@ -211,7 +211,7 @@ class StoreTests(unittest.TestCase):
         with self.assertRaisesRegex(store.StoreError, "unreadable run"):
             store.list_runs(self.runs_dir)
 
-    def test_a_run_with_wrong_columns_or_a_bad_time_is_refused_naming_the_file(self):
+    def test_bad_run_file_is_refused_by_name(self):
         meta = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         path = self.runs_dir / meta["run"] / "incidents.csv"
         good = path.read_text()

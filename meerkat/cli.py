@@ -125,7 +125,7 @@ def _positive(text: str) -> int:
     try:
         value = int(text)
     except ValueError:
-        value = 0
+        raise argparse.ArgumentTypeError("expected a whole number above 0") from None
     if value < 1:
         raise argparse.ArgumentTypeError("expected a whole number above 0")
     return value
@@ -135,7 +135,7 @@ def _rate(text: str) -> float:
     try:
         value = float(text)
     except ValueError:
-        value = 0.0
+        raise argparse.ArgumentTypeError("expected a number between 0 and 1") from None
     if not 0 < value < 1:
         raise argparse.ArgumentTypeError("expected a number between 0 and 1")
     return value

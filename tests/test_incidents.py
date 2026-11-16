@@ -256,7 +256,7 @@ class ReadIncidentsTests(unittest.TestCase):
         self.path.write_text('"IncidentId";"Timestamp";"DetectorId"\n1;2024-06-01;7\n')
         self.assertIn("columns are separated by ';'", self._refusal())
 
-    def test_a_header_that_would_still_lack_a_column_keeps_the_missing_column_message(self):
+    def test_header_missing_a_column_names_it(self):
         self.path.write_text("IncidentId;Timestamp\n1;2024-06-01\n")
         self.assertEqual(self._refusal(),
                          f"{self.path}: missing column IncidentId, Timestamp, DetectorId")

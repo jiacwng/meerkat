@@ -10,8 +10,10 @@ DEFAULT_KEEP_LINKED = True
 AUDIT_SHARE = 0.10
 PILES = ("queue", "audit", "closed")
 
+
 def needed(miss_rate: float) -> int:
     return math.ceil(1 / miss_rate - 1)
+
 
 def calibration(scored: pd.DataFrame, reviews: pd.DataFrame) -> pd.DataFrame:
     latest = reviews.drop_duplicates("IncidentId", keep="last")
@@ -25,11 +27,13 @@ def calibration(scored: pd.DataFrame, reviews: pd.DataFrame) -> pd.DataFrame:
     imported = pd.DataFrame({"score": own["score"], "weight": 1.0})
     return pd.concat([reviewed, imported], ignore_index=True)
 
+
 def close_level(entries: pd.DataFrame, miss_rate: float) -> float | None:
     budget = miss_rate * (entries["weight"].sum() + 1)
     cumulative = entries.groupby("score")["weight"].sum().cumsum()
     within = cumulative[cumulative <= budget]
     return float(within.index.max()) if len(within) else None
+
 
 def pile_of(incident_id: str, score: float, level: float | None,
             linked_true_positive: int, keep_linked: bool) -> str:
@@ -38,6 +42,7 @@ def pile_of(incident_id: str, score: float, level: float | None,
     if keep_linked and linked_true_positive >= 1:
         return "queue"
     return "audit" if _sampled(incident_id) else "closed"
+
 
 def place(scored: pd.DataFrame, reviews: pd.DataFrame, level: float | None,
           keep_linked: bool) -> pd.DataFrame:
@@ -52,6 +57,7 @@ def place(scored: pd.DataFrame, reviews: pd.DataFrame, level: float | None,
         else:
             piles.append(recorded.get(row.IncidentId, ""))
     return scored.assign(pile=piles)
+
 
 def _sampled(incident_id: str) -> bool:
     digest = hashlib.sha256(incident_id.encode()).hexdigest()
