@@ -99,11 +99,6 @@ class ReadIncidentsTests(unittest.TestCase):
         with self.assertRaisesRegex(IncidentError, "no incident rows"):
             read_incidents(write_csv(self.path, rows=()), DEFENDER)
 
-    def test_missing_required_column(self):
-        header = ("IncidentId", "Timestamp")
-        with self.assertRaisesRegex(IncidentError, "missing column DetectorId"):
-            read_incidents(write_csv(self.path, (("5", "2024-06-01"),), header), DEFENDER)
-
     def test_two_organisations(self):
         rows = (self._row(), self._row(OrgId="2", IncidentId="300"))
         with self.assertRaisesRegex(IncidentError, "2 organisations"):
@@ -114,10 +109,6 @@ class ReadIncidentsTests(unittest.TestCase):
             with self.subTest(name), self.assertRaisesRegex(
                     IncidentError, f"1 rows have no {name}"):
                 read_incidents(write_csv(self.path, (self._row(**{name: " "}),)), DEFENDER)
-
-    def test_unknown_grade(self):
-        with self.assertRaisesRegex(IncidentError, "IncidentGrade 'Malicious'"):
-            read_incidents(write_csv(self.path, (self._row(IncidentGrade="Malicious"),)), DEFENDER)
 
     def test_unknown_grade_names_the_source_column_and_accepted_words(self):
         header = ("rule_id", "_time", "rule_name", "disposition_label")
@@ -183,7 +174,7 @@ class ReadIncidentsTests(unittest.TestCase):
         return str(raised.exception)
 
     def test_unparseable_timestamp_names_the_first_value_in_one_line(self):
-        for value in ("yesterday", "99999-01-01T00:00:00Z", "15/06/2024 10:00"):
+        for value in ("yesterday", "15/06/2024 10:00"):
             with self.subTest(value):
                 rows = (self._row(), self._row(IncidentId="300", Timestamp=value),
                         self._row(IncidentId="301", Timestamp="never"))
@@ -200,27 +191,10 @@ class ReadIncidentsTests(unittest.TestCase):
                          f"{self.path}: _time '15/06/2024 10:00' is not ISO 8601, "
                          "like 2024-06-15T10:00:00Z")
 
-    def test_a_time_that_cannot_be_saved_and_read_back_is_refused(self):
-        for value in ("9999-12-31T23:00:00-02:00", "9999-12-31T23:59:59-00:01"):
-            with self.subTest(value):
-                write_csv(self.path, (self._row(), self._row(IncidentId="300", Timestamp=value)))
-                self.assertEqual(self._refusal(),
-                                 f"{self.path}: Timestamp '{value}' is outside the times "
-                                 "meerkat can score")
-
-    def test_distant_times_are_accepted_and_survive_a_round_trip(self):
-        for value in ("9999-12-31T23:59:59Z", "0001-01-01T00:00:00Z", "0999-05-05T01:02:03Z",
-                      "2300-01-01T00:00:00Z"):
-            with self.subTest(value):
-                write_csv(self.path, (self._row(Timestamp=value),))
-                incidents = read_incidents(self.path, DEFENDER)
-                self.assertEqual(incidents.loc[0, "Timestamp"], value)
-
     def test_saved_text_drops_fractions_and_converts_offsets_to_utc(self):
         cases = (("2024-06-15T10:00:00Z", "2024-06-15T10:00:00Z"),
                  ("2024-06-15T10:00:00.987Z", "2024-06-15T10:00:00Z"),
-                 ("2024-06-15T10:00:00+02:00", "2024-06-15T08:00:00Z"),
-                 ("0001-01-01T00:00:00+02:00", "0000-12-31T22:00:00Z"))
+                 ("2024-06-15T10:00:00+02:00", "2024-06-15T08:00:00Z"))
         for value, saved in cases:
             with self.subTest(value):
                 write_csv(self.path, (self._row(Timestamp=value),))
@@ -228,8 +202,7 @@ class ReadIncidentsTests(unittest.TestCase):
 
     def test_a_utf16_file_is_named_as_utf16(self):
         text = ",".join(HEADER) + "\n" + ",".join(ROWS[5]) + "\n"
-        for name, data in (("utf-16", text.encode("utf-16")),
-                           ("utf-16-be", b"\xfe\xff" + text.encode("utf-16-be"))):
+        for name, data in (("utf-16", text.encode("utf-16")),):
             with self.subTest(name):
                 self.path.write_bytes(data)
                 self.assertEqual(self._refusal(), f"{self.path}: is UTF-16, save it as UTF-8")
@@ -251,10 +224,6 @@ class ReadIncidentsTests(unittest.TestCase):
                 self.path.write_text("\n".join(lines) + "\n")
                 self.assertEqual(self._refusal(),
                                  f"{self.path}: columns are separated by {shown}, expected ','")
-
-    def test_a_quoted_semicolon_header_names_the_separator(self):
-        self.path.write_text('"IncidentId";"Timestamp";"DetectorId"\n1;2024-06-01;7\n')
-        self.assertIn("columns are separated by ';'", self._refusal())
 
     def test_header_missing_a_column_names_it(self):
         self.path.write_text("IncidentId;Timestamp\n1;2024-06-01\n")

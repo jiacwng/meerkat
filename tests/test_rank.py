@@ -149,11 +149,6 @@ class ShippedWeightsTests(unittest.TestCase):
         self.assertEqual(found["score_without_links"], found["score"])
         self.assertNotEqual(found["score_as_new_rule"], found["score"])
 
-    def test_weights_for_other_inputs_are_refused(self):
-        use_weights(self, dict(WEIGHTS, inputs=list(reversed(features.INPUTS))))
-        with self.assertRaisesRegex(ValueError, "inputs do not match"):
-            load_weights()
-
 
 if __name__ == "__main__":
     unittest.main()

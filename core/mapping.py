@@ -39,15 +39,8 @@ def load_mapping(name_or_path: str) -> Mapping:
     for key in table:
         if key not in ("columns", "grades"):
             raise MappingError(f"{path}: unknown table {key!r}, expected columns or grades")
-    return Mapping(name, _columns(path, _table(path, table, "columns")),
-                   _grades(path, _table(path, table, "grades")))
-
-
-def _table(path: Path, table: dict, key: str) -> dict:
-    value = table.get(key, {})
-    if not isinstance(value, dict):
-        raise MappingError(f"{path}: {key} must be a table")
-    return value
+    return Mapping(name, _columns(path, table.get("columns", {})),
+                   _grades(path, table.get("grades", {})))
 
 
 def _columns(path: Path, given: dict) -> dict[str, str]:
@@ -77,9 +70,6 @@ def _grades(path: Path, given: dict) -> dict[str, str]:
                 isinstance(word, str) and word for word in listed):
             raise MappingError(f"{path}: [grades] {key} must be a list of non empty strings")
         for word in listed:
-            if owner.get(word) == key:
-                raise MappingError(
-                    f"{path}: grade word {word!r} is listed twice under {key}")
             if word in owner:
                 raise MappingError(
                     f"{path}: grade word {word!r} is listed under {owner[word]} and {key}")

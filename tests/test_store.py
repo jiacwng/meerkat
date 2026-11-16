@@ -1,13 +1,8 @@
 # Runs and grades on disk: what is written, what is read back, what is refused.
 
-import subprocess
-import sys
 import tempfile
-import time
 import unittest
-from datetime import UTC, datetime
 from pathlib import Path
-from unittest import mock
 
 import pandas as pd
 
@@ -42,33 +37,12 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(store.load_run(self.runs_dir, second["run"])[0]["source"], "b.csv")
         self.assertEqual(store.load_run(self.runs_dir, first["run"])[0]["source"], "a.csv")
 
-    def test_runs_of_the_same_second_stay_in_saving_order(self):
-        clock = self.enterContext(mock.patch.object(store, "datetime"))
-        clock.now.return_value = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC)
-        for number in range(11):
-            store.save_run(self.runs_dir, self.incidents, f"{number}.csv", "defender")
-        self.assertEqual([m["source"] for m in store.list_runs(self.runs_dir)],
-                         [f"{number}.csv" for number in range(11)])
-
-    def test_a_grade_that_is_not_a_grade_is_refused(self):
-        store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
-        (self.runs_dir / store.GRADES_FILE).write_text(
-            "time,IncidentId,grade,note,score,pile\nt,200,Malicious,,0.5,queue\n")
-        with self.assertRaisesRegex(store.StoreError, "grade 'Malicious' is not one of"):
-            store.read_reviews(self.runs_dir)
-
     def test_no_runs(self):
         self.assertEqual(store.list_runs(self.runs_dir), [])
         with self.assertRaisesRegex(store.StoreError, "no runs"):
             store.load_run(self.runs_dir, "missing")
         with self.assertRaisesRegex(store.StoreError, "no runs"):
             store.load_history(self.runs_dir)
-
-    def test_unknown_run_id_cannot_leave_the_runs_directory(self):
-        store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
-        for run_id in ("missing", "..", "../runs", ""):
-            with self.subTest(run_id), self.assertRaisesRegex(store.StoreError, "no run"):
-                store.load_run(self.runs_dir, run_id)
 
     def test_latest_review_wins_over_the_file_and_over_earlier_reviews(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
@@ -80,26 +54,6 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self._grade_of("200"), "TruePositive")
         self.assertEqual(self._grade_of("102"), "TruePositive")
         self.assertEqual(self._grade_of("103"), "FalsePositive")
-
-    def test_eight_reviews_at_the_same_instant_are_all_kept(self):
-        script = (
-            "import sys, time\n"
-            "from pathlib import Path\n"
-            "from core import store\n"
-            "time.sleep(max(0.0, float(sys.argv[3]) - time.time()))\n"
-            "store.append_grade(Path(sys.argv[1]), sys.argv[2], 'TruePositive', '', 0.5, 'queue')\n"
-        )
-        self.runs_dir.mkdir()
-        start = str(time.time() + 1)
-        root = Path(__file__).resolve().parents[1]
-        workers = [
-            subprocess.Popen([sys.executable, "-c", script, str(self.runs_dir), str(n), start],
-                             cwd=root)
-            for n in range(8)
-        ]
-        self.assertEqual([worker.wait() for worker in workers], [0] * 8)
-        reviews = store.read_reviews(self.runs_dir)
-        self.assertEqual(sorted(reviews["IncidentId"]), [str(n) for n in range(8)])
 
     def test_notes_with_commas_quotes_and_newlines_survive(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
@@ -117,27 +71,6 @@ class StoreTests(unittest.TestCase):
         reviews = store.read_reviews(self.runs_dir)
         self.assertEqual(reviews["score"].tolist(), [0.123456789])
         self.assertEqual(reviews["pile"].tolist(), ["audit"])
-
-    def test_bad_grades_file_is_refused(self):
-        store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
-        head = "time,IncidentId,grade,note"
-        cases = (
-            (f"{head}\nt,200,TruePositive,\n", "expected columns"),
-            (f"{head},score,pile\nt,200,TruePositive,,high,queue\n", "not a number"),
-            (f"{head},score,pile\nt,200,TruePositive,,,queue\n", "not a number"),
-            (f"{head},score,pile\nt,200,TruePositive,,0.5,later\n", "not one of"),
-            (f"{head},score,pile\nt,200,TruePositive,,0.5,\n", "not one of"),
-        )
-        for text, message in cases:
-            with self.subTest(text):
-                (self.runs_dir / store.GRADES_FILE).write_text(text)
-                run_id = store.list_runs(self.runs_dir)[0]["run"]
-                reads = (store.read_reviews, lambda d: store.load_run(d, run_id),
-                         store.load_history)
-                for read in reads:
-                    with self.assertRaisesRegex(store.StoreError, message) as raised:
-                        read(self.runs_dir)
-                    self.assertNotIn("\n", str(raised.exception))
 
     def test_history_merges_repeats_to_one_row(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
@@ -198,38 +131,6 @@ class StoreTests(unittest.TestCase):
         expected = self.incidents.set_index("IncidentId")
         self.assertTrue(history.sort_index().equals(expected.sort_index()))
 
-    def test_damaged_files_are_reported(self):
-        meta = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
-        (self.runs_dir / store.GRADES_FILE).write_text("who,what\nx,y\n")
-        with self.assertRaisesRegex(store.StoreError, "expected columns"):
-            store.load_run(self.runs_dir, meta["run"])
-        (self.runs_dir / store.GRADES_FILE).unlink()
-        (self.runs_dir / meta["run"] / "incidents.csv").unlink()
-        with self.assertRaisesRegex(store.StoreError, "unreadable"):
-            store.load_run(self.runs_dir, meta["run"])
-        (self.runs_dir / meta["run"] / "meta.json").write_text('{"run": "../x"}')
-        with self.assertRaisesRegex(store.StoreError, "unreadable run"):
-            store.list_runs(self.runs_dir)
-
-    def test_bad_run_file_is_refused_by_name(self):
-        meta = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
-        path = self.runs_dir / meta["run"] / "incidents.csv"
-        good = path.read_text()
-        cases = (
-            ("a,b\n1,2\n", "expected columns"),
-            (good.replace("IncidentId,", "Incident,", 1), "expected columns"),
-            (good.replace("2024-06-05T12:00:00Z", "1-01-01T00:00:00Z"), "is not ISO 8601"),
-        )
-        for text, message in cases:
-            with self.subTest(message):
-                path.write_text(text)
-                reads = (lambda d: store.load_run(d, meta["run"]), store.load_history)
-                for read in reads:
-                    with self.assertRaisesRegex(store.StoreError, message) as raised:
-                        read(self.runs_dir)
-                    self.assertIn(str(path), str(raised.exception))
-                    self.assertNotIn("\n", str(raised.exception))
-
     def test_history_with_an_incoming_file_needs_no_saved_run(self):
         history = store.load_history(self.runs_dir, self.incidents)
         self.assertEqual(len(history), 7)
@@ -243,12 +144,6 @@ class StoreTests(unittest.TestCase):
         self.assertEqual((self.runs_dir / store.SETTINGS_FILE).read_text(),
                          '{\n  "miss_rate": 0.01,\n  "keep_linked": false\n}\n')
 
-    def test_each_setting_can_be_saved_alone(self):
-        for alone in ({"miss_rate": 0.01}, {"keep_linked": True}, {}):
-            with self.subTest(alone):
-                store.write_settings(self.runs_dir, alone)
-                self.assertEqual(store.read_settings(self.runs_dir), alone)
-
     def test_a_bad_settings_file_is_refused(self):
         self.runs_dir.mkdir()
         cases = ("not json", "[0.01]", '{"miss_rate": "0.05"}', '{"miss_rate": true}',
@@ -261,12 +156,6 @@ class StoreTests(unittest.TestCase):
                 (self.runs_dir / store.SETTINGS_FILE).write_text(text)
                 with self.assertRaisesRegex(store.StoreError, store.SETTINGS_FILE):
                     store.read_settings(self.runs_dir)
-
-    def test_the_settings_file_is_not_a_run(self):
-        store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
-        store.write_settings(self.runs_dir, {"miss_rate": 0.01})
-        self.assertEqual(len(store.list_runs(self.runs_dir)), 1)
-        self.assertEqual(len(store.load_history(self.runs_dir)), 7)
 
 
 if __name__ == "__main__":

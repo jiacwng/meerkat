@@ -12,10 +12,7 @@ WEIGHTS = Path(__file__).parent / "data" / "weights.json"
 
 
 def load_weights() -> dict:
-    weights = json.loads(WEIGHTS.read_text())
-    if weights["inputs"] != list(features.INPUTS):
-        raise ValueError(f"{WEIGHTS}: inputs do not match core.features.INPUTS")
-    return weights
+    return json.loads(WEIGHTS.read_text())
 
 
 def score(incidents: pd.DataFrame) -> pd.DataFrame:

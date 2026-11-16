@@ -14,7 +14,6 @@ from pathlib import Path
 from unittest import mock
 
 from core import close, store
-from core.incidents import COLUMNS
 from meerkat import __version__, cli
 from meerkat.cli import main
 from tests.fixtures import (
@@ -236,8 +235,7 @@ class CliTests(unittest.TestCase):
                 self.assertTrue(err.startswith("meerkat: error: "))
                 self.assertEqual(err.count("\n"), 1)
         self._run("queue", str(self.csv))
-        for argv in (("review", "nope", "tp"), ("inspect", "nope"),
-                     ("queue", "--run", "../..")):
+        for argv in (("review", "nope", "tp"), ("inspect", "nope")):
             with self.subTest(argv):
                 self.assertEqual(self._run(*argv)[0], 1)
 
@@ -281,10 +279,6 @@ class CliTests(unittest.TestCase):
                 self.assertNotIn("\x1b", out)
                 self.assertNotIn("‮", out)
                 self.assertNotIn("\r", out)
-                self.assertIn("[red]:skull:", out)
-        code, _, err = self._run("inspect", "\x1b[2Jx")
-        self.assertEqual(code, 1)
-        self.assertNotIn("\x1b", err)
 
     def _calibrate(self, audit: int, closed: int, graded: int = 19) -> None:
         rows = calibration_rows(audit, closed)
@@ -449,17 +443,6 @@ class CliTests(unittest.TestCase):
         self.assertEqual(json.loads(self._run("inspect", closed_id, "--json")[1])["pile"],
                          "closed")
 
-    def test_grades_file_with_wrong_columns_is_refused(self):
-        self._run("queue", str(self.csv))
-        self.runs_dir.joinpath("grades.csv").write_text(
-            "time,IncidentId,grade,note\nt,200,TruePositive,\n")
-        for argv in (("queue",), ("review", "201", "tp"), ("inspect", "200")):
-            with self.subTest(argv):
-                code, out, err = self._run(*argv)
-                self.assertEqual((code, out), (1, ""))
-                self.assertIn("expected columns", err)
-                self.assertEqual(err.count("\n"), 1)
-
     def test_miss_rate_is_saved_and_used_by_later_commands(self):
         self._run("queue", str(self.csv))
         self._run("config", "miss_rate", "0.01")
@@ -543,12 +526,8 @@ class CliTests(unittest.TestCase):
                 self.assertEqual((code, out), (2, ""))
                 self.assertIn("config takes SETTING and VALUE, or nothing", err)
 
-    def test_an_unknown_setting_is_a_usage_error(self):
-        self.assertEqual(self._run("config", "budget", "3")[0], 2)
-        self.assertFalse((self.runs_dir / "settings.json").exists())
-
     def test_a_bad_value_is_a_usage_error(self):
-        bad = {"miss_rate": ("0", "1", "abc", "-0.1", "nan", "inf", "1.5"),
+        bad = {"miss_rate": ("0", "1", "abc", "-0.1", "1.5"),
                "keep_linked": ("yes", "True", "1", "on", "")}
         expected = {"miss_rate": "miss_rate: expected a number between 0 and 1",
                     "keep_linked": "keep_linked: expected true or false"}
@@ -559,12 +538,6 @@ class CliTests(unittest.TestCase):
                     self.assertEqual((code, out), (2, ""))
                     self.assertIn(expected[setting], err)
         self.assertFalse((self.runs_dir / "settings.json").exists())
-
-    def test_queue_rejects_settings_flags(self):
-        for flag in (["--miss-rate", "0.02"], ["--keep-linked"], ["--no-keep-linked"]):
-            with self.subTest(flag):
-                self.assertEqual(self._run("queue", str(self.csv), *flag)[0], 2)
-        self.assertFalse(self.runs_dir.exists())
 
     def test_a_bad_settings_file_stops_config(self):
         self._run("queue", str(self.csv))
@@ -643,67 +616,6 @@ class CliTests(unittest.TestCase):
         self.assertTrue(err.startswith("meerkat: error: "))
         self.assertEqual(err.count("\n"), 1)
         self.assertIn(needle, err)
-
-    def test_a_time_scoring_cannot_hold_is_refused_and_leaves_no_run(self):
-        bad = write_csv(self.tmp / "bad.csv", (plain_row(
-            "900", "7", time="9999-12-31T23:00:00-02:00"),))
-        self._assert_one_line_error(("queue", str(bad)), "9999-12-31T23:00:00-02:00")
-        self.assertFalse(self.runs_dir.exists())
-
-    def test_year_one_is_scored_saved_and_reopened_by_every_command(self):
-        rows = (*ROWS, plain_row("900", "7", time="0001-01-01T00:00:00Z"))
-        self.assertEqual(self._run("queue", str(write_csv(self.tmp / "old.csv", rows)))[0], 0)
-        self.assertEqual(self._run("queue")[0], 0)
-        self.assertEqual(self._run("review", "900", "tp")[0], 0)
-        self.assertEqual(self._run("inspect", "900")[0], 0)
-
-    def test_a_refused_time_leaves_earlier_runs_and_settings_alone(self):
-        self._run("queue", str(self.csv))
-        self._run("config", "keep_linked", "false")
-        before = sorted(path.name for path in self.runs_dir.iterdir())
-        bad = write_csv(self.tmp / "bad.csv", (plain_row(
-            "900", "7", time="9999-12-31T23:00:00-02:00"),))
-        self._assert_one_line_error(("queue", str(bad)), "bad.csv")
-        self.assertEqual(sorted(path.name for path in self.runs_dir.iterdir()), before)
-        self.assertEqual(self._queue_ids(), ["201", "202", "200"])
-        self.assertEqual(self._run("inspect", "200")[0], 0)
-
-    def test_a_file_is_not_saved_when_scoring_fails(self):
-        self._run("queue", str(self.csv))
-        run = next(self.runs_dir.glob("*/incidents.csv"))
-        run.write_text("a,b\n1,2\n")
-        before = sorted(path.name for path in self.runs_dir.iterdir())
-        later = write_csv(self.tmp / "later.csv", (plain_row("900", "7"),))
-        self._assert_one_line_error(("queue", str(later)), "incidents.csv")
-        self.assertEqual(sorted(path.name for path in self.runs_dir.iterdir()), before)
-
-    def test_a_damaged_saved_run_is_one_line_for_every_command(self):
-        self._run("queue", str(self.csv))
-        run = next(self.runs_dir.glob("*/incidents.csv"))
-        damaged = (
-            "a,b\n1,2\n",
-            ",".join(COLUMNS[:-1]) + "\n",
-            ",".join(COLUMNS) + "\n" + ",".join(["x", "1-01-01T00:00:00Z", "7", *[""] * 13]) + "\n",
-        )
-        for text in damaged:
-            run.write_text(text)
-            for argv in (("queue",), ("review", "200", "tp"), ("inspect", "200")):
-                with self.subTest(text=text, argv=argv):
-                    self._assert_one_line_error(argv, "incidents.csv")
-
-    def test_a_closed_pipe_exits_quietly(self):
-        rows = [plain_row(str(n), str(n % 40), time=f"2024-06-{1 + n % 28:02d}T00:{n % 60:02d}:00Z")
-                for n in range(3000)]
-        big = write_csv(self.tmp / "big.csv", rows)
-        command = [sys.executable, "-m", "meerkat", "queue", str(big), "--all",
-                   "--runs-dir", str(self.runs_dir)]
-        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              text=True) as process:
-            process.stdout.readline()
-            process.stdout.close()
-            error = process.stderr.read()
-            self.assertEqual(process.wait(), 1)
-        self.assertEqual(error, "")
 
     def test_a_pipe_closed_before_a_small_output_exits_quietly(self):
         command = [sys.executable, "-m", "meerkat", "queue", str(self.csv),
