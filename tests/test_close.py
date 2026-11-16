@@ -95,7 +95,7 @@ class ImportedGradeTests(unittest.TestCase):
         self.assertEqual(len(entries), 2)
         self.assertEqual(entries["score"].tolist().count(0.9), 1)
 
-    def test_a_true_positive_in_the_file_later_reviewed_as_false_positive_is_left_out(self):
+    def test_true_positive_reviewed_as_false_positive_is_left_out(self):
         history = _history(("a1", "A", "FalsePositive"), ("a2", "A", "TruePositive"))
         reviews = _reviews(("t", "a1", "FalsePositive", "", 0.9, "queue"))
         self.assertEqual(len(close.calibration(history, reviews)), 1)

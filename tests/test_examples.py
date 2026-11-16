@@ -22,7 +22,7 @@ class ExampleTests(unittest.TestCase):
     def setUpClass(cls):
         cls.incidents = read_incidents(EXAMPLES / "incidents.csv", DEFENDER)
 
-    def test_incidents_read_through_the_defender_mapping_for_one_organisation(self):
+    def test_defender_mapping_reads_one_organisation(self):
         self.assertGreater(len(self.incidents), 0)
         rows = pd.read_csv(EXAMPLES / "incidents.csv", dtype=str, usecols=["OrgId"])
         self.assertEqual(rows["OrgId"].nunique(), 1)

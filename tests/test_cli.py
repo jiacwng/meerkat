@@ -118,7 +118,7 @@ class CliTests(unittest.TestCase):
         report = json.loads(self._run("queue", "--run", first, "--json")[1])
         self.assertEqual((report["run"], report["open"]), (first, 2))
 
-    def test_queue_with_a_file_lists_the_new_and_the_earlier_incidents(self):
+    def test_queue_lists_incoming_and_earlier_incidents(self):
         self._three_runs()
         fourth = write_csv(self.tmp / "d.csv", [plain_row("d1", "5", time="2024-06-04T00:00:00Z")])
         self.assertEqual(self._queue_ids(str(fourth)), ["d1", "c1", "b1", "b2", "a1", "a2"])
@@ -301,7 +301,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(self._run("review", f"t{number}", "tp")[0], 0)
         return sampled_ids(False, 1)[0]
 
-    def test_footer_without_a_level_counts_toward_the_needed_true_positives(self):
+    def test_footer_without_level_counts_true_positives(self):
         code, out, _ = self._run("queue", str(self.csv))
         self.assertEqual(code, 0)
         self.assertEqual(out.splitlines()[-1],
@@ -381,7 +381,7 @@ class CliTests(unittest.TestCase):
             out, "3 more are under the close level (at most 5% of true positives). "
                  "0 others under it are above as audit.\n")
 
-    def test_no_open_incident_at_all_keeps_the_old_message(self):
+    def test_no_open_incidents_prints_plain_message(self):
         self._calibrate(0, 0)
         self._run("review", "t19", "tp")
         self.assertEqual(self._run("queue")[1], "No open incidents.\n")
@@ -406,7 +406,7 @@ class CliTests(unittest.TestCase):
         self.assertIsNone(report["close_level"])
         self.assertEqual((report["closed"], report["audit"]), (0, 0))
 
-    def test_reviewing_a_true_positive_graded_in_the_file_keeps_the_close_level(self):
+    def test_review_of_file_graded_true_positive_keeps_level(self):
         graded_id = sampled_ids(True, 1)[0]
         first, second, third = (f"2024-06-0{day}T00:00:00Z" for day in (7, 8, 9))
         rows = [plain_row(f"p{i}", "3", "TruePositive", first) for i in range(38)]
@@ -449,7 +449,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(json.loads(self._run("inspect", closed_id, "--json")[1])["pile"],
                          "closed")
 
-    def test_a_grades_file_without_the_new_columns_is_refused(self):
+    def test_grades_file_with_wrong_columns_is_refused(self):
         self._run("queue", str(self.csv))
         self.runs_dir.joinpath("grades.csv").write_text(
             "time,IncidentId,grade,note\nt,200,TruePositive,\n")
@@ -508,7 +508,7 @@ class CliTests(unittest.TestCase):
         saved = json.loads((self.runs_dir / "settings.json").read_text())
         self.assertEqual(saved, {"miss_rate": 0.02, "keep_linked": False})
 
-    def test_the_miss_rate_message_appears_only_when_the_rate_differs(self):
+    def test_miss_rate_message_only_on_change(self):
         message = "Miss rate changed from 5% to 1%. Earlier grades keep the pile they were given."
         self.assertEqual(self._run("config", "miss_rate", "0.01")[1],
                          f"miss_rate=0.01\n{message}\n")
@@ -518,7 +518,7 @@ class CliTests(unittest.TestCase):
                          "Earlier grades keep the pile they were given.")
         self.assertEqual(self._run("config", "miss_rate", "0.05")[1], "miss_rate=0.05\n")
 
-    def test_the_keep_linked_message_appears_only_when_the_setting_differs(self):
+    def test_keep_linked_message_only_on_change(self):
         kept = "Incidents linked to a true positive are now kept in the queue."
         freed = "Incidents linked to a true positive can now be closed."
         self.assertEqual(self._run("config", "keep_linked", "true")[1], "keep_linked=true\n")
@@ -560,7 +560,7 @@ class CliTests(unittest.TestCase):
                     self.assertIn(expected[setting], err)
         self.assertFalse((self.runs_dir / "settings.json").exists())
 
-    def test_the_settings_flags_are_gone_from_queue(self):
+    def test_queue_rejects_settings_flags(self):
         for flag in (["--miss-rate", "0.02"], ["--keep-linked"], ["--no-keep-linked"]):
             with self.subTest(flag):
                 self.assertEqual(self._run("queue", str(self.csv), *flag)[0], 2)
@@ -575,7 +575,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual((code, out), (1, ""))
                 self.assertIn("settings.json", err)
 
-    def test_a_linked_true_positive_keeps_an_incident_under_the_level_in_the_queue(self):
+    def test_linked_true_positive_keeps_incident_in_queue(self):
         linked_id = self._calibrate_linked()
         lines = self._run("queue")[1].splitlines()
         self.assertEqual(
