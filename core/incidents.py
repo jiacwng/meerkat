@@ -24,17 +24,19 @@ class IncidentError(ValueError):
 
 
 def read_incidents(path, mapping: "Mapping") -> pd.DataFrame:
+    return collapse(_read_rows(path, mapping))
+
+
+def collapse(rows: pd.DataFrame) -> pd.DataFrame:
     # an incident takes its time, rule, title and category from its earliest row
-    rows = _read_rows(path, mapping)
+    grades = rows["IncidentGrade"].replace("", pd.NA).groupby(rows["IncidentId"]).last()
     rows = rows.sort_values("Timestamp", kind="stable")
     by_incident = rows.groupby("IncidentId", sort=False)
 
     incidents = by_incident[["Timestamp", "DetectorId", *DESCRIPTIVE]].first()
-    grades = rows["IncidentGrade"].replace("", pd.NA)
-    incidents["IncidentGrade"] = grades.groupby(rows["IncidentId"]).last()
-    incidents["MitreTechniques"] = distinct(rows, "MitreTechniques", split=";")
-    for column in LINKS:
-        incidents[column] = distinct(rows, column)
+    incidents["IncidentGrade"] = grades
+    for column in ("MitreTechniques", *LINKS):
+        incidents[column] = _distinct(rows, column)
     return incidents.fillna("").reset_index()[list(COLUMNS)]
 
 
@@ -76,6 +78,7 @@ def _read_rows(path, mapping: "Mapping") -> pd.DataFrame:
     rows = rows.apply(lambda column: column.str.strip())
     for name in LINKS:
         rows[name] = rows[name].str.replace(SEPARATOR, "%7C", regex=False)
+    rows["MitreTechniques"] = rows["MitreTechniques"].str.replace(";", SEPARATOR, regex=False)
     for name in REQUIRED:
         blank = int((rows[name] == "").sum())
         if blank:
@@ -109,11 +112,10 @@ def _header_separator(path, mapping: "Mapping") -> str | None:
     return None
 
 
-def distinct(rows: pd.DataFrame, column: str, split: str | None = None) -> pd.Series:
+def _distinct(rows: pd.DataFrame, column: str) -> pd.Series:
     values = rows[["IncidentId", column]]
-    if split:
-        values = values.assign(**{column: values[column].str.split(split)})
-        values = values.explode(column)
-        values[column] = values[column].str.strip()
+    values = values.assign(**{column: values[column].str.split(SEPARATOR)})
+    values = values.explode(column)
+    values[column] = values[column].str.strip()
     values = values[values[column] != ""].drop_duplicates().sort_values(column)
     return values.groupby("IncidentId")[column].agg(SEPARATOR.join)

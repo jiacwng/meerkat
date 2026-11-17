@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.incidents import COLUMNS, DESCRIPTIVE, LINKS, SEPARATOR, distinct
+from core.incidents import collapse
 
 GRADES_FILE = "grades.csv"
 SETTINGS_FILE = "settings.json"
@@ -79,7 +79,10 @@ def load_history(runs_dir: Path, incoming: pd.DataFrame | None = None) -> pd.Dat
     if incoming is not None:
         frames.append(incoming)
     history = pd.concat(frames, ignore_index=True)
-    return _apply_grades(runs_dir, _merge_repeats(history))
+    repeated = history["IncidentId"].duplicated(keep=False)
+    if repeated.any():
+        history = pd.concat([history[~repeated], collapse(history[repeated])], ignore_index=True)
+    return _apply_grades(runs_dir, history)
 
 
 def read_settings(runs_dir: Path) -> dict:
@@ -132,24 +135,6 @@ def read_reviews(runs_dir: Path) -> pd.DataFrame:
 
 def _read_run(runs_dir: Path, run_id: str) -> pd.DataFrame:
     return pd.read_csv(runs_dir / run_id / "incidents.csv", dtype=str, keep_default_na=False)
-
-
-def _merge_repeats(history: pd.DataFrame) -> pd.DataFrame:
-    repeated = history["IncidentId"].duplicated(keep=False)
-    if not repeated.any():
-        return history.reset_index(drop=True)
-    rows = history[repeated]
-    grades = rows["IncidentGrade"].replace("", pd.NA).groupby(rows["IncidentId"]).last()
-
-    times = pd.to_datetime(rows["Timestamp"], utc=True, format="ISO8601")
-    earliest_first = rows.loc[times.sort_values(kind="stable").index]
-    merged = earliest_first.groupby("IncidentId", sort=False)[
-        ["Timestamp", "DetectorId", *DESCRIPTIVE]].first()
-    merged["IncidentGrade"] = grades
-    for column in ("MitreTechniques", *LINKS):
-        merged[column] = distinct(rows, column, split=SEPARATOR)
-    merged = merged.fillna("").reset_index()[list(COLUMNS)]
-    return pd.concat([history[~repeated], merged], ignore_index=True)
 
 
 def _apply_grades(runs_dir: Path, incidents: pd.DataFrame) -> pd.DataFrame:
