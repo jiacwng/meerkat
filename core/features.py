@@ -1,4 +1,4 @@
-# The ten inputs of the score, each taken from incidents strictly earlier in the file.
+# The ten inputs of the score, each taken from incidents strictly earlier in time.
 
 import numpy as np
 import pandas as pd
