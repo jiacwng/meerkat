@@ -14,7 +14,7 @@ license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Wang Jiacheng", email = "jiacheng.wang@eurecom.fr" }]
 dependencies = [
     "numpy>=2.0",
-    "pandas>=2.2.2",
+    "pandas>=3.0",
 ]
 
 [project.scripts]
