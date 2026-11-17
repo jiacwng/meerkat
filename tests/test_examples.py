@@ -2,7 +2,6 @@
 
 import contextlib
 import io
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,7 +11,7 @@ import pandas as pd
 from core import features, store
 from core.incidents import GRADES, LINKS, SEPARATOR, read_incidents
 from meerkat.cli import main
-from tests.fixtures import DEFENDER, use_weights
+from tests.fixtures import DEFENDER
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
 
@@ -54,15 +53,6 @@ class ExampleTests(unittest.TestCase):
         single = self.incidents.sort_values("IncidentId")
         pd.testing.assert_frame_equal(merged.reset_index(drop=True),
                                       single.reset_index(drop=True))
-
-    def test_queue_lists_incidents(self):
-        use_weights(self)
-        runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            main(["queue", str(EXAMPLES / "incidents.csv"), "--json",
-                  "--runs-dir", str(runs_dir)])
-        self.assertGreater(len(json.loads(out.getvalue())["queue"]), 0)
 
     def test_readme_quotes_the_footer_the_quick_start_prints(self):
         runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))

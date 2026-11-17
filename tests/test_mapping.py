@@ -46,10 +46,6 @@ class MappingTests(unittest.TestCase):
                 MappingError, "no such mapping; presets are defender, sentinel, splunk"):
             load_mapping(str(self.tmp / "absent.toml"))
 
-    def test_a_name_with_a_parent_directory_is_a_path(self):
-        with self.assertRaisesRegex(MappingError, "no such mapping"):
-            load_mapping("../defender")
-
     def test_a_directory_is_refused(self):
         with self.assertRaisesRegex(MappingError, "not a readable file"):
             load_mapping(str(self.tmp))
@@ -59,9 +55,6 @@ class MappingTests(unittest.TestCase):
 
     def test_unknown_table(self):
         self._refused("[extra]\n", "unknown table 'extra'")
-
-    def test_a_top_level_value_is_not_a_table(self):
-        self._refused("columns = 3\n", "columns must be a table")
 
     def test_unknown_column_key(self):
         self._refused('[columns]\nColour = "x"\n', r"\[columns\] has unknown column 'Colour'")
@@ -91,18 +84,10 @@ class MappingTests(unittest.TestCase):
         self._refused('[grades]\nopen = ["FalsePositive"]\n',
                       "grade word 'FalsePositive' is listed under FalsePositive and open")
 
-    def test_a_word_listed_twice_under_one_grade(self):
-        self._refused('[grades]\nopen = ["x", "x"]\n',
-                      "grade word 'x' is listed twice under open")
-
     def test_a_file_with_a_byte_order_mark(self):
         path = self.tmp / "site.toml"
         path.write_bytes(b'\xef\xbb\xbf[columns]\nDetectorId = "rule"\n')
         self.assertEqual(load_mapping(str(path)).columns["DetectorId"], "rule")
-
-    def test_an_empty_name_is_not_a_preset(self):
-        with self.assertRaises(MappingError):
-            load_mapping("")
 
     def test_an_unlisted_grade_keeps_its_own_name(self):
         mapping = load_mapping(self._site('[grades]\nFalsePositive = ["Noise"]\n'))

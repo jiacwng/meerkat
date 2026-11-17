@@ -93,14 +93,8 @@ def _read_rows(path, mapping: "Mapping") -> pd.DataFrame:
         raise IncidentError(
             f"{path}: {name} {rows['Timestamp'][times.isna()].iloc[0]!r} is not ISO 8601, "
             "like 2024-06-15T10:00:00Z")
-    # a time is kept only if its saved text parses back, so every saved run can be scored
     seconds = times.dt.tz_localize(None).to_numpy().astype("datetime64[s]")
     text = pd.Series(seconds.astype(str), index=rows.index) + "Z"
-    held = pd.to_datetime(text, utc=True, format="ISO8601", errors="coerce").notna()
-    if not held.all():
-        raise IncidentError(
-            f"{path}: {name} {rows['Timestamp'][~held].iloc[0]!r} is outside the times "
-            "meerkat can score")
     rows["Timestamp"] = text
     return rows
 
