@@ -212,9 +212,9 @@ def _queue(args: argparse.Namespace) -> None:
                 for position, row in enumerate(shown.to_dict("records"), start=1)]
             _print_table(("#", "incident", "score", "pile", "rule", "rule history", "reason",
                           "time", "title"), rows)
-            kind = "closed" if args.closed else "open"
+            kind = "set aside" if args.closed else "in the queue"
             where = "" if run_ids is None else f", run {run}"
-            print(f"{len(shown)} of {len(listed)} {kind} incidents{where}")
+            print(f"{len(shown)} of {len(listed)} incidents {kind}{where}")
         if level is None and len(entries) >= close.needed(miss_rate):
             lowest = entries[entries["score"] == entries["score"].min()]
             if (lowest["weight"] > 1).any():
@@ -226,14 +226,13 @@ def _queue(args: argparse.Namespace) -> None:
                   "graded true positives.")
         else:
             if args.closed:
-                print(f"{len(audit)} others under the close level are in the queue as audit.")
+                print(f"In the queue as audit: {len(audit)}")
             else:
-                print(f"{len(closed)} more are under the close level "
-                      f"(at most {_percent(miss_rate)} of true positives). "
-                      f"{len(audit)} others under it are above as audit.")
+                print(f"Set aside under the close level: {len(closed)} "
+                      f"(at most {_percent(miss_rate)} of true positives)")
+                print(f"Shown above as audit: {len(audit)}")
             if kept_linked:
-                print(f"{kept_linked} others under it stay in the queue because a linked "
-                      "incident was a true positive.")
+                print(f"Kept in the queue for a link to a true positive: {kept_linked}")
 
 
 def _config(args: argparse.Namespace) -> None:

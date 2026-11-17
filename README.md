@@ -27,9 +27,10 @@ incidents over 28 days, of which the 42 from the last three days are open.
 ...
 18  145885    0.76         3     13 of 37 true positive    linked incidents raise it  2024-06-15T23:31:40Z  4
 19  54866     0.73         1     4 of 4 true positive      rule history raises it     2024-06-16T19:48:26Z  1
-20 of 32 open incidents
-10 more are under the close level (at most 5% of true positives). 4 others under it are above as audit.
-5 others under it stay in the queue because a linked incident was a true positive.
+20 of 32 incidents in the queue
+Set aside under the close level: 10 (at most 5% of true positives)
+Shown above as audit: 4
+Kept in the queue for a link to a true positive: 5
 ```
 
 GUIDE replaces rule names and titles with numbers, so the last column is a
@@ -83,7 +84,7 @@ true positives fall. Open incidents under it leave the queue. One in ten of
 them is kept in the queue as `audit`, and a true positive found there counts
 for ten when the level is computed again.
 
-An incident linked to a graded true positive is never set aside.
+An incident linked to an earlier graded true positive is never set aside.
 
 ## Settings
 
@@ -147,8 +148,8 @@ on the 282,843 later incidents.
 
 ## Limits
 
-- The numbers above are upper bounds. They assume that every earlier incident
-  is already graded when a new one arrives.
+- The numbers above assume that every earlier incident is already graded when
+  a new one arrives. They were not measured with grades that arrive late.
 - GUIDE is one vendor's data from 2024, about 17 active days per organisation.
   Meerkat has not been measured in a live SOC.
 - The `sentinel` and `splunk` presets were written from vendor documentation.

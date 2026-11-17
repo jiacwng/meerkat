@@ -58,7 +58,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual([line.split()[1] for line in lines[1:4]], ["201", "202", "200"])
         self.assertIn("2 of 2 true positive", lines[1])
         self.assertIn("never graded", lines[2])
-        self.assertIn("3 of 3 open incidents", lines[4])
+        self.assertIn("3 of 3 incidents in the queue", lines[4])
         self.assertEqual(lines[5], "Nothing closed yet: 2 of 19 graded true positives.")
         self.assertNotIn("100", [line.split()[1] for line in lines[1:4]])
 
@@ -92,7 +92,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self._queue_ids("--limit", "1"), ["201"])
         self.assertEqual(self._queue_ids("--all"), ["201", "202", "200"])
         code, out, _ = self._run("queue", "--limit", "1")
-        self.assertIn("1 of 3 open incidents", out)
+        self.assertIn("1 of 3 incidents in the queue", out)
 
     def _three_runs(self) -> list[str]:
         days = ("2024-06-01", "2024-06-02", "2024-06-03")
@@ -105,14 +105,14 @@ class CliTests(unittest.TestCase):
         first, _, _ = self._three_runs()
         self.assertEqual(self._queue_ids(), ["c1", "b1", "b2", "a1", "a2"])
         out = self._run("queue")[1]
-        self.assertIn("\n5 of 5 open incidents\n", out)
+        self.assertIn("\n5 of 5 incidents in the queue\n", out)
         report = json.loads(self._run("queue", "--json")[1])
         self.assertEqual((report["run"], report["open"], report["closed"], report["audit"]),
                          (None, 5, 0, 0))
         self.assertEqual(self._queue_ids("--limit", "2"), ["c1", "b1"])
-        self.assertIn("2 of 5 open incidents", self._run("queue", "--limit", "2")[1])
+        self.assertIn("2 of 5 incidents in the queue", self._run("queue", "--limit", "2")[1])
         self.assertEqual(self._queue_ids("--run", first), ["a1", "a2"])
-        self.assertIn(f"\n2 of 2 open incidents, run {first}\n",
+        self.assertIn(f"\n2 of 2 incidents in the queue, run {first}\n",
                       self._run("queue", "--run", first)[1])
         report = json.loads(self._run("queue", "--run", first, "--json")[1])
         self.assertEqual((report["run"], report["open"]), (first, 2))
@@ -330,10 +330,10 @@ class CliTests(unittest.TestCase):
         code, out, _ = self._run("queue")
         lines = out.splitlines()
         self.assertEqual(
-            lines[-1], "2 more are under the close level (at most 5% of true positives). "
-                       "3 others under it are above as audit.")
-        self.assertIn("4 of 4 open incidents", lines[-2])
-        shown = {line.split()[1]: line.split() for line in lines[1:-2]}
+            lines[-2], "Set aside under the close level: 2 (at most 5% of true positives)")
+        self.assertEqual(lines[-1], "Shown above as audit: 3")
+        self.assertIn("4 of 4 incidents in the queue", lines[-3])
+        shown = {line.split()[1]: line.split() for line in lines[1:-3]}
         self.assertEqual(set(shown), {"t19", *audit_ids})
         self.assertNotIn("audit", shown["t19"])
         for incident in audit_ids:
@@ -362,7 +362,7 @@ class CliTests(unittest.TestCase):
         lines = out.splitlines()
         self.assertEqual(lines[0].split()[:4], ["#", "incident", "score", "pile"])
         self.assertEqual(len(lines), 5)
-        self.assertIn("2 of 3 closed incidents", lines[3])
+        self.assertIn("2 of 3 incidents set aside", lines[3])
         self.assertEqual(len(self._queue_json("--closed", "--all")["queue"]), 3)
         self.assertEqual(len(self._queue_json("--closed", "--limit", "1")["queue"]), 1)
 
@@ -372,8 +372,8 @@ class CliTests(unittest.TestCase):
         code, out, _ = self._run("queue")
         self.assertEqual(code, 0)
         self.assertEqual(
-            out, "3 more are under the close level (at most 5% of true positives). "
-                 "0 others under it are above as audit.\n")
+            out, "Set aside under the close level: 3 (at most 5% of true positives)\n"
+                 "Shown above as audit: 0\n")
 
     def test_no_open_incidents_prints_plain_message(self):
         self._calibrate(0, 0)
@@ -552,10 +552,9 @@ class CliTests(unittest.TestCase):
         linked_id = self._calibrate_linked()
         lines = self._run("queue")[1].splitlines()
         self.assertEqual(
-            lines[-2], "1 more are under the close level (at most 5% of true positives). "
-                       "0 others under it are above as audit.")
-        self.assertEqual(lines[-1], "1 others under it stay in the queue because a linked "
-                                    "incident was a true positive.")
+            lines[-3], "Set aside under the close level: 1 (at most 5% of true positives)")
+        self.assertEqual(lines[-2], "Shown above as audit: 0")
+        self.assertEqual(lines[-1], "Kept in the queue for a link to a true positive: 1")
         report = self._queue_json()
         self.assertEqual((report["keep_linked"], report["kept_linked"]), (True, 1))
         self.assertIn(linked_id, [row["IncidentId"] for row in report["queue"]])
@@ -564,8 +563,8 @@ class CliTests(unittest.TestCase):
         linked_id = self._calibrate_linked()
         self._run("config", "keep_linked", "false")
         out = self._run("queue")[1]
-        self.assertNotIn("stay in the queue", out)
-        self.assertIn("2 more are under the close level", out)
+        self.assertNotIn("Kept in the queue", out)
+        self.assertIn("Set aside under the close level: 2", out)
         report = self._queue_json()
         self.assertEqual((report["keep_linked"], report["kept_linked"]), (False, 0))
         self.assertNotIn(linked_id, [row["IncidentId"] for row in report["queue"]])
@@ -594,7 +593,7 @@ class CliTests(unittest.TestCase):
         path = write_csv(self.tmp / "notables.csv", rows, header)
         code, out, err = self._run("queue", str(path), "--mapping", "splunk")
         self.assertEqual((code, err), (0, ""))
-        self.assertIn("1 of 1 open incidents", out)
+        self.assertIn("1 of 1 incidents in the queue", out)
         meta = json.loads(next(self.runs_dir.glob("*/meta.json")).read_text())
         self.assertEqual(meta["mapping"], "splunk")
 
@@ -630,21 +629,20 @@ class CliTests(unittest.TestCase):
     def test_closed_footer_names_the_list_and_the_audit_rows(self):
         self._calibrate(3, 2)
         lines = self._run("queue", "--closed")[1].splitlines()
-        self.assertEqual(lines[-2].split(", run ")[0], "2 of 2 closed incidents")
-        self.assertEqual(lines[-1],
-                         "3 others under the close level are in the queue as audit.")
+        self.assertEqual(lines[-2].split(", run ")[0], "2 of 2 incidents set aside")
+        self.assertEqual(lines[-1], "In the queue as audit: 3")
         plain = self._run("queue")[1].splitlines()
-        self.assertEqual(plain[-1], "2 more are under the close level (at most 5% of true "
-                                    "positives). 3 others under it are above as audit.")
-        self.assertIn("4 of 4 open incidents", plain[-2])
+        self.assertEqual(plain[-2], "Set aside under the close level: 2 "
+                                    "(at most 5% of true positives)")
+        self.assertEqual(plain[-1], "Shown above as audit: 3")
+        self.assertIn("4 of 4 incidents in the queue", plain[-3])
 
     def test_closed_footer_keeps_the_linked_line(self):
         self._calibrate_linked()
         lines = self._run("queue", "--closed")[1].splitlines()
-        self.assertEqual(lines[-3].split(", run ")[0], "1 of 1 closed incidents")
-        self.assertEqual(lines[-2], "0 others under the close level are in the queue as audit.")
-        self.assertEqual(lines[-1], "1 others under it stay in the queue because a linked "
-                                    "incident was a true positive.")
+        self.assertEqual(lines[-3].split(", run ")[0], "1 of 1 incidents set aside")
+        self.assertEqual(lines[-2], "In the queue as audit: 0")
+        self.assertEqual(lines[-1], "Kept in the queue for a link to a true positive: 1")
 
     def _table(self, columns: int | None, rows: list[tuple[str, ...]]) -> list[str]:
         class Terminal(io.StringIO):
