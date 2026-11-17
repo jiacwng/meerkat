@@ -330,7 +330,7 @@ class CliTests(unittest.TestCase):
         code, out, _ = self._run("queue")
         lines = out.splitlines()
         self.assertEqual(
-            lines[-2], "Set aside under the close level: 2 (at most 5% of true positives)")
+            lines[-2], "Set aside under the close level: 2 (target: at most 5% of true positives)")
         self.assertEqual(lines[-1], "Shown above as audit: 3")
         self.assertIn("4 of 4 incidents in the queue", lines[-3])
         shown = {line.split()[1]: line.split() for line in lines[1:-3]}
@@ -372,7 +372,7 @@ class CliTests(unittest.TestCase):
         code, out, _ = self._run("queue")
         self.assertEqual(code, 0)
         self.assertEqual(
-            out, "Set aside under the close level: 3 (at most 5% of true positives)\n"
+            out, "Set aside under the close level: 3 (target: at most 5% of true positives)\n"
                  "Shown above as audit: 0\n")
 
     def test_no_open_incidents_prints_plain_message(self):
@@ -455,11 +455,11 @@ class CliTests(unittest.TestCase):
     def test_a_quarter_percent_rate_is_shown_as_it_is(self):
         self._calibrate(3, 2)
         self._run("config", "miss_rate", "0.025")
-        self.assertIn("(at most 2.5% of true positives)", self._run("queue")[1])
+        self.assertIn("(target: at most 2.5% of true positives)", self._run("queue")[1])
         self._run("config", "miss_rate", "0.005")
         self.assertIn("of 199 graded", self._run("queue")[1])
         self._run("config", "miss_rate", "0.1")
-        self.assertIn("(at most 10% of true positives)", self._run("queue")[1])
+        self.assertIn("(target: at most 10% of true positives)", self._run("queue")[1])
 
     def test_review_records_the_pile_under_the_saved_miss_rate(self):
         self._calibrate(3, 2)
@@ -552,7 +552,7 @@ class CliTests(unittest.TestCase):
         linked_id = self._calibrate_linked()
         lines = self._run("queue")[1].splitlines()
         self.assertEqual(
-            lines[-3], "Set aside under the close level: 1 (at most 5% of true positives)")
+            lines[-3], "Set aside under the close level: 1 (target: at most 5% of true positives)")
         self.assertEqual(lines[-2], "Shown above as audit: 0")
         self.assertEqual(lines[-1], "Kept in the queue for a link to a true positive: 1")
         report = self._queue_json()
@@ -633,7 +633,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(lines[-1], "In the queue as audit: 3")
         plain = self._run("queue")[1].splitlines()
         self.assertEqual(plain[-2], "Set aside under the close level: 2 "
-                                    "(at most 5% of true positives)")
+                                    "(target: at most 5% of true positives)")
         self.assertEqual(plain[-1], "Shown above as audit: 3")
         self.assertIn("4 of 4 incidents in the queue", plain[-3])
 

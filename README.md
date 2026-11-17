@@ -28,7 +28,7 @@ incidents over 28 days, of which the 42 from the last three days are open.
 18  145885    0.76         3     13 of 37 true positive    linked incidents raise it  2024-06-15T23:31:40Z  4
 19  54866     0.73         1     4 of 4 true positive      rule history raises it     2024-06-16T19:48:26Z  1
 20 of 32 incidents in the queue
-Set aside under the close level: 10 (at most 5% of true positives)
+Set aside under the close level: 10 (target: at most 5% of true positives)
 Shown above as audit: 4
 Kept in the queue for a link to a true positive: 5
 ```
@@ -69,7 +69,8 @@ incidents earlier in time only:
   many were graded;
 - the same two numbers for the whole organisation;
 - how many earlier incidents share a device, account, address, file hash or
-  URL with this one, counted by grade.
+  URL with this one, counted by grade. For each shared value, the 50 most
+  recent earlier incidents are counted.
 
 The weights ship with the package. They were fitted on 424,265 graded
 incidents from 4,497 organisations in GUIDE. The `reason` column says which
@@ -80,9 +81,10 @@ links removed and with the rule treated as new.
 
 Once enough true positives are graded, 19 at the default setting, Meerkat
 computes a close level: the highest score under which at most 5% of the graded
-true positives fall. Open incidents under it leave the queue. One in ten of
-them is kept in the queue as `audit`, and a true positive found there counts
-for ten when the level is computed again.
+true positives fall. Open incidents under it leave the queue. About one in ten
+of them, chosen by a hash of the incident id, is kept in the queue as `audit`,
+and a true positive found there counts for ten when the level is computed
+again.
 
 An incident linked to an earlier graded true positive is never set aside.
 
@@ -145,6 +147,7 @@ on the 282,843 later incidents.
   positives were among them.
 
 `bench/train.py` fits the weights and prints the ranking numbers.
+`bench/close.py` prints the close level numbers.
 
 ## Limits
 

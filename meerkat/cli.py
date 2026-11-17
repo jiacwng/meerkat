@@ -229,7 +229,7 @@ def _queue(args: argparse.Namespace) -> None:
                 print(f"In the queue as audit: {len(audit)}")
             else:
                 print(f"Set aside under the close level: {len(closed)} "
-                      f"(at most {_percent(miss_rate)} of true positives)")
+                      f"(target: at most {_percent(miss_rate)} of true positives)")
                 print(f"Shown above as audit: {len(audit)}")
             if kept_linked:
                 print(f"Kept in the queue for a link to a true positive: {kept_linked}")
