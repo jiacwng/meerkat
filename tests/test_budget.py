@@ -77,6 +77,14 @@ class BudgetTests(unittest.TestCase):
                          {"c": "ranked", "b": "below", "a": "sample", "seen": "sample",
                           "old": ""})
 
+    def test_not_sampled_counts_open_incidents_below_the_budget_in_no_pool(self):
+        placed = pd.DataFrame({
+            "IncidentId": ["a", "b", "c", "d", "e"],
+            "IncidentGrade": ["", "", "", "", "FalsePositive"],
+            "status": ["ranked", "below", "below", "sample", "below"]})
+        self.assertEqual(budget.not_sampled(placed, []), 2)
+        self.assertEqual(budget.not_sampled(placed, [{"pool": ["b", "d"], "drawn": ["d"]}]), 1)
+
     def test_no_graded_sample_gives_no_estimate(self):
         found = budget.estimate([{"pool": IDS, "drawn": ["i0", "i1"]}], _grades())
         self.assertEqual(found, {"drawn": 2, "graded": 0, "true_positive": 0,

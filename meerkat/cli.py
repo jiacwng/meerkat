@@ -191,6 +191,7 @@ def _queue(args: argparse.Namespace) -> None:
     shown = listed if args.limit is None else listed.head(args.limit)
     grades = dict(zip(placed["IncidentId"], placed["IncidentGrade"], strict=True))
     sampled = budget.estimate(samples, grades)
+    sampled["not_sampled"] = budget.not_sampled(placed, samples)
 
     if args.json:
         rows = [_as_record(row, position)
@@ -198,7 +199,8 @@ def _queue(args: argparse.Namespace) -> None:
         _print_json({
             "run": run, "open": len(open_incidents), "budget": limit, "sample_share": share,
             "to_read": len(reading), "below_budget": len(below),
-            "sample": {key: sampled[key] for key in ("drawn", "graded", "true_positive")},
+            "sample": {key: sampled[key]
+                       for key in ("drawn", "graded", "true_positive", "not_sampled")},
             "unread_true_positives": sampled["unread_true_positives"],
             "queue": rows})
         return
@@ -225,7 +227,7 @@ def _queue(args: argparse.Namespace) -> None:
     if "linked" in marks or "new rule" in marks:
         print(f"Below the budget: {marks.count('linked')} linked to a true positive, "
               f"{marks.count('new rule')} with a rule never graded")
-    if run_ids is None and sampled["drawn"]:
+    if run_ids is None and limit is not None:
         print(_sample_line(sampled))
 
 
@@ -239,10 +241,11 @@ def _mark(row: dict) -> str:
 
 def _sample_line(sampled: dict) -> str:
     unread = sampled["unread_true_positives"]
+    outside = f"{sampled['not_sampled']} not sampled"
     if unread is None:
-        return f"Sample: {sampled['drawn']} drawn, 0 graded"
-    return (f"Sample: {sampled['graded']} graded, {sampled['true_positive']} true positive. "
-            f"Unread true positives: {unread['low']} to {unread['high']} (95%)")
+        return f"Sample: {sampled['drawn']} drawn, 0 graded, {outside}"
+    return (f"Sample: {sampled['graded']} graded, {sampled['true_positive']} true positive, "
+            f"{outside}. Unread true positives: {unread['low']} to {unread['high']} (95%)")
 
 
 def _config(args: argparse.Namespace) -> None:

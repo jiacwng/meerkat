@@ -341,7 +341,8 @@ class CliTests(unittest.TestCase):
                            "sample", "unread_true_positives")},
                          {"open": 11, "budget": None, "sample_share": 0.1, "to_read": 11,
                           "below_budget": 0, "unread_true_positives": None,
-                          "sample": {"drawn": 0, "graded": 0, "true_positive": 0}})
+                          "sample": {"drawn": 0, "graded": 0, "true_positive": 0,
+                                     "not_sampled": 0}})
         self.assertEqual({row["status"] for row in report["queue"]}, {"ranked"})
         self.assertFalse(list(self.runs_dir.glob("*/sample.json")))
 
@@ -352,7 +353,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual([line.split()[1] for line in lines[1:5]], ["h2", "h1", "h0", sampled])
         self.assertEqual(lines[4].split()[3], "sample")
         self.assertEqual(lines[5:], ["Total: 11 (to read: 4, below the budget: 7)  budget: 4",
-                                     "Sample: 1 drawn, 0 graded"])
+                                     "Sample: 1 drawn, 0 graded, 0 not sampled"])
         report = self._queue_json()
         self.assertEqual((report["to_read"], report["below_budget"], report["sample"]["drawn"]),
                          (4, 7, 1))
@@ -409,14 +410,27 @@ class CliTests(unittest.TestCase):
         self.assertEqual([row["IncidentId"] for row in report["queue"]
                           if row["status"] == "sample"], [sampled])
 
+    def test_incidents_that_met_no_draw_are_counted_until_the_next_draw(self):
+        sampled = self._budget()
+        later = [plain_row(f"n{i}", "9", time=f"2024-06-11T00:0{i}:00Z") for i in range(3)]
+        self._run("queue", str(write_csv(self.tmp / "later.csv", later)))
+        self.assertEqual(self._queue_json()["sample"]["not_sampled"], 3)
+        self.assertEqual(self._run("queue")[1].splitlines()[-1],
+                         "Sample: 1 drawn, 0 graded, 3 not sampled")
+        self._run("review", sampled, "fp")
+        self._run("queue", str(self.tmp / "later.csv"))
+        self.assertEqual(self._queue_json()["sample"]["not_sampled"], 0)
+
     def test_a_graded_sample_gives_the_estimate(self):
         sampled = self._budget()
         self._run("review", sampled, "fp")
         self.assertEqual(self._run("queue")[1].splitlines()[-2:], [
             "Total: 10 (to read: 4, below the budget: 6)  budget: 4",
-            "Sample: 1 graded, 0 true positive. Unread true positives: 0 to 7 (95%)"])
+            "Sample: 1 graded, 0 true positive, 0 not sampled. "
+            "Unread true positives: 0 to 7 (95%)"])
         report = self._queue_json()
-        self.assertEqual(report["sample"], {"drawn": 1, "graded": 1, "true_positive": 0})
+        self.assertEqual(report["sample"], {"drawn": 1, "graded": 1, "true_positive": 0,
+                                            "not_sampled": 0})
         self.assertEqual(report["unread_true_positives"], {"estimate": 0, "low": 0, "high": 7})
 
     def test_a_true_positive_in_the_sample_raises_the_estimate(self):
@@ -429,8 +443,9 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self._budget("25"), "")
         report = self._queue_json()
         self.assertEqual((report["to_read"], report["below_budget"]), (11, 0))
-        self.assertEqual(self._run("queue")[1].splitlines()[-1],
-                         "Total: 11 (to read: 11, below the budget: 0)  budget: 25")
+        self.assertEqual(self._run("queue")[1].splitlines()[-2:],
+                         ["Total: 11 (to read: 11, below the budget: 0)  budget: 25",
+                          "Sample: 0 drawn, 0 graded, 0 not sampled"])
 
     def _marked_rows(self) -> list:
         rows = [list(row) for row in budget_rows()]
@@ -449,10 +464,11 @@ class CliTests(unittest.TestCase):
         self.assertEqual(marks["fresh"], ["new", "rule"])
         self.assertEqual(marks["linked"][0], "linked")
         self.assertEqual(marks["l0"][0], "9")
-        self.assertEqual(lines[-2:], [
+        self.assertEqual(lines[-3:], [
             "Total: 13 (to read: 3, below the budget: 10)  budget: 3",
-            "Below the budget: 1 linked to a true positive, 1 with a rule never graded"])
-        self.assertEqual(self._run("queue")[1].splitlines()[-1], lines[-1])
+            "Below the budget: 1 linked to a true positive, 1 with a rule never graded",
+            "Sample: 0 drawn, 0 graded, 10 not sampled"])
+        self.assertEqual(self._run("queue")[1].splitlines()[-2:], lines[-2:])
         self.assertNotIn("linked", self._run("queue", "--limit", "3")[1].splitlines()[1])
 
     def test_review_records_the_status_and_a_regrade_keeps_it(self):

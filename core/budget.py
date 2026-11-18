@@ -61,6 +61,13 @@ def place(scored: pd.DataFrame, reviews: pd.DataFrame, budget: int | None,
     return scored.assign(status=scored["IncidentId"].map(status).fillna(recorded))
 
 
+def not_sampled(placed: pd.DataFrame, samples: list[dict]) -> int:
+    pooled = {incident for sample in samples for incident in sample["pool"]}
+    below = placed.loc[(placed["IncidentGrade"] == "") & (placed["status"] == "below"),
+                       "IncidentId"]
+    return int((~below.isin(pooled)).sum())
+
+
 def estimate(samples: list[dict], grades: dict[str, str]) -> dict:
     total = known = unread = drawn = graded = positives = 0
     weights = squares = hits = 0.0
