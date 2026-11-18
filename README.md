@@ -1,156 +1,181 @@
-<p align="center">
-  <img
-    src="docs/assets/meerkat-analyst.png"
-    alt="Pixel-art meerkat security analyst reviewing an alert"
-    width="334"
-  >
-</p>
+# meerkat
 
-<h1 align="center">meerkat</h1>
+Meerkat is a command-line tool that ranks a SOC's open incidents. It reads an
+incident export, scores every open incident from the grades analysts gave to
+earlier ones, and prints a review queue. Incidents that score low enough are
+set aside, and a sample of them is still shown so that the tool can be checked.
 
-<p align="center">
-  <strong>End-of-day alert triage for Wazuh.</strong>
-</p>
-
-<p align="center">
-  <a href="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml">
-    <img src="https://github.com/jiacwng/meerkat/actions/workflows/ci.yml/badge.svg" alt="CI status">
-  </a>
-  <img src="https://img.shields.io/badge/python-3.12%20%7C%203.13-blue" alt="Python 3.12 and 3.13">
-  <img src="https://img.shields.io/badge/license-MIT-informational" alt="MIT license">
-</p>
-
-<p align="center">
-  <a href="#quick-start">Quick start</a>
-  &nbsp;&middot;&nbsp;
-  <a href="docs/manual.md">Manual</a>
-  &nbsp;&middot;&nbsp;
-  <a href="#results">Results</a>
-</p>
-
-Meerkat is a command-line tool that turns one day of Wazuh alerts into a short
-review queue for the next morning. It groups alerts that belong together,
-scores each group, and lists the top ten for an analyst to work through in the
-terminal. It reads Wazuh, including the Suricata alerts in the Wazuh feed, and
-optionally AMiner log anomalies.
+![The queue, one incident, and the grades loaded from a file](docs/demo.gif)
 
 ## Quick start
 
-Python 3.12 or newer, and Git LFS for the bundled example alerts.
+Python 3.12 or newer.
 
 ```bash
 git clone https://github.com/jiacwng/meerkat.git
 cd meerkat
-git lfs install && git lfs pull
 python3 -m venv .venv && source .venv/bin/activate
 python -m pip install -e .
-meerkat demo
+meerkat queue examples/incidents.csv
 ```
 
-`meerkat demo` scores one company from the AIT Alert Data Set that the model
-never trained on. Its queue for 2022-01-21:
+`examples/incidents.csv` is one organisation of Microsoft's GUIDE dataset: 933
+incidents over 28 days, of which the 42 from the last three days are open.
 
 ```text
-run russellmitchell-20261021-124402-413  |  company russellmitchell  |  budget 10  |  326 families
-Review queue (top 10 per day, 2022-01-21)  |  F1 = top priority
-┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━┓
-┃ handle ┃ date       ┃ start ┃ host            ┃ crit     ┃ detector ┃ finding                                  ┃ why                         ┃ alerts ┃ chain ┃ score ┃    esc% ┃ review ┃
-┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━━━╇━━━━━━━━┩
-│ F1     │ 2022-01-21 │ 00:18 │ internal-share  │ high     │ AMiner   │ AMiner: New service_start parameter comb │ asset role internal         │      1 │     1 │  1.00 │         │        │
-│ F2     │ 2022-01-21 │ 00:18 │ internal-share  │ high     │ AMiner   │ AMiner: New service_stop parameter combi │ asset role internal         │      1 │     1 │  1.00 │         │        │
-│ F3     │ 2022-01-21 │ 00:14 │ internal-share  │ high     │ AMiner   │ AMiner: New event type.                  │ asset role internal         │      1 │     1 │  0.87 │         │        │
-│ F4     │ 2022-01-21 │ 00:00 │ inet-firewall   │ critical │ AMiner   │ AMiner: New ip address in DNS logs.      │ asset role firewall         │     16 │     2 │  0.30 │         │        │
-│ F5     │ 2022-01-21 │ 06:33 │ inet-firewall   │ critical │ AMiner   │ AMiner: Unusual occurrence frequencies o │ asset role firewall         │      6 │     2 │  0.20 │         │        │
-│ F6     │ 2022-01-21 │ 06:33 │ intranet-server │ high     │ Suricata │ ET POLICY GNU/Linux APT User-Agent Outbo │ detectors within 10 minutes │      7 │     2 │  0.18 │         │        │
-│ F7     │ 2022-01-21 │ 00:01 │ intranet-server │ high     │ AMiner   │ AMiner: CPU value out of expected range  │ detectors within 10 minutes │     15 │     2 │  0.18 │         │        │
-│ F8     │ 2022-01-21 │ 06:37 │ webserver       │ high     │ Suricata │ SURICATA TLS invalid record/traffic      │ detectors within 10 minutes │    105 │     1 │  0.16 │         │        │
-│ F9     │ 2022-01-21 │ 06:37 │ webserver       │ high     │ Suricata │ SURICATA TLS invalid handshake message   │ detectors within 10 minutes │    105 │     1 │  0.15 │         │        │
-│ F10    │ 2022-01-21 │ 06:37 │ mail            │ high     │ Suricata │ SURICATA TLS invalid record/traffic      │ detectors within 10 minutes │    105 │     1 │  0.14 │         │        │
-└────────┴────────────┴───────┴─────────────────┴──────────┴──────────┴──────────────────────────────────────────┴─────────────────────────────┴────────┴───────┴───────┴─────────┴────────┘
+#   incident  score  pile  rule  rule history              reason                     time                  title
+1   44394     1.00         2     305 of 336 true positive  linked incidents raise it  2024-06-16T03:46:06Z  2
+2   76281     1.00         2     305 of 336 true positive  linked incidents raise it  2024-06-16T13:48:53Z  2
+...
+18  145885    0.76         3     13 of 37 true positive    linked incidents raise it  2024-06-15T23:31:40Z  4
+19  54866     0.73         1     4 of 4 true positive      rule history raises it     2024-06-16T19:48:26Z  1
+20 of 33 incidents in the queue
+Set aside under the close level: 9 (target: at most 5% of true positives)
+Shown above as audit: 3
+Kept in the queue for a link to a true positive: 5
+Kept in the queue for a rule never graded: 2
 ```
 
-`score` sets the order and `why` names what raised it most.
-
-<p align="center">
-  <img
-    src="docs/assets/demo.gif"
-    alt="Terminal recording: meerkat demo, queue, inspect F1, review F2 benign, queue again with the decision shown, export decisions and export navigator"
-    width="100%"
-  >
-</p>
-
-## Daily use
-
-Set the environment once in `meerkat.toml`:
-
-```toml
-environment = "acme"
-inventory = "inventory/acme.json"
-```
+GUIDE replaces rule names and titles with numbers, so the last column is a
+number here. `examples/grades.csv` holds the grade Microsoft's customers gave
+to each of the 42. Load it to check the queue:
 
 ```bash
-meerkat inventory --input alerts/2026-10-05 --out inventory/acme.json  # once
-meerkat check --input alerts/2026-10-05      # what triage will see
-meerkat pull --day 2026-10-06 --input alerts/2026-10-06  # each morning, yesterday
-meerkat triage --input alerts/2026-10-06     # score the day into a run
-meerkat browse                               # work the queue, record decisions
-meerkat export decisions                     # the review pass as a grid
-meerkat retrain --incidents tickets.csv      # refit on your own history
+meerkat review --file examples/grades.csv
 ```
 
-The [manual](docs/manual.md) covers every command and input format.
+```text
+42 incidents graded from examples/grades.csv
+True positives: 20 in the queue, 0 set aside
+```
 
-## How it works
+## Commands
 
-- Alerts from one rule on one machine, with no gap over ten minutes, form a
-  **session**.
-- Sessions from the same day, machine, detector and rule form a **family**.
-  One family is one line in the queue.
-- A random forest scores each session. A logistic regression ranks each family
-  from its sessions.
-- The top ten families of each day are the queue.
+| Command | What it does |
+| --- | --- |
+| `meerkat queue [FILE]` | Scores an incident CSV and saves it as a run. Without FILE it lists the open incidents of every saved run. |
+| `meerkat review INCIDENT GRADE` | Records a grade: `tp`, `bp` or `fp`. |
+| `meerkat review --file FILE` | Records every grade in a CSV. |
+| `meerkat inspect INCIDENT` | Shows one incident with its score, its rule history and its linked incidents. |
+| `meerkat runs` | Lists the saved runs. |
+| `meerkat config [SETTING VALUE]` | Shows the settings, or changes one. |
 
-<p align="center">
-  <img
-    src="docs/assets/pipeline.svg"
-    alt="36,358 alerts group into 1,487 sessions, collapse into 326 daily families, and are cut to the 40 reviewed at a budget of 10 a day, which is a setting"
-    width="100%"
-  >
-</p>
+`queue --closed` lists the incidents that were set aside. `queue --run ID` lists
+one run only. `--json` gives machine readable output on `queue`, `inspect` and
+`runs`. Runs, grades and settings are kept in `runs/`, or in the folder given
+by `--runs-dir`.
 
-`meerkat retrain` refits the forest on your own incident history. It saves the
-new model only if it passes a check against the shipped one on held-out days.
+A grade changes the next queue:
 
-## Results
+```bash
+meerkat review 44394 tp --note "confirmed with the user"
+meerkat queue
+```
 
-Tested on the [AIT Alert Data Set](https://zenodo.org/records/8263181): eight
-simulated company networks hit by the same scripted attack, with every alert
-labelled. The model trains on seven networks and is tested on the eighth, once
-for each network.
+## How the score works
 
-| Ranking | attack steps found, 10 a day |
-|---|---:|
-| **Meerkat** | **57** |
-| Forest score alone | 48 |
-| Detector severity | 33 |
-| Random order | 30 |
+The score is a logistic regression on ten inputs. Each input is computed from
+incidents earlier in time only:
 
-An attack step is one phase of the attack on one machine. It counts as found
-when the queue holds one of its alerts. 60 steps can be found at all. The
-busiest day, 453,697 alerts, takes 72 seconds and 1.1 GB of memory.
-[bench/README.md](bench/README.md) shows how to reproduce these numbers.
+- how often the incidents of this rule were graded true positive, and how
+  many were graded;
+- the same two numbers for the whole organisation;
+- how many earlier incidents share a device, account, address, file hash or
+  URL with this one, counted by grade. For each shared value, the 50 most
+  recent earlier incidents are counted.
 
-## Limitations
+The weights ship with the package. They were fitted on 424,265 graded
+incidents from 4,497 organisations in GUIDE. The `reason` column says which
+group of inputs moved the score most, and `inspect` shows the score with the
+links removed and with the rule treated as new.
 
-- Every number comes from one simulated lab whose eight networks share one
-  attack script. They say nothing about production.
-- The shipped model knows only the lab's rules and asset roles. A new site
-  should retrain on its own incident history. `check` and `triage` warn when
-  more than 20% of alerts come from rules the model has not seen.
-- An attack that fires the same rule as everyday noise, at the same severity
-  and the same hours, ranks with the noise.
+## The close level
+
+Once enough true positives are graded, 19 at the default setting, Meerkat
+computes a close level: the highest score under which at most 5% of the graded
+true positives fall. Open incidents under it leave the queue. About one in ten
+of them, chosen by a hash of the incident id, is kept in the queue as `audit`,
+and a true positive found there counts for ten when the level is computed
+again.
+
+An incident linked to an earlier graded true positive is never set aside.
+Neither is an incident whose rule has never been graded.
+
+## Settings
+
+| Setting | Meaning | Default |
+| --- | --- | --- |
+| `miss_rate` | Share of true positives accepted under the close level. | 0.05 |
+| `keep_linked` | Keep incidents linked to a graded true positive in the queue. | true |
+
+```bash
+meerkat config
+meerkat config miss_rate 0.02
+meerkat config keep_linked false
+```
+
+Both are saved in `runs/settings.json` and apply to later commands.
+
+## Your own data
+
+Meerkat reads a CSV with one row per alert, for one organisation, with
+ISO 8601 times. It needs three columns: an incident id, a time and a rule id.
+A grade column gives it history. The default column names are those of
+Microsoft Defender XDR as GUIDE publishes them.
+
+`--mapping` names the columns and grade words of another source:
+
+```bash
+meerkat queue export.csv --mapping sentinel
+meerkat queue export.csv --mapping site.toml
+```
+
+```toml
+[columns]
+IncidentId = "case_id"
+Timestamp = "opened_at"
+DetectorId = "rule"
+IncidentGrade = "outcome"
+
+[grades]
+TruePositive = ["confirmed"]
+open = ["new", "in progress"]
+```
+
+A column or grade left out keeps its default name. The presets are
+`defender`, `sentinel` and `splunk`.
+
+## How it was measured
+
+The data is `GUIDE_Train.csv`: 707,108 graded incidents from 5,340
+organisations. The weights were fitted on the earliest 60% in time and tested
+on the 282,843 later incidents.
+
+- **Ranking.** Average precision says how high the true positives sit in one
+  organisation's queue, where 1 means all of them come first. Its mean over
+  the 718 organisations with at least 20 test incidents is 0.72. The inputs
+  from linked incidents add 0.06 to it.
+- **Close level.** With the default settings, over 525 organisations and
+  155,777 test incidents, 34% of incidents were set aside and 3.2% of the true
+  positives were among them.
+
+`bench/train.py` fits the weights and prints the ranking numbers.
+`bench/close.py` prints the close level numbers. Both read `GUIDE_Train.csv`,
+which Microsoft publishes on
+[Kaggle](https://www.kaggle.com/datasets/Microsoft/microsoft-security-incident-prediction).
+
+## Limits
+
+- The numbers above assume that every earlier incident is already graded when
+  a new one arrives. They were not measured with grades that arrive late.
+- GUIDE is one vendor's data from 2024, about 17 active days per organisation.
+  Meerkat has not been measured in a live SOC.
+- The `sentinel` and `splunk` presets were written from vendor documentation.
+  Neither has read a real export.
+- A new organisation has no history. Its first scores come from the shipped
+  weights and GUIDE's base rate.
+- Meerkat reads files. It has no connector to a SIEM.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). [NOTICE](NOTICE) carries the AIT and MITRE ATT&CK
-attributions and the data set references.
+MIT. `examples/` is derived from GUIDE under CDLA Permissive 2.0, see `NOTICE`.

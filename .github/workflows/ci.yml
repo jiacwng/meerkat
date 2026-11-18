@@ -1,8 +1,6 @@
 name: CI
 
-# pull_request covers every branch that is proposed for merge, and push covers
-# main itself. Running both on every branch fired the matrix twice per commit and
-# left two check runs per required name.
+# CI runs on pull requests, on pushes to main and on demand.
 on:
   push:
     branches: [main]
@@ -34,10 +32,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e . coverage -c .github/constraints.txt
 
-      # The raw AIT alerts are held in Git LFS and are not fetched here, so the
-      # tests that need them skip themselves. Everything else runs on synthetic
-      # fixtures built inside the tests. Coverage is measured without the LFS
-      # fixtures, so the floor is the share guaranteed on any clone.
       - name: Run tests
         run: |
           python -m coverage run --source=core,meerkat -m unittest discover -s tests -p "test_*.py"

@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.0.0 - Unreleased
+
+### Breaking
+
+- Meerkat ranks incidents and no longer reads Wazuh, Suricata or AMiner
+  alerts. The commands, the Wazuh connector, the model bundle and the
+  inventory of 1.3.0 are removed.
+- The dependencies are numpy and pandas. `bench/train.py` also needs
+  scikit-learn.
+
+### Added
+
+- `queue`, `review`, `inspect`, `runs` and `config`.
+- The score is a logistic regression on ten inputs, fitted on GUIDE, with the
+  reason shown beside each score.
+- Incidents under a close level leave the queue, and one in ten is audited.
+- `examples/incidents.csv`, one organisation of GUIDE.
+
 ## 1.3.0 - 2026-10-22
 
 ### Breaking

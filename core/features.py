@@ -1,144 +1,131 @@
-# Turns sessions into the numeric matrix the forest reads. Entity and alert-name
-# identity never become features, so a model trained on one company cannot
-# recognise another by name.
-
-from __future__ import annotations
-
-import warnings
-from dataclasses import dataclass
+# The ten inputs of the score, each taken from incidents strictly earlier in time.
 
 import numpy as np
 import pandas as pd
 
-# lives here so the read commands find it without importing sklearn
-CONTRIBUTION_PREFIX = "contribution_"
+from core.incidents import GRADES, LINKS, SEPARATOR
 
-SESSION_NUMERIC_FEATURES = (
-    "log_size",
-    "duration_s",
-    "alerts_per_min",
-    "severity_max",
-    "severity_mean",
-    "has_technique",
-    "in_inventory",
-    "detectors_on_entity",
-    "groups_on_entity",
-    "log_alerts_on_entity",
+INPUTS = (
+    "org_true_positive_rate", "rule_true_positive_rate", "log_org_graded",
+    "log_rule_graded", "log_linked", "log_linked_true_positive",
+    "log_linked_benign_positive", "log_linked_false_positive",
+    "linked_true_positive_rate", "has_link",
 )
-HOST_VOLUME_FEATURES = ("detectors_on_entity", "groups_on_entity", "log_alerts_on_entity")
-SUPPORTED_DETECTOR_ORDER = ("wazuh", "suricata", "aminer")
-SCHEMA_INDEX_NAMES = ("detector_source", "rule_id")
-
-_UNSCALED_DETECTORS_WARNED: set[str] = set()
-
-
-@dataclass(frozen=True)
-class SessionFeatureSchema:
-    rule_counts: pd.Series          # alerts per rule, counted on training data
-    detectors: tuple[str, ...]      # one column each, in a fixed order
-    roles: tuple[str, ...]          # asset roles from the customer inventory
-
-    @property
-    def feature_names(self) -> tuple[str, ...]:
-        detector_columns = tuple(f"detector_{name}" for name in self.detectors)
-        role_columns = tuple(f"role_{name}" for name in self.roles)
-        return (
-            SESSION_NUMERIC_FEATURES
-            + detector_columns
-            + ("log_rarity", "is_unseen_rule")
-            + role_columns
-        )
+LINKED = ("linked", "linked_true_positive", "linked_benign_positive",
+          "linked_false_positive")
+RULE = ("rule_graded", "rule_true_positives")
+SMOOTH = 5.0
+PLACEHOLDER_SHARE = 0.5
+CAP = 50
 
 
-def standardize_severity(
-    detector_source: pd.Series,
-    severity: pd.Series,
-) -> pd.Series:
-    # wazuh rises 0-15, suricata falls 1-3, aminer has no severity at all and
-    # takes the midpoint, since scoring it zero would rank a whole detector last
-    standardized = pd.Series(0.5, index=severity.index, dtype=float)
-    wazuh = detector_source.eq("wazuh")
-    suricata = detector_source.eq("suricata")
-    standardized[wazuh] = (severity[wazuh] / 15.0).clip(0, 1)
-    standardized[suricata] = ((4.0 - severity[suricata]) / 3.0).clip(0, 1)
-    unscaled = {
-        str(name)
-        for name in detector_source[~(wazuh | suricata)].unique()
-        if not pd.isna(name)
-    } - set(SUPPORTED_DETECTOR_ORDER) - _UNSCALED_DETECTORS_WARNED
-    for detector in sorted(unscaled):
-        _UNSCALED_DETECTORS_WARNED.add(detector)
-        warnings.warn(
-            f"detector {detector!r} has no severity scale in standardize_severity, "
-            "so all of its alerts score 0.5",
-            stacklevel=2,
-        )
-    return standardized
+def compute(incidents: pd.DataFrame, prior: float) -> pd.DataFrame:
+    rank = _time_rank(incidents)
+    grade = incidents["IncidentGrade"].map(
+        {name: code for code, name in enumerate(GRADES)}).fillna(-1).to_numpy(np.int64)
+    graded = grade >= 0
+    true_positive = grade == 0
+
+    whole = np.zeros(len(incidents), np.int64)
+    org_graded, org_tp = _earlier_totals(whole, rank, graded, true_positive)
+    rule = pd.factorize(incidents["DetectorId"])[0]
+    rule_graded, rule_tp = _earlier_totals(rule, rank, graded, true_positive)
+    by_grade, has_link = _links(incidents, rank, grade)
+    linked = by_grade.sum(axis=0)
+
+    columns = {
+        "org_true_positive_rate": smooth(org_tp, org_graded, prior),
+        "rule_true_positive_rate": smooth(rule_tp, rule_graded, prior),
+        "log_org_graded": np.log1p(org_graded),
+        "log_rule_graded": np.log1p(rule_graded),
+        "log_linked": np.log1p(linked),
+        "log_linked_true_positive": np.log1p(by_grade[0]),
+        "log_linked_benign_positive": np.log1p(by_grade[1]),
+        "log_linked_false_positive": np.log1p(by_grade[2]),
+        "linked_true_positive_rate": smooth(by_grade[0], linked, prior),
+        "has_link": has_link.astype(np.float64),
+        "linked": linked,
+        "linked_true_positive": by_grade[0],
+        "linked_benign_positive": by_grade[1],
+        "linked_false_positive": by_grade[2],
+        "rule_graded": rule_graded,
+        "rule_true_positives": rule_tp,
+    }
+    return pd.DataFrame(columns, index=incidents.index)
 
 
-def fit_session_feature_schema(sessions: pd.DataFrame) -> SessionFeatureSchema:
-    counts: dict[tuple[str, str], int] = {}
-    for pairs in sessions["pair_counts"]:
-        for pair, count in pairs:
-            counts[pair] = counts.get(pair, 0) + count
-    index = (
-        pd.MultiIndex.from_tuples(list(counts), names=SCHEMA_INDEX_NAMES) if counts
-        else pd.MultiIndex.from_arrays([[], []], names=SCHEMA_INDEX_NAMES)
-    )
-    rule_counts = pd.Series(list(counts.values()), index=index, dtype="int64")
-    seen_detectors = {detector for detector, _ in counts}
-    detectors = tuple(
-        detector
-        for detector in SUPPORTED_DETECTOR_ORDER
-        if detector in seen_detectors
-    ) + tuple(sorted(seen_detectors - set(SUPPORTED_DETECTOR_ORDER)))
-    roles = tuple(sorted({
-        role
-        for configured_roles in sessions["configured_roles"]
-        for role in configured_roles
-    }))
-    return SessionFeatureSchema(rule_counts, detectors, roles)
+def linked_to(incidents: pd.DataFrame, incident_id: str) -> pd.DataFrame:
+    incidents = incidents.reset_index(drop=True)
+    incident, other, _ = _pairs(incidents, _time_rank(incidents))
+    position = incidents.index[incidents["IncidentId"] == incident_id][0]
+    found = incidents.iloc[other[incident == position]]
+    found = found[found["IncidentGrade"] != ""]
+    return found.sort_values(["Timestamp", "IncidentId"], ascending=[False, True])
 
 
-# a host's volume is read as its rank among the rows of the same day, so the
-# feature does not depend on how busy the whole network is
-def rank_host_volume(X: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
-    days = [table["scenario"].astype(str).to_numpy(), table["day"].to_numpy()]
-    for name in HOST_VOLUME_FEATURES:
-        X[name] = X[name].groupby(days).rank(pct=True)
-    return X
+def smooth(positives: np.ndarray, total: np.ndarray, prior: float) -> np.ndarray:
+    return (positives + SMOOTH * prior) / (total + SMOOTH)
 
 
-def build_session_feature_matrix(
-    sessions: pd.DataFrame,
-    schema: SessionFeatureSchema,
-) -> pd.DataFrame:
-    X = rank_host_volume(sessions[list(SESSION_NUMERIC_FEATURES)].astype(float).copy(), sessions)
-    known = schema.rule_counts.to_dict()
-    shares = {detector: np.zeros(len(sessions)) for detector in schema.detectors}
-    rarity = np.zeros(len(sessions))
-    unseen = np.zeros(len(sessions))
-    for row, pairs in enumerate(sessions["pair_counts"]):
-        total = float(sum(count for _, count in pairs)) or 1.0
-        for pair, count in pairs:
-            weight = count / total
-            if pair[0] in shares:
-                shares[pair[0]][row] += weight
-            # a rule missing from training is unseen, not merely quiet, so it gets
-            # its own flag rather than a count of zero
-            if pair in known:
-                rarity[row] -= weight * np.log1p(float(known[pair]))
-            else:
-                unseen[row] += weight
+def _earlier_totals(key: np.ndarray, rank: np.ndarray, graded: np.ndarray,
+                    true_positive: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    frame = pd.DataFrame({"key": key, "rank": rank, "graded": graded.astype(np.int64),
+                          "tp": true_positive.astype(np.int64)})
+    at = frame.groupby(["key", "rank"]).sum()
+    before = at.groupby(level="key").cumsum() - at
+    found = before.reindex(pd.MultiIndex.from_arrays([key, rank]))
+    return found["graded"].to_numpy(), found["tp"].to_numpy()
 
-    for detector in schema.detectors:
-        X[f"detector_{detector}"] = shares[detector]
-    X["log_rarity"] = rarity
-    X["is_unseen_rule"] = unseen
 
-    for role in schema.roles:
-        X[f"role_{role}"] = sessions["asset_roles"].map(
-            lambda asset_roles: float(role in asset_roles)
-        )
+def _time_rank(incidents: pd.DataFrame) -> np.ndarray:
+    times = pd.to_datetime(incidents["Timestamp"], utc=True, format="ISO8601")
+    return pd.factorize(times, sort=True)[0].astype(np.int64)
 
-    return X.loc[:, list(schema.feature_names)]
+
+def _links(incidents: pd.DataFrame, rank: np.ndarray,
+           grade: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    count = len(incidents)
+    incident, other, has_link = _pairs(incidents, rank)
+    by_grade = np.zeros((len(GRADES), count), np.int64)
+    for code in range(len(GRADES)):
+        by_grade[code] = np.bincount(incident[grade[other] == code], minlength=count)
+    return by_grade, has_link
+
+
+def _pairs(incidents: pd.DataFrame,
+           rank: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    count = len(incidents)
+    entries = _entries(incidents, rank)
+    share = entries.groupby("value")["owner"].transform("size") / count
+    entries = entries[share <= PLACEHOLDER_SHARE]
+    has_link = np.zeros(count, bool)
+    has_link[entries["owner"]] = True
+
+    entries = entries.sort_values(["value", "rank"], kind="stable", ignore_index=True)
+    owner = entries["owner"].to_numpy()
+    row = entries.index.to_numpy()
+    value_start = row - entries.groupby("value").cumcount().to_numpy()
+    time_start = row - entries.groupby(["value", "rank"]).cumcount().to_numpy()
+
+    # the entry `back` rows before the first row of its own time is one of its CAP predecessors
+    pairs = []
+    for back in range(1, CAP + 1):
+        before = time_start - back
+        inside = before >= value_start
+        pairs.append(owner[inside] * count + owner[before[inside]])
+    pairs = np.unique(np.concatenate(pairs))
+    return pairs // count, pairs % count, has_link
+
+
+def _entries(incidents: pd.DataFrame, rank: np.ndarray) -> pd.DataFrame:
+    parts, offset = [], 0
+    for column in LINKS:
+        cells = incidents[column].reset_index(drop=True)
+        split = cells[cells != ""].str.split(SEPARATOR).explode()
+        codes, distinct = pd.factorize(split)
+        parts.append(pd.DataFrame({"owner": split.index.to_numpy(np.int64),
+                                   "value": codes.astype(np.int64) + offset}))
+        offset += len(distinct)
+    entries = pd.concat(parts, ignore_index=True)
+    entries["rank"] = rank[entries["owner"].to_numpy()]
+    return entries
