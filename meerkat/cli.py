@@ -335,10 +335,11 @@ def _scored(runs_dir: Path, incoming=None):
 
 
 def _inspect(args: argparse.Namespace) -> None:
-    from core import store
+    from core import features, store
     from core.incidents import DESCRIPTIVE, LINKS, SEPARATOR
 
     scored, _, _, _ = _scored(args.runs_dir)
+    history = scored
     if args.run is not None:
         _, in_run = store.load_run(args.runs_dir, args.run)
         scored = scored[scored["IncidentId"].isin(in_run["IncidentId"])]
@@ -346,11 +347,14 @@ def _inspect(args: argparse.Namespace) -> None:
     if found.empty:
         raise store.StoreError(f"no incident {args.incident!r} in {args.runs_dir}")
     row = found.iloc[0].to_dict()
+    shown = ["IncidentId", "IncidentGrade", "Timestamp", "DetectorId", "AlertTitle"]
+    linked = features.linked_to(history, args.incident)[shown]
 
     if args.json:
         record = _as_record(row)
         for column in ("MitreTechniques", *LINKS):
             record[column] = [v for v in row[column].split(SEPARATOR) if v]
+        record["linked_incidents"] = linked.to_dict("records")
         _print_json(record)
         return
 
@@ -373,6 +377,10 @@ def _inspect(args: argparse.Namespace) -> None:
     for name, value in lines:
         if value:
             print(f"{name:<16} {_printable(value)}")
+    if not linked.empty:
+        print()
+        _print_table(("linked incident", "grade", "time", "rule", "title"),
+                     list(linked.itertuples(index=False, name=None)))
 
 
 def _runs(args: argparse.Namespace) -> None:

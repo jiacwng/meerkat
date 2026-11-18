@@ -5,7 +5,7 @@ import unittest
 
 import pandas as pd
 
-from core.features import CAP, INPUTS, LINKED, RULE, compute
+from core.features import CAP, INPUTS, LINKED, RULE, compute, linked_to
 from core.incidents import COLUMNS
 
 PRIOR = 0.2
@@ -90,6 +90,20 @@ class LinkTests(unittest.TestCase):
         self.assertAlmostEqual(now["linked_true_positive_rate"], _smooth(1, 2))
         self.assertEqual(inputs["linked"].tolist(), [0, 0, 1, 0, 2, 0, 0])
         self.assertEqual(inputs["has_link"].tolist(), [1.0] * 7)
+
+    def test_linked_to_names_the_counted_incidents_newest_first(self):
+        frame = _frame(
+            _incident("a", 0, "TruePositive", AccountName="alice"),
+            _incident("b", 1, "FalsePositive", IpAddress="10.0.0.2"),
+            _incident("c", 2, AccountName="alice"),
+            _incident("now", 3, AccountName="alice", IpAddress="10.0.0.2"),
+            _incident("later", 4, "TruePositive", AccountName="alice"),
+            _incident("x", 5), _incident("y", 6), _incident("z", 7),
+        )
+        self.assertEqual(linked_to(frame, "now")["IncidentId"].tolist(), ["b", "a"])
+        self.assertEqual(linked_to(frame, "a")["IncidentId"].tolist(), [])
+        shuffled = frame.iloc[::-1]
+        self.assertEqual(linked_to(shuffled, "now")["IncidentId"].tolist(), ["b", "a"])
 
     def test_a_value_in_more_than_half_the_incidents_is_ignored(self):
         common = [_incident(str(i), i, "TruePositive", Url="x") for i in range(3)]
