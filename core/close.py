@@ -36,10 +36,12 @@ def close_level(entries: pd.DataFrame, miss_rate: float) -> float | None:
 
 
 def pile_of(incident_id: str, score: float, level: float | None,
-            linked_true_positive: int, keep_linked: bool) -> str:
+            linked_true_positive: int, keep_linked: bool, rule_graded: int) -> str:
     if level is None or score >= level:
         return "queue"
     if keep_linked and linked_true_positive >= 1:
+        return "queue"
+    if rule_graded == 0:
         return "queue"
     return "audit" if _sampled(incident_id) else "closed"
 
@@ -49,11 +51,11 @@ def place(scored: pd.DataFrame, reviews: pd.DataFrame, level: float | None,
     latest = reviews.drop_duplicates("IncidentId", keep="last")
     recorded = latest.set_index("IncidentId")["pile"]
     piles = []
-    columns = ["IncidentId", "IncidentGrade", "score", "linked_true_positive"]
+    columns = ["IncidentId", "IncidentGrade", "score", "linked_true_positive", "rule_graded"]
     for row in scored[columns].itertuples(index=False):
         if row.IncidentGrade == "":
             piles.append(pile_of(row.IncidentId, row.score, level,
-                                 row.linked_true_positive, keep_linked))
+                                 row.linked_true_positive, keep_linked, row.rule_graded))
         else:
             piles.append(recorded.get(row.IncidentId, ""))
     return scored.assign(pile=piles)

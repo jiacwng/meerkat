@@ -179,11 +179,12 @@ def _queue(args: argparse.Namespace) -> None:
         open_incidents = open_incidents[open_incidents["IncidentId"].isin(run_ids)]
     closed = open_incidents[open_incidents["pile"] == "closed"]
     audit = open_incidents[open_incidents["pile"] == "audit"]
-    kept_linked = 0
-    if level is not None and keep_linked:
-        under = open_incidents[(open_incidents["score"] < level)
-                               & (open_incidents["linked_true_positive"] >= 1)]
-        kept_linked = len(under)
+    kept_linked = kept_ungraded_rule = 0
+    if level is not None:
+        under = open_incidents[open_incidents["score"] < level]
+        linked_kept = keep_linked & (under["linked_true_positive"] >= 1)
+        kept_linked = int(linked_kept.sum())
+        kept_ungraded_rule = int((~linked_kept & (under["rule_graded"] == 0)).sum())
     if args.closed:
         listed = closed
     else:
@@ -197,7 +198,8 @@ def _queue(args: argparse.Namespace) -> None:
             "run": run, "open": len(open_incidents), "closed": len(closed),
             "audit": len(audit), "close_level": level, "miss_rate": miss_rate,
             "audit_share": close.AUDIT_SHARE, "keep_linked": keep_linked,
-            "kept_linked": kept_linked, "queue": rows})
+            "kept_linked": kept_linked, "kept_ungraded_rule": kept_ungraded_rule,
+            "queue": rows})
         return
 
     if open_incidents.empty:
@@ -233,6 +235,8 @@ def _queue(args: argparse.Namespace) -> None:
                 print(f"Shown above as audit: {len(audit)}")
             if kept_linked:
                 print(f"Kept in the queue for a link to a true positive: {kept_linked}")
+            if kept_ungraded_rule:
+                print(f"Kept in the queue for a rule never graded: {kept_ungraded_rule}")
 
 
 def _config(args: argparse.Namespace) -> None:
@@ -283,10 +287,12 @@ def _review(args: argparse.Namespace) -> None:
     if earlier.empty:
         score = float(found["score"].iloc[0])
         linked = int(found["linked_true_positive"].iloc[0])
+        rule_graded = int(found["rule_graded"].iloc[0])
         if found["IncidentGrade"].iloc[0] != "":
             pile = "queue"
         else:
-            pile = close.pile_of(args.incident, score, level, linked, settings["keep_linked"])
+            pile = close.pile_of(args.incident, score, level, linked, settings["keep_linked"],
+                                 rule_graded)
     else:
         score, pile = float(earlier["score"].iloc[0]), earlier["pile"].iloc[0]
     grade = GRADE_CODES[args.grade]

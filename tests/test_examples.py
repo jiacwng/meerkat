@@ -59,11 +59,10 @@ class ExampleTests(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             main(["queue", str(EXAMPLES / "incidents.csv"), "--runs-dir", str(runs_dir)])
-        count, closed, kept = out.getvalue().splitlines()[-3:]
+        footer = out.getvalue().splitlines()[-5:]
         readme = (EXAMPLES.parent / "README.md").read_text(encoding="utf-8")
-        self.assertIn(count, readme)
-        self.assertIn(closed, readme)
-        self.assertIn(kept, readme)
+        for line in footer:
+            self.assertIn(line, readme)
 
 
 if __name__ == "__main__":
