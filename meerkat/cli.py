@@ -179,12 +179,7 @@ def _queue(args: argparse.Namespace) -> None:
         open_incidents = open_incidents[open_incidents["IncidentId"].isin(run_ids)]
     closed = open_incidents[open_incidents["pile"] == "closed"]
     audit = open_incidents[open_incidents["pile"] == "audit"]
-    kept_linked = kept_ungraded_rule = 0
-    if level is not None:
-        under = open_incidents[open_incidents["score"] < level]
-        linked_kept = keep_linked & (under["linked_true_positive"] >= 1)
-        kept_linked = int(linked_kept.sum())
-        kept_ungraded_rule = int((~linked_kept & (under["rule_graded"] == 0)).sum())
+    kept_linked, kept_ungraded_rule = _kept(open_incidents, level, keep_linked)
     if args.closed:
         listed = closed
     else:
@@ -205,38 +200,52 @@ def _queue(args: argparse.Namespace) -> None:
     if open_incidents.empty:
         print("No open incidents." if run_ids is None
               else f"No open incidents in run {run}.")
+        return
+    if not listed.empty:
+        rows = [
+            (str(position), row["IncidentId"], f"{row['score']:.2f}",
+             "audit" if row["pile"] == "audit" else "", row["DetectorId"],
+             _rule_history(row), row["reason"], row["Timestamp"], row["AlertTitle"])
+            for position, row in enumerate(shown.to_dict("records"), start=1)]
+        _print_table(("#", "incident", "score", "pile", "rule", "rule history", "reason",
+                      "time", "title"), rows)
+        kind = "set aside" if args.closed else "in the queue"
+        where = "" if run_ids is None else f", run {run}"
+        print(f"{len(shown)} of {len(listed)} incidents {kind}{where}")
+    if level is None:
+        print(_no_level(entries, miss_rate))
+        return
+    if args.closed:
+        print(f"In the queue as audit: {len(audit)}")
     else:
-        if not listed.empty:
-            rows = [
-                (str(position), row["IncidentId"], f"{row['score']:.2f}",
-                 "audit" if row["pile"] == "audit" else "", row["DetectorId"],
-                 _rule_history(row), row["reason"], row["Timestamp"], row["AlertTitle"])
-                for position, row in enumerate(shown.to_dict("records"), start=1)]
-            _print_table(("#", "incident", "score", "pile", "rule", "rule history", "reason",
-                          "time", "title"), rows)
-            kind = "set aside" if args.closed else "in the queue"
-            where = "" if run_ids is None else f", run {run}"
-            print(f"{len(shown)} of {len(listed)} incidents {kind}{where}")
-        if level is None and len(entries) >= close.needed(miss_rate):
-            lowest = entries[entries["score"] == entries["score"].min()]
-            if (lowest["weight"] > 1).any():
-                print("Nothing closed: a true positive found in the audit sample counts for ten.")
-            else:
-                print("Nothing closed: too many graded true positives share the lowest score.")
-        elif level is None:
-            print(f"Nothing closed yet: {len(entries)} of {close.needed(miss_rate)} "
-                  "graded true positives.")
-        else:
-            if args.closed:
-                print(f"In the queue as audit: {len(audit)}")
-            else:
-                print(f"Set aside under the close level: {len(closed)} "
-                      f"(target: at most {_percent(miss_rate)} of true positives)")
-                print(f"Shown above as audit: {len(audit)}")
-            if kept_linked:
-                print(f"Kept in the queue for a link to a true positive: {kept_linked}")
-            if kept_ungraded_rule:
-                print(f"Kept in the queue for a rule never graded: {kept_ungraded_rule}")
+        print(f"Set aside under the close level: {len(closed)} "
+              f"(target: at most {_percent(miss_rate)} of true positives)")
+        print(f"Shown above as audit: {len(audit)}")
+    if kept_linked:
+        print(f"Kept in the queue for a link to a true positive: {kept_linked}")
+    if kept_ungraded_rule:
+        print(f"Kept in the queue for a rule never graded: {kept_ungraded_rule}")
+
+
+def _kept(open_incidents, level: float | None, keep_linked: bool) -> tuple[int, int]:
+    if level is None:
+        return 0, 0
+    under = open_incidents[open_incidents["score"] < level]
+    linked = keep_linked & (under["linked_true_positive"] >= 1)
+    ungraded_rule = ~linked & (under["rule_graded"] == 0)
+    return int(linked.sum()), int(ungraded_rule.sum())
+
+
+def _no_level(entries, miss_rate: float) -> str:
+    from core import close
+
+    if len(entries) < close.needed(miss_rate):
+        return (f"Nothing closed yet: {len(entries)} of {close.needed(miss_rate)} "
+                "graded true positives.")
+    lowest = entries[entries["score"] == entries["score"].min()]
+    if (lowest["weight"] > 1).any():
+        return "Nothing closed: a true positive found in the audit sample counts for ten."
+    return "Nothing closed: too many graded true positives share the lowest score."
 
 
 def _config(args: argparse.Namespace) -> None:
