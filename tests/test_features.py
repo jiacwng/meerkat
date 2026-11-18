@@ -5,7 +5,7 @@ import unittest
 
 import pandas as pd
 
-from core.features import CAP, INPUTS, LINKED, compute, linked_to
+from core.features import CAP, INPUTS, LINKED, RULE, compute, linked_to
 from core.incidents import COLUMNS
 
 PRIOR = 0.2
@@ -54,6 +54,11 @@ class HistoryTests(unittest.TestCase):
         for position in (2, 3):
             for value, wanted in zip(self._row(position), expected, strict=True):
                 self.assertAlmostEqual(value, wanted)
+
+    def test_rule_counts_cover_only_earlier_graded_incidents_of_the_rule(self):
+        counts = self.inputs[list(RULE)]
+        self.assertEqual(counts["rule_graded"].tolist(), [0, 0, 1, 1, 0, 2])
+        self.assertEqual(counts["rule_true_positives"].tolist(), [0, 0, 1, 1, 0, 1])
 
     def test_the_rule_counts_its_own_incidents_and_the_organisation_all(self):
         rule_8 = self._row(4)
@@ -147,7 +152,7 @@ class LinkTests(unittest.TestCase):
         inputs = compute(frame, PRIOR)
         self.assertEqual(list(inputs.index), [10, 20, 30, 40])
         self.assertEqual(inputs["linked"].tolist(), [1, 0, 0, 0])
-        self.assertEqual(list(inputs.columns), [*INPUTS, *LINKED])
+        self.assertEqual(list(inputs.columns), [*INPUTS, *LINKED, *RULE])
 
 
 if __name__ == "__main__":

@@ -29,15 +29,8 @@ def score(incidents: pd.DataFrame) -> pd.DataFrame:
         "linked_true_positive_rate": unseen})
     rule = _shift(found, weights, {"rule_true_positive_rate": unseen, "log_rule_graded": 0.0})
 
-    graded = incidents[incidents["IncidentGrade"] != ""]
-    true_positive = graded["IncidentGrade"] == "TruePositive"
-    by_rule = true_positive.groupby(graded["DetectorId"]).agg(["size", "sum"])
-
     scored = incidents.copy()
-    detector = scored["DetectorId"]
-    scored["rule_graded"] = detector.map(by_rule["size"]).fillna(0).astype(int)
-    scored["rule_true_positives"] = detector.map(by_rule["sum"]).fillna(0).astype(int)
-    for column in features.LINKED:
+    for column in (*features.LINKED, *features.RULE):
         scored[column] = found[column].to_numpy()
     scored["score"] = _logistic(logit)
     scored["score_without_links"] = _logistic(logit - links)

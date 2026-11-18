@@ -13,6 +13,7 @@ INPUTS = (
 )
 LINKED = ("linked", "linked_true_positive", "linked_benign_positive",
           "linked_false_positive")
+RULE = ("rule_graded", "rule_true_positives")
 SMOOTH = 5.0
 PLACEHOLDER_SHARE = 0.5
 CAP = 50
@@ -47,6 +48,8 @@ def compute(incidents: pd.DataFrame, prior: float) -> pd.DataFrame:
         "linked_true_positive": by_grade[0],
         "linked_benign_positive": by_grade[1],
         "linked_false_positive": by_grade[2],
+        "rule_graded": rule_graded,
+        "rule_true_positives": rule_tp,
     }
     return pd.DataFrame(columns, index=incidents.index)
 

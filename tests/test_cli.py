@@ -19,6 +19,7 @@ from meerkat.cli import main
 from tests.fixtures import (
     HEADER,
     ROWS,
+    WEIGHTS,
     calibration_rows,
     linked_rows,
     plain_row,
@@ -176,7 +177,7 @@ class CliTests(unittest.TestCase):
         self.assertRegex(out, r"grade\s+TruePositive\n")
         self.assertRegex(out, r"IpAddress\s+10.0.0.1, 10.0.0.2\n")
         self.assertNotIn("Sha256", out)
-        self.assertRegex(out, r"rule history\s+2 of 2 true positive\nlinked incidents\s+none\n")
+        self.assertRegex(out, r"rule history\s+never graded\nlinked incidents\s+none\n")
         code, out, _ = self._run("inspect", "100", "--json")
         record = json.loads(out)
         self.assertEqual(record["IpAddress"], ["10.0.0.1", "10.0.0.2"])
@@ -566,6 +567,23 @@ class CliTests(unittest.TestCase):
         report = self._queue_json()
         self.assertEqual((report["keep_linked"], report["kept_linked"]), (True, 1))
         self.assertIn(linked_id, [row["IncidentId"] for row in report["queue"]])
+
+    def test_a_rule_never_graded_keeps_the_incident_in_the_queue(self):
+        use_weights(self, dict(WEIGHTS, coefficients=[0, 4, 0, 0, 0, 0, 0, -1, 0, 0]))
+        rows = [list(row) for row in calibration_rows(0, 2)]
+        for row in rows:
+            if row[1].startswith("f"):
+                row[9] = "bob"
+        rows.append(list(plain_row("fresh", "99", time="2024-06-10T01:00:00Z")))
+        rows[-1][9] = "bob"
+        self._run("queue", str(write_csv(self.tmp / "fresh.csv", rows)))
+        for number in range(19):
+            self.assertEqual(self._run("review", f"t{number}", "tp")[0], 0)
+        out = self._run("queue")[1]
+        self.assertEqual(out.splitlines()[-1], "Kept in the queue for a rule never graded: 1")
+        report = self._queue_json()
+        self.assertEqual((report["kept_linked"], report["kept_ungraded_rule"]), (0, 1))
+        self.assertIn("fresh", [row["IncidentId"] for row in report["queue"]])
 
     def test_without_the_rule_the_linked_incident_is_closed(self):
         linked_id = self._calibrate_linked()

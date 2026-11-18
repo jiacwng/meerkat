@@ -27,16 +27,17 @@ incidents over 28 days, of which the 42 from the last three days are open.
 ...
 18  145885    0.76         3     13 of 37 true positive    linked incidents raise it  2024-06-15T23:31:40Z  4
 19  54866     0.73         1     4 of 4 true positive      rule history raises it     2024-06-16T19:48:26Z  1
-20 of 32 incidents in the queue
-Set aside under the close level: 10 (target: at most 5% of true positives)
-Shown above as audit: 4
+20 of 33 incidents in the queue
+Set aside under the close level: 9 (target: at most 5% of true positives)
+Shown above as audit: 3
 Kept in the queue for a link to a true positive: 5
+Kept in the queue for a rule never graded: 2
 ```
 
 GUIDE replaces rule names and titles with numbers, so the last column is a
 number here. `examples/grades.csv` holds the grade Microsoft's customers gave
 to each of the 42. All 20 true positives are in the queue, and none is among
-the 10 that were set aside.
+the 9 that were set aside.
 
 ## Commands
 
@@ -87,6 +88,7 @@ and a true positive found there counts for ten when the level is computed
 again.
 
 An incident linked to an earlier graded true positive is never set aside.
+Neither is an incident whose rule has never been graded.
 
 ## Settings
 
@@ -143,7 +145,7 @@ on the 282,843 later incidents.
   the 718 organisations with at least 20 test incidents is 0.72. The inputs
   from linked incidents add 0.06 to it.
 - **Close level.** With the default settings, over 525 organisations and
-  155,777 test incidents, 34% of incidents were set aside and 3.5% of the true
+  155,777 test incidents, 34% of incidents were set aside and 3.2% of the true
   positives were among them.
 
 `bench/train.py` fits the weights and prints the ranking numbers.
