@@ -139,7 +139,8 @@ class CliTests(unittest.TestCase):
         grades = self.tmp / "grades.csv"
         grades.write_text("IncidentId,IncidentGrade\n200,FalsePositive\n201,TruePositive\n")
         code, out, _ = self._run("review", "--file", str(grades))
-        self.assertEqual((code, out), (0, f"2 incidents graded from {grades}\n"))
+        self.assertEqual((code, out), (0, f"2 incidents graded from {grades}\n"
+                                          "True positives: 1 in the queue, 0 set aside\n"))
         self.assertEqual(self._queue_ids(), ["202"])
         record = json.loads(self._run("inspect", "201", "--json")[1])
         self.assertEqual(record["IncidentGrade"], "TruePositive")
