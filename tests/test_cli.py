@@ -191,6 +191,14 @@ class CliTests(unittest.TestCase):
         keys = ("linked", "linked_true_positive", "linked_benign_positive",
                 "linked_false_positive")
         self.assertEqual([record[key] for key in keys], [1, 1, 0, 0])
+        self.assertRegex(out, r"\n\nlinked incident\s+grade\s+time\s+rule\s+title\n"
+                              r"100\s+TruePositive\s+2024-06-01T08:00:00Z\s+7\s+"
+                              r"Suspicious sign in\n$")
+        self.assertEqual(record["linked_incidents"], [{
+            "IncidentId": "100", "IncidentGrade": "TruePositive",
+            "Timestamp": "2024-06-01T08:00:00Z", "DetectorId": "7",
+            "AlertTitle": "Suspicious sign in"}])
+        self.assertNotIn("linked incident ", self._run("inspect", "202")[1])
         rows = json.loads(self._run("queue", "--json")[1])["queue"]
         self.assertEqual([[row[key] for key in keys] for row in rows],
                          [[1, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
