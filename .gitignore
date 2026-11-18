@@ -3,7 +3,8 @@ project_local/
 local/
 *.local.md
 paper/
-docs/
+docs/*
+!docs/demo.gif
 runs/
 
 # Python
