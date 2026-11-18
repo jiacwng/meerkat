@@ -5,6 +5,8 @@ incident export, scores every open incident from the grades analysts gave to
 earlier ones, and prints a review queue. Incidents that score low enough are
 set aside, and a sample of them is still shown so that the tool can be checked.
 
+![The queue, one incident, and the grades loaded from a file](docs/demo.gif)
+
 ## Quick start
 
 Python 3.12 or newer.
@@ -36,8 +38,16 @@ Kept in the queue for a rule never graded: 2
 
 GUIDE replaces rule names and titles with numbers, so the last column is a
 number here. `examples/grades.csv` holds the grade Microsoft's customers gave
-to each of the 42. All 20 true positives are in the queue, and none is among
-the 9 that were set aside.
+to each of the 42. Load it to check the queue:
+
+```bash
+meerkat review --file examples/grades.csv
+```
+
+```text
+42 incidents graded from examples/grades.csv
+True positives: 20 in the queue, 0 set aside
+```
 
 ## Commands
 
@@ -45,6 +55,7 @@ the 9 that were set aside.
 | --- | --- |
 | `meerkat queue [FILE]` | Scores an incident CSV and saves it as a run. Without FILE it lists the open incidents of every saved run. |
 | `meerkat review INCIDENT GRADE` | Records a grade: `tp`, `bp` or `fp`. |
+| `meerkat review --file FILE` | Records every grade in a CSV. |
 | `meerkat inspect INCIDENT` | Shows one incident with its score, its rule history and its linked incidents. |
 | `meerkat runs` | Lists the saved runs. |
 | `meerkat config [SETTING VALUE]` | Shows the settings, or changes one. |
@@ -149,7 +160,9 @@ on the 282,843 later incidents.
   positives were among them.
 
 `bench/train.py` fits the weights and prints the ranking numbers.
-`bench/close.py` prints the close level numbers.
+`bench/close.py` prints the close level numbers. Both read `GUIDE_Train.csv`,
+which Microsoft publishes on
+[Kaggle](https://www.kaggle.com/datasets/Microsoft/microsoft-security-incident-prediction).
 
 ## Limits
 
