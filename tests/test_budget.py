@@ -1,0 +1,116 @@
+# The budget line, the sample drawn below it and the estimate, on hand computed cases.
+
+import unittest
+
+import pandas as pd
+
+from core import budget, rank, store
+from core.incidents import COLUMNS
+from tests.fixtures import HEADER, plain_row, use_weights
+
+IDS = [f"i{number}" for number in range(10)]
+
+
+def _grades(**graded: str) -> dict[str, str]:
+    return {incident: graded.get(incident, "") for incident in IDS}
+
+
+class BudgetTests(unittest.TestCase):
+    def test_slots_follow_the_budget_and_the_share(self):
+        self.assertEqual(budget.slots(25, 0.1), 2)
+        self.assertEqual(budget.slots(40, 0.2), 8)
+        self.assertEqual(budget.slots(3, 0.1), 1)
+        self.assertEqual(budget.slots(2, 0.9), 1)
+        self.assertEqual(budget.slots(1, 0.5), 0)
+        self.assertEqual(budget.slots(10, 0), 0)
+
+    def test_split_fills_the_budget_from_the_top(self):
+        opened = ["a", "b", "c", "d", "e"]
+        self.assertEqual(list(budget.split(opened, 3, set()).values()),
+                         ["ranked", "ranked", "ranked", "below", "below"])
+        self.assertEqual(set(budget.split(opened, None, set()).values()), {"ranked"})
+        self.assertEqual(set(budget.split(opened, 9, set()).values()), {"ranked"})
+
+    def test_a_drawn_incident_takes_a_place_in_the_budget(self):
+        opened = ["a", "b", "c", "d", "e"]
+        self.assertEqual(budget.split(opened, 3, {"e"}),
+                         {"a": "ranked", "b": "ranked", "c": "below", "d": "below",
+                          "e": "sample"})
+        self.assertEqual(list(budget.split(opened, 3, set(), reserved=1).values()),
+                         ["ranked", "ranked", "below", "below", "below"])
+
+    def test_draw_takes_the_sample_from_below_the_budget(self):
+        sample = budget.draw(IDS, 4, 0.25, [])
+        self.assertEqual(sample["pool"], IDS[3:])
+        self.assertEqual(len(sample["drawn"]), 1)
+        self.assertIn(sample["drawn"][0], IDS[3:])
+        self.assertEqual(sample, budget.draw(IDS, 4, 0.25, []))
+        self.assertEqual(len(budget.draw(IDS, 6, 0.5, [])["drawn"]), 3)
+
+    def test_an_incident_enters_one_pool_only(self):
+        first = budget.draw(IDS, 4, 0.25, [])
+        again = budget.draw(IDS, 4, 0.25, [first])
+        self.assertEqual(again, {"pool": [], "drawn": []})
+        waiting = budget.draw([*IDS, "new"], 4, 0.25, [first])
+        self.assertEqual(waiting, {"pool": [], "drawn": []})
+        graded = [incident for incident in IDS if incident not in first["drawn"]]
+        later = budget.draw([*graded, "new"], 4, 0.25, [first])
+        self.assertEqual(later, {"pool": ["new"], "drawn": ["new"]})
+
+    def test_a_budget_above_the_open_incidents_draws_nothing(self):
+        self.assertEqual(budget.draw(IDS, 25, 0.1, []), {"pool": [], "drawn": []})
+        self.assertEqual(budget.draw(IDS, 4, 0, []), {"pool": [], "drawn": []})
+        self.assertEqual(budget.draw(IDS, 1, 0.5, []), {"pool": [], "drawn": []})
+
+    def test_place_gives_open_incidents_a_status_and_graded_ones_their_record(self):
+        use_weights(self)
+        rows = [plain_row("old", "5", "FalsePositive", "2024-06-09T00:00:00Z"),
+                plain_row("seen", "5", "TruePositive", "2024-06-09T00:01:00Z")]
+        rows += [plain_row(name, "5", time=f"2024-06-10T00:0{minute}:00Z")
+                 for minute, name in enumerate(("a", "b", "c"))]
+        frame = pd.DataFrame(rows, columns=HEADER)
+        scored = rank.score(frame.reindex(columns=list(COLUMNS), fill_value=""))
+        reviews = pd.DataFrame([("t", "seen", "TruePositive", "", 0.5, "sample")],
+                               columns=store.GRADE_COLUMNS)
+        placed = budget.place(scored, reviews, 2, [{"pool": ["a"], "drawn": ["a"]}])
+        self.assertEqual(dict(zip(placed["IncidentId"], placed["status"], strict=True)),
+                         {"c": "ranked", "b": "below", "a": "sample", "seen": "sample",
+                          "old": ""})
+
+    def test_no_graded_sample_gives_no_estimate(self):
+        found = budget.estimate([{"pool": IDS, "drawn": ["i0", "i1"]}], _grades())
+        self.assertEqual(found, {"drawn": 2, "graded": 0, "true_positive": 0,
+                                 "unread_true_positives": None})
+
+    def test_a_clean_sample_still_leaves_an_upper_bound(self):
+        # 0 of 2: the Wilson upper bound is 3.8415 / 5.8415 = 0.658 of a pool of 10
+        grades = _grades(i0="FalsePositive", i1="BenignPositive")
+        found = budget.estimate([{"pool": IDS, "drawn": ["i0", "i1"]}], grades)
+        self.assertEqual((found["graded"], found["true_positive"]), (2, 0))
+        self.assertEqual(found["unread_true_positives"], {"estimate": 0, "low": 0, "high": 7})
+
+    def test_a_true_positive_in_the_sample_scales_to_the_pool(self):
+        # 1 of 2 over a pool of 10 is 5, less the one found; the bound stops at the 8 unread
+        grades = _grades(i0="TruePositive", i1="FalsePositive")
+        found = budget.estimate([{"pool": IDS, "drawn": ["i0", "i1"]}], grades)
+        self.assertEqual(found["unread_true_positives"], {"estimate": 4, "low": 0, "high": 8})
+
+    def test_a_true_positive_read_later_is_taken_off_the_estimate(self):
+        sample = [{"pool": IDS, "drawn": ["i0", "i1"]}]
+        before = budget.estimate(sample, _grades(i0="TruePositive", i1="FalsePositive"))
+        after = budget.estimate(sample, _grades(i0="TruePositive", i1="FalsePositive",
+                                                i5="TruePositive"))
+        self.assertEqual(after["unread_true_positives"]["estimate"],
+                         before["unread_true_positives"]["estimate"] - 1)
+        self.assertEqual(after["unread_true_positives"]["high"], 7)
+
+    def test_a_pool_with_no_graded_sample_is_scaled_by_the_others(self):
+        grades = {**_grades(i0="TruePositive", i1="FalsePositive"), "n0": "", "n1": ""}
+        samples = [{"pool": IDS, "drawn": ["i0", "i1"]}, {"pool": ["n0", "n1"], "drawn": ["n0"]}]
+        found = budget.estimate(samples, grades)
+        self.assertEqual((found["drawn"], found["graded"]), (3, 2))
+        self.assertEqual(found["unread_true_positives"]["estimate"], 5)
+
+
+if __name__ == "__main__":
+    unittest.main()

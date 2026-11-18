@@ -13,7 +13,8 @@ from core.incidents import collapse
 
 GRADES_FILE = "grades.csv"
 SETTINGS_FILE = "settings.json"
-GRADE_COLUMNS = ("time", "IncidentId", "grade", "note", "score", "pile")
+SAMPLE_FILE = "sample.json"
+GRADE_COLUMNS = ("time", "IncidentId", "grade", "note", "score", "status")
 
 
 class StoreError(ValueError):
@@ -96,13 +97,14 @@ def read_settings(runs_dir: Path) -> dict:
     if not isinstance(settings, dict):
         raise StoreError(f"{settings_file}: expected an object")
     for key, value in settings.items():
-        if key == "miss_rate":
+        if key == "budget":
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise StoreError(f"{settings_file}: budget must be a whole number above 0")
+        elif key == "sample_share":
             if (isinstance(value, bool) or not isinstance(value, int | float)
-                    or not math.isfinite(value) or not 0 < value < 1):
-                raise StoreError(f"{settings_file}: miss_rate must be a number between 0 and 1")
-        elif key == "keep_linked":
-            if not isinstance(value, bool):
-                raise StoreError(f"{settings_file}: keep_linked must be true or false")
+                    or not math.isfinite(value) or not 0 <= value < 1):
+                raise StoreError(f"{settings_file}: sample_share must be a number from 0 "
+                                 "up to 1")
         else:
             raise StoreError(f"{settings_file}: unknown setting {key!r}")
     return settings
@@ -113,15 +115,39 @@ def write_settings(runs_dir: Path, settings: dict) -> None:
     (runs_dir / SETTINGS_FILE).write_text(json.dumps(settings, indent=2) + "\n")
 
 
+def save_sample(runs_dir: Path, run_id: str, sample: dict) -> None:
+    (runs_dir / run_id / SAMPLE_FILE).write_text(json.dumps(sample) + "\n")
+
+
+def read_samples(runs_dir: Path) -> list[dict]:
+    found = []
+    for meta in list_runs(runs_dir):
+        sample_file = runs_dir / meta["run"] / SAMPLE_FILE
+        if not sample_file.exists():
+            continue
+        try:
+            sample = json.loads(sample_file.read_text())
+        except (OSError, ValueError) as error:
+            raise StoreError(f"{sample_file}: unreadable ({error})") from None
+        if not (isinstance(sample, dict) and set(sample) == {"pool", "drawn"}
+                and all(isinstance(sample[name], list) for name in ("pool", "drawn"))
+                and all(isinstance(incident, str)
+                        for name in ("pool", "drawn") for incident in sample[name])
+                and set(sample["drawn"]) <= set(sample["pool"])):
+            raise StoreError(f"{sample_file}: expected the pool and the drawn incident ids")
+        found.append(sample)
+    return found
+
+
 def append_grade(runs_dir: Path, incident_id: str, grade: str, note: str,
-                 score: float, pile: str) -> None:
+                 score: float, status: str) -> None:
     grades_file = runs_dir / GRADES_FILE
     with grades_file.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         if os.fstat(handle.fileno()).st_size == 0:
             writer.writerow(GRADE_COLUMNS)
         now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        writer.writerow((now, incident_id, grade, note, repr(score), pile))
+        writer.writerow((now, incident_id, grade, note, repr(score), status))
 
 
 def read_reviews(runs_dir: Path) -> pd.DataFrame:

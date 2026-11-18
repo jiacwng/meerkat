@@ -15,7 +15,6 @@ GRADE_CODES = {
     "bp": "BenignPositive",
     "fp": "FalsePositive",
 }
-DEFAULT_LIMIT = 20
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -67,14 +66,12 @@ def _build_parser() -> argparse.ArgumentParser:
     queue.add_argument("file", nargs="?", type=Path, metavar="FILE",
                        help="incident CSV to score and save as a new run")
     shown = queue.add_mutually_exclusive_group()
-    shown.add_argument("--limit", type=_positive, default=DEFAULT_LIMIT, metavar="N",
-                       help=f"rows shown (default {DEFAULT_LIMIT})")
-    shown.add_argument("--all", action="store_true", help="every row instead of the first N")
+    shown.add_argument("--limit", type=_positive, metavar="N", help="only the first N rows")
+    shown.add_argument("--all", action="store_true",
+                       help="also the incidents below the budget")
     queue.add_argument("--mapping", metavar="NAME_OR_PATH",
                        help="column names and grade words of FILE: defender, sentinel, "
                             "splunk or a TOML file (default defender)")
-    queue.add_argument("--closed", action="store_true",
-                       help="incidents under the close level instead of the queue")
     _add_run(queue)
     _add_json(queue)
     _add_runs_dir(queue)
@@ -106,11 +103,11 @@ def _build_parser() -> argparse.ArgumentParser:
     runs.set_defaults(handler=_runs)
 
     config = sub.add_parser("config", help="show the settings, or change one")
-    config.add_argument("setting", nargs="?", choices=("miss_rate", "keep_linked"),
-                        metavar="SETTING", help="miss_rate or keep_linked")
+    config.add_argument("setting", nargs="?", choices=("budget", "sample_share"),
+                        metavar="SETTING", help="budget or sample_share")
     config.add_argument("value", nargs="?", metavar="VALUE",
-                        help="a number between 0 and 1 for miss_rate, true or false "
-                             "for keep_linked")
+                        help="a whole number above 0 or none for budget, a number from 0 "
+                             "up to 1 for sample_share")
     _add_runs_dir(config)
     config.set_defaults(handler=_config)
     return parser
@@ -139,31 +136,25 @@ def _positive(text: str) -> int:
     return value
 
 
-def _rate(text: str) -> float:
+def _budget(text: str) -> int | None:
+    return None if text == "none" else _positive(text)
+
+
+def _share(text: str) -> float:
     try:
         value = float(text)
     except ValueError:
-        raise argparse.ArgumentTypeError("expected a number between 0 and 1") from None
-    if not 0 < value < 1:
-        raise argparse.ArgumentTypeError("expected a number between 0 and 1")
+        raise argparse.ArgumentTypeError("expected a number from 0 up to 1") from None
+    if not 0 <= value < 1:
+        raise argparse.ArgumentTypeError("expected a number from 0 up to 1")
     return value
 
 
-def _flag(text: str) -> bool:
-    if text not in ("true", "false"):
-        raise argparse.ArgumentTypeError("expected true or false")
-    return text == "true"
-
-
-SETTINGS = {"miss_rate": _rate, "keep_linked": _flag}
-
-
-def _percent(rate: float) -> str:
-    return f"{rate * 100:g}%"
+SETTINGS = {"budget": _budget, "sample_share": _share}
 
 
 def _queue(args: argparse.Namespace) -> None:
-    from core import close, store
+    from core import budget, store
     from core.incidents import read_incidents
     from core.mapping import load_mapping
 
@@ -178,30 +169,37 @@ def _queue(args: argparse.Namespace) -> None:
         run = args.run
         run_ids = in_run["IncidentId"]
 
-    scored, level, entries, settings = _scored(args.runs_dir, incoming)
+    scored, settings = _scored(args.runs_dir, incoming)
+    limit, share = settings["budget"], settings["sample_share"]
     if incoming is not None:
         run = store.save_run(args.runs_dir, incoming, args.file.name, mapping.name)["run"]
-    miss_rate, keep_linked = settings["miss_rate"], settings["keep_linked"]
-    open_incidents = scored[scored["IncidentGrade"] == ""]
+        if limit is not None:
+            opened = scored.loc[scored["IncidentGrade"] == "", "IncidentId"].tolist()
+            sample = budget.draw(opened, limit, share, store.read_samples(args.runs_dir))
+            if sample["pool"]:
+                store.save_sample(args.runs_dir, run, sample)
+    placed, samples = _placed(args.runs_dir, scored, settings)
+
+    open_incidents = placed[placed["IncidentGrade"] == ""]
     if run_ids is not None:
         open_incidents = open_incidents[open_incidents["IncidentId"].isin(run_ids)]
-    closed = open_incidents[open_incidents["pile"] == "closed"]
-    audit = open_incidents[open_incidents["pile"] == "audit"]
-    kept_linked, kept_ungraded_rule = _kept(open_incidents, level, keep_linked)
-    if args.closed:
-        listed = closed
-    else:
-        listed = open_incidents[open_incidents["pile"] != "closed"]
-    shown = listed if args.all else listed.head(args.limit)
+    under = (open_incidents["status"] == "below").to_numpy()
+    open_incidents = open_incidents.iloc[under.argsort(kind="stable")]
+    reading = open_incidents[open_incidents["status"] != "below"]
+    below = open_incidents[open_incidents["status"] == "below"]
+    listed = open_incidents if args.all or args.json else reading
+    shown = listed if args.limit is None else listed.head(args.limit)
+    grades = dict(zip(placed["IncidentId"], placed["IncidentGrade"], strict=True))
+    sampled = budget.estimate(samples, grades)
 
     if args.json:
         rows = [_as_record(row, position)
                 for position, row in enumerate(shown.to_dict("records"), start=1)]
         _print_json({
-            "run": run, "open": len(open_incidents), "closed": len(closed),
-            "audit": len(audit), "close_level": level, "miss_rate": miss_rate,
-            "audit_share": close.AUDIT_SHARE, "keep_linked": keep_linked,
-            "kept_linked": kept_linked, "kept_ungraded_rule": kept_ungraded_rule,
+            "run": run, "open": len(open_incidents), "budget": limit, "sample_share": share,
+            "to_read": len(reading), "below_budget": len(below),
+            "sample": {key: sampled[key] for key in ("drawn", "graded", "true_positive")},
+            "unread_true_positives": sampled["unread_true_positives"],
             "queue": rows})
         return
 
@@ -209,51 +207,42 @@ def _queue(args: argparse.Namespace) -> None:
         print("No open incidents." if run_ids is None
               else f"No open incidents in run {run}.")
         return
-    if not listed.empty:
-        rows = [
-            (str(position), row["IncidentId"], f"{row['score']:.2f}",
-             "audit" if row["pile"] == "audit" else "", row["DetectorId"],
-             _rule_history(row), row["reason"], row["Timestamp"], row["AlertTitle"])
-            for position, row in enumerate(shown.to_dict("records"), start=1)]
-        _print_table(("#", "incident", "score", "pile", "rule", "rule history", "reason",
-                      "time", "title"), rows)
-        kind = "set aside" if args.closed else "in the queue"
-        where = "" if run_ids is None else f", run {run}"
-        print(f"{len(shown)} of {len(listed)} incidents {kind}{where}")
-    if level is None:
-        print(_no_level(entries, miss_rate))
-        return
-    if args.closed:
-        print(f"In the queue as audit: {len(audit)}")
-    else:
-        print(f"Set aside under the close level: {len(closed)} "
-              f"(target: at most {_percent(miss_rate)} of true positives)")
-        print(f"Shown above as audit: {len(audit)}")
-    if kept_linked:
-        print(f"Kept in the queue for a link to a true positive: {kept_linked}")
-    if kept_ungraded_rule:
-        print(f"Kept in the queue for a rule never graded: {kept_ungraded_rule}")
+    rows = [
+        (str(position), row["IncidentId"], f"{row['score']:.2f}", _mark(row),
+         row["DetectorId"], _rule_history(row), row["reason"], row["Timestamp"],
+         row["AlertTitle"])
+        for position, row in enumerate(shown.to_dict("records"), start=1)]
+    _print_table(("#", "incident", "score", "status", "rule", "rule history", "reason",
+                  "time", "title"), rows, int((shown["status"] != "below").sum()))
+    if len(shown) < len(listed):
+        print(f"{len(shown)} of {len(listed)} shown")
+    total = f"Total: {len(open_incidents)}"
+    if limit is not None:
+        total += f" (to read: {len(reading)}, below the budget: {len(below)})"
+    total += f"  budget: {'none' if limit is None else limit}"
+    print(total if run_ids is None else f"{total}  run: {run}")
+    marks = [_mark(row) for row in below.to_dict("records")]
+    if "linked" in marks or "new rule" in marks:
+        print(f"Below the budget: {marks.count('linked')} linked to a true positive, "
+              f"{marks.count('new rule')} with a rule never graded")
+    if run_ids is None and sampled["drawn"]:
+        print(_sample_line(sampled))
 
 
-def _kept(open_incidents, level: float | None, keep_linked: bool) -> tuple[int, int]:
-    if level is None:
-        return 0, 0
-    under = open_incidents[open_incidents["score"] < level]
-    linked = keep_linked & (under["linked_true_positive"] >= 1)
-    ungraded_rule = ~linked & (under["rule_graded"] == 0)
-    return int(linked.sum()), int(ungraded_rule.sum())
+def _mark(row: dict) -> str:
+    if row["status"] != "below":
+        return "sample" if row["status"] == "sample" else ""
+    if row["linked_true_positive"] >= 1:
+        return "linked"
+    return "new rule" if row["rule_graded"] == 0 else ""
 
 
-def _no_level(entries, miss_rate: float) -> str:
-    from core import close
-
-    if len(entries) < close.needed(miss_rate):
-        return (f"Nothing closed yet: {len(entries)} of {close.needed(miss_rate)} "
-                "graded true positives.")
-    lowest = entries[entries["score"] == entries["score"].min()]
-    if (lowest["weight"] > 1).any():
-        return "Nothing closed: a true positive found in the audit sample counts for ten."
-    return "Nothing closed: too many graded true positives share the lowest score."
+def _sample_line(sampled: dict) -> str:
+    unread = sampled["unread_true_positives"]
+    if unread is None:
+        return f"Sample: {sampled['drawn']} drawn, 0 graded"
+    return (f"Sample: {sampled['graded']} graded, {sampled['true_positive']} true positive. "
+            f"Unread true positives: {unread['low']} to {unread['high']} (95%)")
 
 
 def _config(args: argparse.Namespace) -> None:
@@ -267,87 +256,85 @@ def _config(args: argparse.Namespace) -> None:
 
     previous = settings[args.setting]
     saved = store.read_settings(args.runs_dir)
-    saved[args.setting] = args.value
+    if args.value is None:
+        saved.pop(args.setting, None)
+    else:
+        saved[args.setting] = args.value
     store.write_settings(args.runs_dir, saved)
     print(_setting_line(args.setting, args.value))
-    if previous == args.value:
-        return
-    if args.setting == "miss_rate":
-        print(f"Miss rate changed from {_percent(previous)} to {_percent(args.value)}. "
-              "Earlier grades keep the pile they were given.")
-    elif args.value:
-        print("Incidents linked to a true positive are now kept in the queue.")
-    else:
-        print("Incidents linked to a true positive can now be closed.")
+    if args.setting == "budget" and previous is None and args.value is not None:
+        print("A sample is drawn from the next file given to meerkat queue.")
 
 
-def _setting_line(name: str, value: float | bool) -> str:
+def _setting_line(name: str, value: float | None) -> str:
     return f"{name}={str(value).lower()}"
 
 
 def _settings(runs_dir: Path) -> dict:
-    from core import close, store
+    from core import budget, store
 
-    return {"miss_rate": close.DEFAULT_MISS_RATE, "keep_linked": close.DEFAULT_KEEP_LINKED,
+    return {"budget": None, "sample_share": budget.DEFAULT_SAMPLE_SHARE,
             **store.read_settings(runs_dir)}
 
 
 def _review(args: argparse.Namespace) -> None:
-    from core import close, store
+    from core import budget, store
     from core.incidents import read_grades
 
     if args.file is None:
         grades = [(args.incident, GRADE_CODES[args.grade])]
     else:
         grades = read_grades(args.file)
-    scored, level, _, settings = _scored(args.runs_dir)
-    scored = scored.set_index("IncidentId")
+    scored, settings = _scored(args.runs_dir)
+    placed, _ = _placed(args.runs_dir, scored, settings)
+    placed = placed.set_index("IncidentId")
     for incident, _ in grades:
-        if incident not in scored.index:
+        if incident not in placed.index:
             raise store.StoreError(f"no incident {incident!r} in {args.runs_dir}")
     reviews = store.read_reviews(args.runs_dir)
     first = reviews.drop_duplicates("IncidentId").set_index("IncidentId")
 
     true_positives = []
     for incident, grade in grades:
-        found = scored.loc[incident]
         if incident in first.index:
-            score, pile = float(first.at[incident, "score"]), first.at[incident, "pile"]
-        elif found["IncidentGrade"] != "":
-            score, pile = float(found["score"]), "queue"
+            score, status = float(first.at[incident, "score"]), first.at[incident, "status"]
         else:
-            score = float(found["score"])
-            pile = close.pile_of(incident, score, level, int(found["linked_true_positive"]),
-                                 settings["keep_linked"], int(found["rule_graded"]))
-        store.append_grade(args.runs_dir, incident, grade, args.note, score, pile)
-        if grade == "TruePositive":
-            true_positives.append(pile)
+            score, status = float(placed.at[incident, "score"]), placed.at[incident, "status"]
+        store.append_grade(args.runs_dir, incident, grade, args.note, score, status)
+        if grade == budget.TRUE_POSITIVE:
+            true_positives.append(status)
     if args.file is None:
         print(f"{_printable(args.incident)} graded {grades[0][1]}")
-    else:
-        set_aside = true_positives.count("closed")
-        print(f"{len(grades)} incidents graded from {args.file}")
-        print(f"True positives: {len(true_positives) - set_aside} in the queue, "
-              f"{set_aside} set aside")
+        return
+    print(f"{len(grades)} incidents graded from {args.file}")
+    line = f"True positives: {len(true_positives)}"
+    if settings["budget"] is not None:
+        ranked, sample, below = (true_positives.count(name) for name in budget.STATUSES)
+        line += f" (to read: {ranked}, sample: {sample}, below the budget: {below})"
+    print(line)
 
 
 def _scored(runs_dir: Path, incoming=None):
-    from core import close, rank, store
+    from core import rank, store
 
-    reviews = store.read_reviews(runs_dir)
-    scored = rank.score(store.load_history(runs_dir, incoming))
     settings = _settings(runs_dir)
-    entries = close.calibration(scored, reviews)
-    level = close.close_level(entries, settings["miss_rate"])
-    placed = close.place(scored, reviews, level, settings["keep_linked"])
-    return placed, level, entries, settings
+    return rank.score(store.load_history(runs_dir, incoming)), settings
+
+
+def _placed(runs_dir: Path, scored, settings: dict):
+    from core import budget, store
+
+    samples = store.read_samples(runs_dir)
+    placed = budget.place(scored, store.read_reviews(runs_dir), settings["budget"], samples)
+    return placed, samples
 
 
 def _inspect(args: argparse.Namespace) -> None:
     from core import features, store
     from core.incidents import DESCRIPTIVE, LINKS, SEPARATOR
 
-    scored, _, _, _ = _scored(args.runs_dir)
+    scored, settings = _scored(args.runs_dir)
+    scored, _ = _placed(args.runs_dir, scored, settings)
     history = scored
     if args.run is not None:
         _, in_run = store.load_run(args.runs_dir, args.run)
@@ -378,7 +365,7 @@ def _inspect(args: argparse.Namespace) -> None:
         ("without links", f"{row['score_without_links']:.2f}"),
         ("as a new rule", f"{row['score_as_new_rule']:.2f}"),
         ("reason", row["reason"]),
-        ("pile", row["pile"]),
+        ("status", row["status"]),
         ("rule history", _rule_history(row)),
         ("linked incidents", _linked(row)),
         *((name, row[name].replace(SEPARATOR, ", ")) for name in LINKS),
@@ -438,7 +425,8 @@ def _print_json(value) -> None:
     print(json.dumps(value, indent=2))
 
 
-def _print_table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
+def _print_table(header: tuple[str, ...], rows: list[tuple[str, ...]],
+                 first_below: int | None = None) -> None:
     rows = [tuple(_printable(cell) for cell in row) for row in rows]
     widths = [max(len(cell) for cell in column) for column in zip(header, *rows, strict=True)]
     # on a terminal only the last column is cut to fit; a pipe gets every character
@@ -446,7 +434,9 @@ def _print_table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
     edge = shutil.get_terminal_size().columns if sys.stdout.isatty() else None
     if edge is not None and edge <= fixed:
         edge = None
-    for line in (header, *rows):
+    for number, line in enumerate((header, *rows)):
+        if number - 1 == first_below:
+            print("Below the budget:")
         cells = (cell.ljust(width) for cell, width in zip(line, widths, strict=True))
         print("  ".join(cells).rstrip()[:edge])
 

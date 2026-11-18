@@ -4,7 +4,6 @@ import contextlib
 import csv
 import io
 import json
-import math
 import os
 import subprocess
 import sys
@@ -13,17 +12,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from core import close, store
+from core import budget, store
 from meerkat import __version__, cli
 from meerkat.cli import main
 from tests.fixtures import (
     HEADER,
     ROWS,
-    WEIGHTS,
-    calibration_rows,
-    linked_rows,
+    budget_rows,
     plain_row,
-    sampled_ids,
     use_weights,
     write_csv,
 )
@@ -59,8 +55,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual([line.split()[1] for line in lines[1:4]], ["201", "202", "200"])
         self.assertIn("2 of 2 true positive", lines[1])
         self.assertIn("never graded", lines[2])
-        self.assertIn("3 of 3 incidents in the queue", lines[4])
-        self.assertEqual(lines[5], "Nothing closed yet: 2 of 19 graded true positives.")
+        self.assertEqual(lines[4:], ["Total: 3  budget: none"])
         self.assertNotIn("100", [line.split()[1] for line in lines[1:4]])
 
     def test_queue_table_and_json_carry_the_reason(self):
@@ -93,7 +88,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self._queue_ids("--limit", "1"), ["201"])
         self.assertEqual(self._queue_ids("--all"), ["201", "202", "200"])
         code, out, _ = self._run("queue", "--limit", "1")
-        self.assertIn("1 of 3 incidents in the queue", out)
+        self.assertIn("\n1 of 3 shown\nTotal: 3  budget: none\n", out)
 
     def _three_runs(self) -> list[str]:
         days = ("2024-06-01", "2024-06-02", "2024-06-03")
@@ -106,14 +101,14 @@ class CliTests(unittest.TestCase):
         first, _, _ = self._three_runs()
         self.assertEqual(self._queue_ids(), ["c1", "b1", "b2", "a1", "a2"])
         out = self._run("queue")[1]
-        self.assertIn("\n5 of 5 incidents in the queue\n", out)
+        self.assertIn("\nTotal: 5  budget: none\n", out)
         report = json.loads(self._run("queue", "--json")[1])
-        self.assertEqual((report["run"], report["open"], report["closed"], report["audit"]),
-                         (None, 5, 0, 0))
+        self.assertEqual((report["run"], report["open"], report["to_read"],
+                          report["below_budget"]), (None, 5, 5, 0))
         self.assertEqual(self._queue_ids("--limit", "2"), ["c1", "b1"])
-        self.assertIn("2 of 5 incidents in the queue", self._run("queue", "--limit", "2")[1])
+        self.assertIn("\n2 of 5 shown\n", self._run("queue", "--limit", "2")[1])
         self.assertEqual(self._queue_ids("--run", first), ["a1", "a2"])
-        self.assertIn(f"\n2 of 2 incidents in the queue, run {first}\n",
+        self.assertIn(f"\nTotal: 2  budget: none  run: {first}\n",
                       self._run("queue", "--run", first)[1])
         report = json.loads(self._run("queue", "--run", first, "--json")[1])
         self.assertEqual((report["run"], report["open"]), (first, 2))
@@ -140,7 +135,7 @@ class CliTests(unittest.TestCase):
         grades.write_text("IncidentId,IncidentGrade\n200,FalsePositive\n201,TruePositive\n")
         code, out, _ = self._run("review", "--file", str(grades))
         self.assertEqual((code, out), (0, f"2 incidents graded from {grades}\n"
-                                          "True positives: 1 in the queue, 0 set aside\n"))
+                                          "True positives: 1\n"))
         self.assertEqual(self._queue_ids(), ["202"])
         record = json.loads(self._run("inspect", "201", "--json")[1])
         self.assertEqual(record["IncidentGrade"], "TruePositive")
@@ -320,329 +315,242 @@ class CliTests(unittest.TestCase):
                 self.assertNotIn("‮", out)
                 self.assertNotIn("\r", out)
 
-    def _calibrate(self, audit: int, closed: int, graded: int = 19) -> None:
-        rows = calibration_rows(audit, closed)
-        self._run("queue", str(write_csv(self.tmp / "many.csv", rows)))
-        for number in range(graded):
-            self.assertEqual(self._run("review", f"t{number}", "tp")[0], 0)
-
     def _queue_json(self, *argv: str) -> dict:
         return json.loads(self._run("queue", "--json", *argv)[1])
 
-    def _calibrate_linked(self) -> str:
-        self._run("queue", str(write_csv(self.tmp / "many.csv", linked_rows(0, 2))))
-        for number in range(19):
-            self.assertEqual(self._run("review", f"t{number}", "tp")[0], 0)
-        return sampled_ids(False, 1)[0]
+    def _grade_rows(self) -> list[dict]:
+        with (self.runs_dir / "grades.csv").open(newline="", encoding="utf-8") as handle:
+            return list(csv.DictReader(handle))
 
-    def test_footer_without_level_counts_true_positives(self):
-        code, out, _ = self._run("queue", str(self.csv))
-        self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines()[-1],
-                         "Nothing closed yet: 2 of 19 graded true positives.")
-        self._calibrate(2, 2, graded=0)
+    def _budget(self, budget: str = "4", rows=None) -> str:
+        self._run("config", "budget", budget)
+        rows = budget_rows() if rows is None else rows
+        self._run("queue", str(write_csv(self.tmp / "many.csv", rows)))
+        samples = store.read_samples(self.runs_dir)
+        return samples[0]["drawn"][0] if samples and samples[0]["drawn"] else ""
+
+    def test_without_a_budget_every_open_incident_is_listed(self):
+        self._run("queue", str(write_csv(self.tmp / "many.csv", budget_rows())))
+        lines = self._run("queue")[1].splitlines()
+        self.assertEqual(lines[0].split()[:4], ["#", "incident", "score", "status"])
+        self.assertEqual(len(lines), 13)
+        self.assertEqual(lines[-1], "Total: 11  budget: none")
+        report = self._queue_json()
+        self.assertEqual({key: report[key] for key in
+                          ("open", "budget", "sample_share", "to_read", "below_budget",
+                           "sample", "unread_true_positives")},
+                         {"open": 11, "budget": None, "sample_share": 0.1, "to_read": 11,
+                          "below_budget": 0, "unread_true_positives": None,
+                          "sample": {"drawn": 0, "graded": 0, "true_positive": 0}})
+        self.assertEqual({row["status"] for row in report["queue"]}, {"ranked"})
+        self.assertFalse(list(self.runs_dir.glob("*/sample.json")))
+
+    def test_a_budget_lists_the_top_and_one_sampled_incident(self):
+        sampled = self._budget()
+        self.assertRegex(sampled, r"^l\d$")
+        lines = self._run("queue")[1].splitlines()
+        self.assertEqual([line.split()[1] for line in lines[1:5]], ["h2", "h1", "h0", sampled])
+        self.assertEqual(lines[4].split()[3], "sample")
+        self.assertEqual(lines[5:], ["Total: 11 (to read: 4, below the budget: 7)  budget: 4",
+                                     "Sample: 1 drawn, 0 graded"])
+        report = self._queue_json()
+        self.assertEqual((report["to_read"], report["below_budget"], report["sample"]["drawn"]),
+                         (4, 7, 1))
+        self.assertEqual([row["status"] for row in report["queue"]],
+                         ["ranked"] * 3 + ["sample"] + ["below"] * 7)
+        self.assertEqual([row["position"] for row in report["queue"]], list(range(1, 12)))
+
+    def test_all_lists_the_incidents_below_the_budget_under_a_label(self):
+        self._budget()
+        lines = self._run("queue", "--all")[1].splitlines()
+        self.assertEqual(lines[5], "Below the budget:")
+        self.assertEqual(len(lines), 15)
+        self.assertEqual([line.split()[0] for line in lines[6:13]],
+                         [str(number) for number in range(5, 12)])
+        self.assertNotIn("Below the budget:", self._run("queue")[1])
+
+    def test_limit_cuts_the_list_and_json_lists_every_open_incident(self):
+        self._budget()
+        lines = self._run("queue", "--limit", "2")[1].splitlines()
+        self.assertEqual(len(lines), 6)
+        self.assertEqual(lines[3], "2 of 4 shown")
+        self.assertEqual(len(self._queue_json()["queue"]), 11)
+        self.assertEqual(len(self._queue_json("--limit", "5")["queue"]), 5)
+
+    def test_the_sample_stays_when_the_queue_or_the_file_is_read_again(self):
+        sampled = self._budget()
+        for _ in range(2):
+            rows = self._queue_json()["queue"]
+            self.assertEqual([row["IncidentId"] for row in rows if row["status"] == "sample"],
+                             [sampled])
+        self._run("queue", str(self.tmp / "many.csv"))
+        self.assertEqual(len(list(self.runs_dir.glob("*/sample.json"))), 1)
+        self.assertEqual(self._queue_json()["sample"]["drawn"], 1)
+
+    def test_a_later_file_draws_from_its_own_incidents(self):
+        self._run("review", self._budget(), "fp")
+        later = [plain_row(f"n{i}", "9", time=f"2024-06-11T00:0{i}:00Z") for i in range(3)]
+        self._run("queue", str(write_csv(self.tmp / "later.csv", later)))
+        samples = store.read_samples(self.runs_dir)
+        self.assertEqual(len(samples), 2)
+        self.assertEqual(samples[1]["pool"], ["n2", "n1", "n0"])
+        report = self._queue_json()
+        self.assertEqual((report["to_read"], report["sample"]["drawn"]), (4, 2))
+        self.assertEqual([row["IncidentId"] for row in report["queue"]
+                          if row["status"] == "sample"], samples[1]["drawn"])
+
+    def test_no_new_sample_while_an_earlier_one_waits_for_its_grade(self):
+        sampled = self._budget()
+        later = [plain_row(f"n{i}", "9", time=f"2024-06-11T00:0{i}:00Z") for i in range(3)]
+        self._run("queue", str(write_csv(self.tmp / "later.csv", later)))
+        self.assertEqual(len(store.read_samples(self.runs_dir)), 1)
+        report = self._queue_json()
+        self.assertEqual((report["to_read"], report["sample"]["drawn"]), (4, 1))
+        self.assertEqual([row["IncidentId"] for row in report["queue"]
+                          if row["status"] == "sample"], [sampled])
+
+    def test_a_graded_sample_gives_the_estimate(self):
+        sampled = self._budget()
+        self._run("review", sampled, "fp")
+        self.assertEqual(self._run("queue")[1].splitlines()[-2:], [
+            "Total: 10 (to read: 4, below the budget: 6)  budget: 4",
+            "Sample: 1 graded, 0 true positive. Unread true positives: 0 to 7 (95%)"])
+        report = self._queue_json()
+        self.assertEqual(report["sample"], {"drawn": 1, "graded": 1, "true_positive": 0})
+        self.assertEqual(report["unread_true_positives"], {"estimate": 0, "low": 0, "high": 7})
+
+    def test_a_true_positive_in_the_sample_raises_the_estimate(self):
+        sampled = self._budget()
+        self._run("review", sampled, "tp")
+        self.assertEqual(self._queue_json()["unread_true_positives"],
+                         {"estimate": 7, "low": 0, "high": 7})
+
+    def test_a_budget_above_the_open_incidents_reads_them_all(self):
+        self.assertEqual(self._budget("25"), "")
+        report = self._queue_json()
+        self.assertEqual((report["to_read"], report["below_budget"]), (11, 0))
         self.assertEqual(self._run("queue")[1].splitlines()[-1],
-                         "Nothing closed: too many graded true positives share the lowest score.")
-        self.assertEqual(out.splitlines()[0].split()[:4], ["#", "incident", "score", "pile"])
-        report = self._queue_json()
-        self.assertEqual((report["closed"], report["audit"], report["close_level"]),
-                         (0, 0, None))
-        self.assertEqual(report["open"], 27)
+                         "Total: 11 (to read: 11, below the budget: 0)  budget: 25")
 
-    def test_graded_history_in_the_file_closes_incidents_without_a_review(self):
-        closed_id = sampled_ids(False, 1)[0]
-        first, second, third = (f"2024-06-0{day}T00:00:00Z" for day in (7, 8, 9))
-        rows = [plain_row(f"p{i}", "3", "TruePositive", first) for i in range(19)]
-        rows += [plain_row("q0", "1", "TruePositive", second)]
-        rows += [plain_row(f"q{i}", "1", "FalsePositive", first) for i in range(1, 5)]
-        rows += [plain_row(f"f{i}", "5", "FalsePositive", first) for i in range(10)]
-        rows += [plain_row("keep", "1", time=third), plain_row(closed_id, "5", time=third)]
-        self._run("queue", str(write_csv(self.tmp / "graded.csv", rows)))
-        report = self._queue_json("--closed")
-        self.assertIsNotNone(report["close_level"])
-        self.assertEqual([row["IncidentId"] for row in report["queue"]], [closed_id])
-        self.assertEqual([row["IncidentId"] for row in self._queue_json()["queue"]], ["keep"])
-        self.assertFalse((self.runs_dir / "grades.csv").exists())
+    def _marked_rows(self) -> list:
+        rows = [list(row) for row in budget_rows()]
+        rows += [list(plain_row("linked", "9", time="2024-06-10T02:00:00Z")),
+                 list(plain_row("fresh", "42", time="2024-06-10T02:01:00Z"))]
+        for row in rows:
+            if row[1] in ("p0", "linked"):
+                row[9] = "ann"
+        return rows
 
-    def test_footer_with_a_level_and_the_audit_rows(self):
-        self._calibrate(3, 2)
-        audit_ids, closed_ids = sampled_ids(True, 3), sampled_ids(False, 2)
-        code, out, _ = self._run("queue")
-        lines = out.splitlines()
+    def test_a_link_and_a_new_rule_are_marked_below_the_budget(self):
+        self._run("config", "sample_share", "0")
+        self.assertEqual(self._budget("3", self._marked_rows()), "")
+        lines = self._run("queue", "--all")[1].splitlines()
+        marks = {line.split()[1]: line.split()[3:5] for line in lines[5:15]}
+        self.assertEqual(marks["fresh"], ["new", "rule"])
+        self.assertEqual(marks["linked"][0], "linked")
+        self.assertEqual(marks["l0"][0], "9")
+        self.assertEqual(lines[-2:], [
+            "Total: 13 (to read: 3, below the budget: 10)  budget: 3",
+            "Below the budget: 1 linked to a true positive, 1 with a rule never graded"])
+        self.assertEqual(self._run("queue")[1].splitlines()[-1], lines[-1])
+        self.assertNotIn("linked", self._run("queue", "--limit", "3")[1].splitlines()[1])
+
+    def test_review_records_the_status_and_a_regrade_keeps_it(self):
+        sampled = self._budget()
+        below = next(row["IncidentId"] for row in self._queue_json()["queue"]
+                     if row["status"] == "below")
+        score = json.loads(self._run("inspect", sampled, "--json")[1])["score"]
+        for incident in (sampled, "h2", below, "p0"):
+            self._run("review", incident, "bp")
+        self._run("review", sampled, "tp")
+        rows = self._grade_rows()
+        self.assertEqual([row["status"] for row in rows],
+                         ["sample", "ranked", "below", "", "sample"])
+        mine = [row for row in rows if row["IncidentId"] == sampled]
+        self.assertEqual([row["grade"] for row in mine], ["BenignPositive", "TruePositive"])
+        self.assertEqual({round(float(row["score"]), 4) for row in mine}, {score})
+
+    def test_review_file_counts_the_true_positives_by_status(self):
+        sampled = self._budget()
+        below = next(row["IncidentId"] for row in self._queue_json()["queue"]
+                     if row["status"] == "below")
+        grades = self.tmp / "grades.csv"
+        grades.write_text("IncidentId,IncidentGrade\nh0,TruePositive\nh1,FalsePositive\n"
+                          f"{sampled},TruePositive\n{below},TruePositive\n")
+        self.assertEqual(self._run("review", "--file", str(grades))[1],
+                         f"4 incidents graded from {grades}\n"
+                         "True positives: 3 (to read: 1, sample: 1, below the budget: 1)\n")
+
+    def test_inspect_shows_the_status(self):
+        sampled = self._budget()
+        self.assertRegex(self._run("inspect", sampled)[1],
+                         r"reason\s+rule history lowers it\nstatus\s+sample\n")
+        self.assertEqual(json.loads(self._run("inspect", "h2", "--json")[1])["status"], "ranked")
+        self._run("review", sampled, "fp")
+        self.assertRegex(self._run("inspect", sampled)[1], r"status\s+sample\n")
+        self.assertEqual(json.loads(self._run("inspect", "p0", "--json")[1])["status"], "")
+
+    def test_a_run_view_has_no_sample_line(self):
+        self._budget()
+        run = store.list_runs(self.runs_dir)[-1]["run"]
         self.assertEqual(
-            lines[-2], "Set aside under the close level: 2 (target: at most 5% of true positives)")
-        self.assertEqual(lines[-1], "Shown above as audit: 3")
-        self.assertIn("4 of 4 incidents in the queue", lines[-3])
-        shown = {line.split()[1]: line.split() for line in lines[1:-3]}
-        self.assertEqual(set(shown), {"t19", *audit_ids})
-        self.assertNotIn("audit", shown["t19"])
-        for incident in audit_ids:
-            self.assertEqual(shown[incident][3], "audit")
-        self.assertFalse(set(closed_ids) & set(shown))
-
-    def test_json_reports_the_level_and_the_pile_of_each_row(self):
-        self._calibrate(3, 2)
-        report = self._queue_json()
-        self.assertAlmostEqual(report["close_level"], 1 / (1 + math.exp(0.25)))
-        self.assertEqual(
-            {key: report[key] for key in
-             ("open", "closed", "audit", "miss_rate", "audit_share")},
-            {"open": 6, "closed": 2, "audit": 3, "miss_rate": 0.05, "audit_share": 0.1})
-        self.assertEqual(sorted(row["pile"] for row in report["queue"]),
-                         ["audit", "audit", "audit", "queue"])
-        closed = self._queue_json("--closed")
-        self.assertEqual({row["pile"] for row in closed["queue"]}, {"closed"})
-        self.assertEqual({row["IncidentId"] for row in closed["queue"]},
-                         set(sampled_ids(False, 2)))
-        self.assertEqual(closed["open"], 6)
-
-    def test_closed_lists_the_pile_with_limit_and_all(self):
-        self._calibrate(0, 3)
-        code, out, _ = self._run("queue", "--closed", "--limit", "2")
-        lines = out.splitlines()
-        self.assertEqual(lines[0].split()[:4], ["#", "incident", "score", "pile"])
-        self.assertEqual(len(lines), 5)
-        self.assertIn("2 of 3 incidents set aside", lines[3])
-        self.assertEqual(len(self._queue_json("--closed", "--all")["queue"]), 3)
-        self.assertEqual(len(self._queue_json("--closed", "--limit", "1")["queue"]), 1)
-
-    def test_an_empty_queue_with_closed_incidents_prints_the_footer_only(self):
-        self._calibrate(0, 3)
-        self._run("review", "t19", "tp")
-        code, out, _ = self._run("queue")
-        self.assertEqual(code, 0)
-        self.assertEqual(
-            out, "Set aside under the close level: 3 (target: at most 5% of true positives)\n"
-                 "Shown above as audit: 0\n")
-
-    def test_a_true_positive_graded_among_the_closed_lowers_the_level(self):
-        self._calibrate(0, 3)
-        self._run("review", "t19", "tp")
-        before = self._queue_json()
-        self.assertEqual(before["closed"], 3)
-        self._run("review", sampled_ids(False, 1)[0], "tp")
-        after = self._queue_json()
-        self.assertLess(after["close_level"], before["close_level"])
-        self._run("review", sampled_ids(False, 2)[1], "tp")
-        self.assertLess(self._queue_json()["close_level"], after["close_level"])
+            self._run("queue", "--run", run)[1].splitlines()[-1],
+            f"Total: 11 (to read: 4, below the budget: 7)  budget: 4  run: {run}")
 
     def test_no_open_incidents_prints_plain_message(self):
-        self._calibrate(0, 0)
-        self._run("review", "t19", "tp")
+        self._budget()
+        for row in self._queue_json()["queue"]:
+            self._run("review", row["IncidentId"], "fp")
         self.assertEqual(self._run("queue")[1], "No open incidents.\n")
-
-    def test_review_records_the_score_and_pile_and_a_regrade_keeps_them(self):
-        self._calibrate(3, 2)
-        audit_id = sampled_ids(True, 1)[0]
-        score = json.loads(self._run("inspect", audit_id, "--json")[1])["score"]
-        self._run("review", audit_id, "bp")
-        self._run("review", "t19", "fp")
-        self._run("review", audit_id, "tp")
-        with (self.runs_dir / "grades.csv").open(newline="", encoding="utf-8") as handle:
-            rows = list(csv.DictReader(handle))
-        mine = [row for row in rows if row["IncidentId"] == audit_id]
-        self.assertEqual([row["grade"] for row in mine], ["BenignPositive", "TruePositive"])
-        self.assertEqual({row["pile"] for row in mine}, {"audit"})
-        self.assertEqual({round(float(row["score"]), 4) for row in mine}, {score})
-        last = next(row for row in rows if row["IncidentId"] == "t19")
-        self.assertEqual(last["pile"], "queue")
-        # a true positive found in the audit weighs 10 and takes the level away
-        report = self._queue_json()
-        self.assertIsNone(report["close_level"])
-        self.assertEqual((report["closed"], report["audit"]), (0, 0))
-
-    def test_review_of_file_graded_true_positive_keeps_level(self):
-        graded_id = sampled_ids(True, 1)[0]
-        first, second, third = (f"2024-06-0{day}T00:00:00Z" for day in (7, 8, 9))
-        rows = [plain_row(f"p{i}", "3", "TruePositive", first) for i in range(38)]
-        rows += [plain_row(f"f{i}", "5", "FalsePositive", first) for i in range(10)]
-        rows += [plain_row(graded_id, "5", "TruePositive", second),
-                 plain_row("mid", "6", "TruePositive", second),
-                 plain_row("other", "6", "FalsePositive", first),
-                 plain_row("open", "3", time=third)]
-        self._run("queue", str(write_csv(self.tmp / "graded.csv", rows)))
-        level = self._queue_json()["close_level"]
-        self.assertIsNotNone(level)
-        score = json.loads(self._run("inspect", graded_id, "--json")[1])["score"]
-        self.assertLess(score, level)
-        self._run("review", graded_id, "tp")
-        self.assertEqual(self._queue_json()["close_level"], level)
-        with (self.runs_dir / "grades.csv").open(newline="", encoding="utf-8") as handle:
-            rows = list(csv.DictReader(handle))
-        self.assertEqual([row["pile"] for row in rows], ["queue"])
-
-    def test_footer_names_the_audit_sample_when_it_removes_the_level(self):
-        self._calibrate(3, 2)
-        self._run("review", sampled_ids(True, 1)[0], "tp")
-        self.assertEqual(
-            self._run("queue")[1].splitlines()[-1],
-            "Nothing closed: a true positive found in the audit sample counts for ten.")
-
-    def test_a_graded_incident_shows_the_pile_of_its_grade_row(self):
-        self._calibrate(3, 2)
-        audit_id = sampled_ids(True, 1)[0]
-        self._run("review", audit_id, "fp")
-        code, out, _ = self._run("inspect", audit_id)
-        self.assertRegex(out, r"grade\s+FalsePositive\n")
-        self.assertRegex(out, r"pile\s+audit\n")
-        self.assertEqual(json.loads(self._run("inspect", audit_id, "--json")[1])["pile"],
-                         "audit")
-        self.assertEqual(json.loads(self._run("inspect", "t0", "--json")[1])["pile"],
-                         "queue")
-        closed_id = sampled_ids(False, 1)[0]
-        self.assertRegex(self._run("inspect", closed_id)[1], r"reason\s+rule history lowers it\npile\s+closed\n")
-        self.assertEqual(json.loads(self._run("inspect", closed_id, "--json")[1])["pile"],
-                         "closed")
-
-    def test_miss_rate_is_saved_and_used_by_later_commands(self):
-        self._run("queue", str(self.csv))
-        self._run("config", "miss_rate", "0.01")
-        self.assertTrue((self.runs_dir / "settings.json").exists())
-        self.assertEqual(self._queue_json()["miss_rate"], 0.01)
-        self.assertEqual(self._run("queue")[1].splitlines()[-1],
-                         "Nothing closed yet: 2 of 99 graded true positives.")
-        self.assertEqual(self._run("inspect", "200")[0], 0)
-
-    def test_a_quarter_percent_rate_is_shown_as_it_is(self):
-        self._calibrate(3, 2)
-        self._run("config", "miss_rate", "0.025")
-        self.assertIn("(target: at most 2.5% of true positives)", self._run("queue")[1])
-        self._run("config", "miss_rate", "0.005")
-        self.assertIn("of 199 graded", self._run("queue")[1])
-        self._run("config", "miss_rate", "0.1")
-        self.assertIn("(target: at most 10% of true positives)", self._run("queue")[1])
-
-    def test_review_records_the_pile_under_the_saved_miss_rate(self):
-        self._calibrate(3, 2)
-        closed_id = sampled_ids(False, 1)[0]
-        self.assertEqual(self._queue_json()["closed"], 2)
-        self._run("config", "miss_rate", "0.01")
-        report = self._queue_json()
-        self.assertEqual((report["closed"], report["audit"], report["close_level"]),
-                         (0, 0, None))
-        self._run("review", closed_id, "fp")
-        with (self.runs_dir / "grades.csv").open(newline="", encoding="utf-8") as handle:
-            rows = list(csv.DictReader(handle))
-        self.assertEqual(rows[-1]["pile"], "queue")
-        self.assertEqual(json.loads(self._run("inspect", closed_id, "--json")[1])["pile"],
-                         "queue")
 
     def test_config_prints_the_defaults_on_an_empty_runs_folder(self):
         code, out, err = self._run("config")
         self.assertEqual((code, err), (0, ""))
-        self.assertEqual(out, f"miss_rate={close.DEFAULT_MISS_RATE}\nkeep_linked=true\n")
+        self.assertEqual(out, f"budget=none\nsample_share={budget.DEFAULT_SAMPLE_SHARE}\n")
         self.assertFalse(self.runs_dir.exists())
 
-    def test_config_sets_and_shows_each_setting(self):
-        self.assertEqual(self._run("config", "miss_rate", "0.02")[1].splitlines()[0],
-                         "miss_rate=0.02")
-        self.assertEqual(self._run("config", "keep_linked", "false")[1].splitlines()[0],
-                         "keep_linked=false")
-        self.assertEqual(self._run("config")[1], "miss_rate=0.02\nkeep_linked=false\n")
+    def test_config_sets_shows_and_clears_each_setting(self):
+        message = "A sample is drawn from the next file given to meerkat queue."
+        self.assertEqual(self._run("config", "budget", "25")[1], f"budget=25\n{message}\n")
+        self.assertEqual(self._run("config", "budget", "30")[1], "budget=30\n")
+        self.assertEqual(self._run("config", "sample_share", "0.2")[1], "sample_share=0.2\n")
+        self.assertEqual(self._run("config")[1], "budget=30\nsample_share=0.2\n")
         saved = json.loads((self.runs_dir / "settings.json").read_text())
-        self.assertEqual(saved, {"miss_rate": 0.02, "keep_linked": False})
-
-    def test_miss_rate_message_only_on_change(self):
-        message = "Miss rate changed from 5% to 1%. Earlier grades keep the pile they were given."
-        self.assertEqual(self._run("config", "miss_rate", "0.01")[1],
-                         f"miss_rate=0.01\n{message}\n")
-        self.assertEqual(self._run("config", "miss_rate", "0.01")[1], "miss_rate=0.01\n")
-        self.assertEqual(self._run("config", "miss_rate", "0.05")[1].splitlines()[1],
-                         "Miss rate changed from 1% to 5%. "
-                         "Earlier grades keep the pile they were given.")
-        self.assertEqual(self._run("config", "miss_rate", "0.05")[1], "miss_rate=0.05\n")
-
-    def test_keep_linked_message_only_on_change(self):
-        kept = "Incidents linked to a true positive are now kept in the queue."
-        freed = "Incidents linked to a true positive can now be closed."
-        self.assertEqual(self._run("config", "keep_linked", "true")[1], "keep_linked=true\n")
-        self.assertEqual(self._run("config", "keep_linked", "false")[1],
-                         f"keep_linked=false\n{freed}\n")
-        self.assertEqual(self._run("config", "keep_linked", "false")[1], "keep_linked=false\n")
-        self.assertEqual(self._run("config", "keep_linked", "true")[1],
-                         f"keep_linked=true\n{kept}\n")
-
-    def test_one_setting_changes_and_the_other_is_kept(self):
-        self._run("config", "miss_rate", "0.01")
-        self._run("config", "keep_linked", "false")
-        saved = json.loads((self.runs_dir / "settings.json").read_text())
-        self.assertEqual(saved, {"miss_rate": 0.01, "keep_linked": False})
-        report = self._queue_json(str(self.csv))
-        self.assertEqual((report["miss_rate"], report["keep_linked"]), (0.01, False))
+        self.assertEqual(saved, {"budget": 30, "sample_share": 0.2})
+        self.assertEqual(self._run("config", "budget", "none")[1], "budget=none\n")
+        self.assertEqual(json.loads((self.runs_dir / "settings.json").read_text()),
+                         {"sample_share": 0.2})
+        self.assertEqual(self._queue_json(str(self.csv))["budget"], None)
 
     def test_config_with_one_argument_is_a_usage_error(self):
-        for setting in ("miss_rate", "keep_linked"):
+        for setting in ("budget", "sample_share"):
             with self.subTest(setting):
                 code, out, err = self._run("config", setting)
                 self.assertEqual((code, out), (2, ""))
                 self.assertIn("config takes SETTING and VALUE, or nothing", err)
 
     def test_a_bad_value_is_a_usage_error(self):
-        bad = {"miss_rate": ("0", "1", "abc", "-0.1", "1.5"),
-               "keep_linked": ("yes", "True", "1", "on", "")}
-        expected = {"miss_rate": "miss_rate: expected a number between 0 and 1",
-                    "keep_linked": "keep_linked: expected true or false"}
+        bad = {"budget": ("0", "-3", "2.5", "abc", "None", ""),
+               "sample_share": ("1", "abc", "-0.1", "1.5", "")}
+        expected = {"budget": "budget: expected a whole number above 0",
+                    "sample_share": "sample_share: expected a number from 0 up to 1"}
         for setting, values in bad.items():
             for value in values:
                 with self.subTest(setting, value=value):
                     code, out, err = self._run("config", setting, value)
                     self.assertEqual((code, out), (2, ""))
                     self.assertIn(expected[setting], err)
+        self.assertEqual(self._run("config", "miss_rate", "0.05")[0], 2)
         self.assertFalse((self.runs_dir / "settings.json").exists())
 
     def test_a_bad_settings_file_stops_config(self):
         self._run("queue", str(self.csv))
         (self.runs_dir / "settings.json").write_text("[]")
-        for argv in (("config",), ("config", "miss_rate", "0.1")):
+        for argv in (("config",), ("config", "budget", "5")):
             with self.subTest(argv):
                 code, out, err = self._run(*argv)
                 self.assertEqual((code, out), (1, ""))
                 self.assertIn("settings.json", err)
-
-    def test_linked_true_positive_keeps_incident_in_queue(self):
-        linked_id = self._calibrate_linked()
-        lines = self._run("queue")[1].splitlines()
-        self.assertEqual(
-            lines[-3], "Set aside under the close level: 1 (target: at most 5% of true positives)")
-        self.assertEqual(lines[-2], "Shown above as audit: 0")
-        self.assertEqual(lines[-1], "Kept in the queue for a link to a true positive: 1")
-        report = self._queue_json()
-        self.assertEqual((report["keep_linked"], report["kept_linked"]), (True, 1))
-        self.assertIn(linked_id, [row["IncidentId"] for row in report["queue"]])
-
-    def test_a_rule_never_graded_keeps_the_incident_in_the_queue(self):
-        use_weights(self, dict(WEIGHTS, coefficients=[0, 4, 0, 0, 0, 0, 0, -1, 0, 0]))
-        rows = [list(row) for row in calibration_rows(0, 2)]
-        for row in rows:
-            if row[1].startswith("f"):
-                row[9] = "bob"
-        rows.append(list(plain_row("fresh", "99", time="2024-06-10T01:00:00Z")))
-        rows[-1][9] = "bob"
-        self._run("queue", str(write_csv(self.tmp / "fresh.csv", rows)))
-        for number in range(19):
-            self.assertEqual(self._run("review", f"t{number}", "tp")[0], 0)
-        out = self._run("queue")[1]
-        self.assertEqual(out.splitlines()[-1], "Kept in the queue for a rule never graded: 1")
-        report = self._queue_json()
-        self.assertEqual((report["kept_linked"], report["kept_ungraded_rule"]), (0, 1))
-        self.assertIn("fresh", [row["IncidentId"] for row in report["queue"]])
-
-    def test_without_the_rule_the_linked_incident_is_closed(self):
-        linked_id = self._calibrate_linked()
-        self._run("config", "keep_linked", "false")
-        out = self._run("queue")[1]
-        self.assertNotIn("Kept in the queue", out)
-        self.assertIn("Set aside under the close level: 2", out)
-        report = self._queue_json()
-        self.assertEqual((report["keep_linked"], report["kept_linked"]), (False, 0))
-        self.assertNotIn(linked_id, [row["IncidentId"] for row in report["queue"]])
-
-    def test_review_records_the_queue_pile_of_a_linked_incident(self):
-        linked_id = self._calibrate_linked()
-        self._run("review", linked_id, "fp")
-        with (self.runs_dir / "grades.csv").open(newline="", encoding="utf-8") as handle:
-            rows = list(csv.DictReader(handle))
-        self.assertEqual(rows[-1]["pile"], "queue")
 
     def test_a_bad_settings_file_stops_every_scoring_command(self):
         self._run("queue", str(self.csv))
@@ -661,7 +569,7 @@ class CliTests(unittest.TestCase):
         path = write_csv(self.tmp / "notables.csv", rows, header)
         code, out, err = self._run("queue", str(path), "--mapping", "splunk")
         self.assertEqual((code, err), (0, ""))
-        self.assertIn("1 of 1 incidents in the queue", out)
+        self.assertIn("\nTotal: 1  budget: none\n", out)
         meta = json.loads(next(self.runs_dir.glob("*/meta.json")).read_text())
         self.assertEqual(meta["mapping"], "splunk")
 
@@ -693,24 +601,6 @@ class CliTests(unittest.TestCase):
             error = process.stderr.read()
             self.assertEqual(process.wait(), 1)
         self.assertEqual(error, "")
-
-    def test_closed_footer_names_the_list_and_the_audit_rows(self):
-        self._calibrate(3, 2)
-        lines = self._run("queue", "--closed")[1].splitlines()
-        self.assertEqual(lines[-2].split(", run ")[0], "2 of 2 incidents set aside")
-        self.assertEqual(lines[-1], "In the queue as audit: 3")
-        plain = self._run("queue")[1].splitlines()
-        self.assertEqual(plain[-2], "Set aside under the close level: 2 "
-                                    "(target: at most 5% of true positives)")
-        self.assertEqual(plain[-1], "Shown above as audit: 3")
-        self.assertIn("4 of 4 incidents in the queue", plain[-3])
-
-    def test_closed_footer_keeps_the_linked_line(self):
-        self._calibrate_linked()
-        lines = self._run("queue", "--closed")[1].splitlines()
-        self.assertEqual(lines[-3].split(", run ")[0], "1 of 1 incidents set aside")
-        self.assertEqual(lines[-2], "In the queue as audit: 0")
-        self.assertEqual(lines[-1], "Kept in the queue for a link to a true positive: 1")
 
     def _table(self, columns: int | None, rows: list[tuple[str, ...]]) -> list[str]:
         class Terminal(io.StringIO):

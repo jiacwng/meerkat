@@ -1,7 +1,6 @@
 # A small incident CSV in GUIDE's column names, shared by the tests.
 
 import csv
-import hashlib
 import json
 import tempfile
 import unittest
@@ -64,44 +63,15 @@ def use_weights(test: unittest.TestCase, weights: dict = WEIGHTS) -> None:
     test.enterContext(mock.patch.object(rank, "WEIGHTS", path))
 
 
-# written out here again so that a change to the sampling rule fails a test
-def is_sampled(incident_id: str) -> bool:
-    digest = hashlib.sha256(incident_id.encode()).hexdigest()
-    return int(digest[:8], 16) / 2**32 < 0.10
-
-
-def sampled_ids(sampled: bool, count: int) -> list[str]:
-    found = []
-    number = 0
-    while len(found) < count:
-        number += 1
-        if is_sampled(f"o{number}") == sampled:
-            found.append(f"o{number}")
-    return found
-
-
-# a day of history: 20 rule 3 true positives at one time, 20 rule 9 and 2 rule 7 false
-# positives; then rule 7 incidents t0 to t19 a minute apart, to be graded, and a day later
-# open rule 9 incidents, which score about 0.17 under WEIGHTS
-def calibration_rows(audit: int, closed: int) -> tuple:
-    history, later = "2024-06-09T00:00:00Z", "2024-06-11T00:00:00Z"
-    rows = [plain_row(f"p{i}", "3", "TruePositive", history) for i in range(20)]
-    rows += [plain_row(f"f{i}", "9", "FalsePositive", history) for i in range(20)]
-    rows += [plain_row(f"g{i}", "7", "FalsePositive", history) for i in range(2)]
-    rows += [plain_row(f"t{i}", "7", time=f"2024-06-10T00:{i:02d}:00Z") for i in range(20)]
-    rows += [plain_row(i, "9", time=later) for i in sampled_ids(True, audit)]
-    rows += [plain_row(i, "9", time=later) for i in sampled_ids(False, closed)]
+# a day of history where rule 3 is always a true positive and rule 9 never is; then open
+# rule 3 incidents h0 to h2 and open rule 9 incidents l0 to l7, a minute apart
+def budget_rows() -> tuple:
+    history = "2024-06-09T00:00:00Z"
+    rows = [plain_row(f"p{i}", "3", "TruePositive", history) for i in range(5)]
+    rows += [plain_row(f"f{i}", "9", "FalsePositive", history) for i in range(5)]
+    rows += [plain_row(f"h{i}", "3", time=f"2024-06-10T00:{i:02d}:00Z") for i in range(3)]
+    rows += [plain_row(f"l{i}", "9", time=f"2024-06-10T01:{i:02d}:00Z") for i in range(8)]
     return tuple(rows)
-
-
-# calibration_rows where p0, a true positive, and the first closed incident share an account
-def linked_rows(audit: int, closed: int) -> tuple:
-    rows = [list(row) for row in calibration_rows(audit, closed)]
-    target = sampled_ids(False, 1)[0]
-    for row in rows:
-        if row[1] in ("p0", target):
-            row[9] = "ann"
-    return tuple(tuple(row) for row in rows)
 
 
 def write_csv(path: Path, rows=ROWS, header=HEADER) -> Path:
