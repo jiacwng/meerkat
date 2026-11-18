@@ -1,4 +1,4 @@
-# The ten inputs of the score, each taken from incidents strictly earlier in time.
+# The eight inputs of the score, each taken from incidents strictly earlier in time.
 
 import numpy as np
 import pandas as pd
@@ -7,14 +7,14 @@ from core.incidents import GRADES, LINKS, SEPARATOR
 
 INPUTS = (
     "org_true_positive_rate", "rule_true_positive_rate", "log_org_graded",
-    "log_rule_graded", "log_linked", "log_linked_true_positive",
-    "log_linked_benign_positive", "log_linked_false_positive",
-    "linked_true_positive_rate", "has_link",
+    "log_rule_graded", "log_linked", "linked_true_positive_log_odds",
+    "has_linked_true_positive", "has_link",
 )
 LINKED = ("linked", "linked_true_positive", "linked_benign_positive",
           "linked_false_positive")
 RULE = ("rule_graded", "rule_true_positives")
 SMOOTH = 5.0
+LINK_SMOOTH = 1.0
 PLACEHOLDER_SHARE = 0.5
 CAP = 50
 
@@ -34,15 +34,11 @@ def compute(incidents: pd.DataFrame, prior: float) -> pd.DataFrame:
     linked = by_grade.sum(axis=0)
 
     columns = {
-        "org_true_positive_rate": smooth(org_tp, org_graded, prior),
-        "rule_true_positive_rate": smooth(rule_tp, rule_graded, prior),
+        "org_true_positive_rate": smooth(org_tp, org_graded, prior, SMOOTH),
+        "rule_true_positive_rate": smooth(rule_tp, rule_graded, prior, SMOOTH),
         "log_org_graded": np.log1p(org_graded),
         "log_rule_graded": np.log1p(rule_graded),
-        "log_linked": np.log1p(linked),
-        "log_linked_true_positive": np.log1p(by_grade[0]),
-        "log_linked_benign_positive": np.log1p(by_grade[1]),
-        "log_linked_false_positive": np.log1p(by_grade[2]),
-        "linked_true_positive_rate": smooth(by_grade[0], linked, prior),
+        **link_inputs(by_grade[0], linked, prior),
         "has_link": has_link.astype(np.float64),
         "linked": linked,
         "linked_true_positive": by_grade[0],
@@ -63,8 +59,18 @@ def linked_to(incidents: pd.DataFrame, incident_id: str) -> pd.DataFrame:
     return found.sort_values(["Timestamp", "IncidentId"], ascending=[False, True])
 
 
-def smooth(positives: np.ndarray, total: np.ndarray, prior: float) -> np.ndarray:
-    return (positives + SMOOTH * prior) / (total + SMOOTH)
+def link_inputs(true_positives: np.ndarray, linked: np.ndarray, prior: float) -> dict:
+    rate = smooth(true_positives, linked, prior, LINK_SMOOTH)
+    return {
+        "log_linked": np.log1p(linked),
+        "linked_true_positive_log_odds": np.log(rate / (1 - rate)),
+        "has_linked_true_positive": (true_positives > 0).astype(np.float64),
+    }
+
+
+def smooth(positives: np.ndarray, total: np.ndarray, prior: float,
+           strength: float) -> np.ndarray:
+    return (positives + strength * prior) / (total + strength)
 
 
 def _earlier_totals(key: np.ndarray, rank: np.ndarray, graded: np.ndarray,

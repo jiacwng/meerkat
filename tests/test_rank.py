@@ -37,8 +37,8 @@ class ScoreTests(unittest.TestCase):
         self.assertAlmostEqual(scored.loc["202", "score"], 0.5)
 
     def test_inputs_are_standardised_before_the_coefficients(self):
-        weights = dict(WEIGHTS, mean=[0.5] * 10, scale=[2.0] * 10,
-                       coefficients=[1.0, -1.0, 0.5, 0.25, 2.0, 1.0, -0.5, 0.3, 1.5, -2.0],
+        weights = dict(WEIGHTS, mean=[0.5] * 8, scale=[2.0] * 8,
+                       coefficients=[1.0, -1.0, 0.5, 0.25, 2.0, 1.0, -0.5, 0.3],
                        intercept=0.1)
         use_weights(self, weights)
         scored = score(self.incidents).set_index("IncidentId")
@@ -78,7 +78,7 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(scored["score_as_new_rule"], scored["score"])
 
     def test_linked_true_positives_raise_the_score(self):
-        use_weights(self, dict(WEIGHTS, coefficients=[0, 0, 0, 0, 0, 1, 0, 0, 1, 0],
+        use_weights(self, dict(WEIGHTS, coefficients=[0, 0, 0, 0, 0, 1, 1, 0],
                                intercept=0.0))
         scored = score(self.incidents).set_index("IncidentId").loc["201"]
         self.assertEqual(scored["reason"], "linked incidents raise it")
@@ -97,7 +97,7 @@ class ScoreTests(unittest.TestCase):
         self.assertLess(scored["score_as_new_rule"], scored["score"])
 
     def test_scored_as_a_new_rule_ignores_the_rule_history(self):
-        use_weights(self, dict(WEIGHTS, coefficients=[0, 4, 0, 0.5, 0, 1, 0, 0, 1, 0]))
+        use_weights(self, dict(WEIGHTS, coefficients=[0, 4, 0, 0.5, 0, 1, 1, 0]))
         scored = score(self.incidents).set_index("IncidentId")
         self.assertNotEqual(scored.loc["200", "score"], scored.loc["202", "score"])
         self.assertAlmostEqual(scored.loc["200", "score_as_new_rule"],
@@ -113,9 +113,9 @@ class ShippedWeightsTests(unittest.TestCase):
     def test_the_weights_file_has_one_value_per_input(self):
         weights = load_weights()
         self.assertEqual(weights["inputs"], list(features.INPUTS))
-        self.assertEqual(len(weights["inputs"]), 10)
+        self.assertEqual(len(weights["inputs"]), 8)
         for name in ("mean", "scale", "coefficients"):
-            self.assertEqual(len(weights[name]), 10)
+            self.assertEqual(len(weights[name]), 8)
         self.assertTrue(0 < weights["prior"] < 1)
         self.assertEqual(set(weights["provenance"]),
                          {"dataset", "incidents", "organisations", "time_cut", "date"})

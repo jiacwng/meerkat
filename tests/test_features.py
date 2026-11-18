@@ -1,4 +1,4 @@
-# The ten inputs on hand computed histories: strictly earlier only, placeholders and the cap.
+# The eight inputs on hand computed histories: strictly earlier only, placeholders and the cap.
 
 import math
 import unittest
@@ -27,6 +27,11 @@ def _incident(name: str, minute: int, grade: str = "", **values: str) -> dict:
 
 def _smooth(positives: int, total: int) -> float:
     return (positives + 5 * PRIOR) / (total + 5)
+
+
+def _log_odds(positives: int, total: int) -> float:
+    rate = (positives + PRIOR) / (total + 1)
+    return math.log(rate / (1 - rate))
 
 
 class HistoryTests(unittest.TestCase):
@@ -85,9 +90,8 @@ class LinkTests(unittest.TestCase):
         # a and b are earlier and graded; c is open and "same" is not earlier
         self.assertEqual(now[list(LINKED)].tolist(), [2, 1, 0, 1])
         self.assertAlmostEqual(now["log_linked"], math.log1p(2))
-        self.assertAlmostEqual(now["log_linked_true_positive"], math.log1p(1))
-        self.assertAlmostEqual(now["log_linked_false_positive"], math.log1p(1))
-        self.assertAlmostEqual(now["linked_true_positive_rate"], _smooth(1, 2))
+        self.assertAlmostEqual(now["linked_true_positive_log_odds"], _log_odds(1, 2))
+        self.assertEqual(inputs["has_linked_true_positive"].tolist(), [0, 0, 1, 0, 1, 0, 0])
         self.assertEqual(inputs["linked"].tolist(), [0, 0, 1, 0, 2, 0, 0])
         self.assertEqual(inputs["has_link"].tolist(), [1.0] * 7)
 
@@ -141,7 +145,9 @@ class LinkTests(unittest.TestCase):
     def test_a_frame_without_link_values(self):
         inputs = compute(_frame(_incident("a", 0, "TruePositive"), _incident("b", 1)), PRIOR)
         self.assertEqual(inputs["linked"].tolist(), [0, 0])
-        self.assertEqual(inputs["linked_true_positive_rate"].tolist(), [PRIOR, PRIOR])
+        for value in inputs["linked_true_positive_log_odds"]:
+            self.assertAlmostEqual(value, _log_odds(0, 0))
+        self.assertEqual(inputs["has_linked_true_positive"].tolist(), [0.0, 0.0])
         self.assertEqual(inputs["has_link"].tolist(), [0.0, 0.0])
 
     def test_inputs_keep_the_index_and_order_of_the_frame(self):
