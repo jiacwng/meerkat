@@ -17,10 +17,9 @@ def needed(miss_rate: float) -> int:
 
 def calibration(scored: pd.DataFrame, reviews: pd.DataFrame) -> pd.DataFrame:
     latest = reviews.drop_duplicates("IncidentId", keep="last")
-    kept = latest[(latest["grade"] == "TruePositive")
-                  & latest["pile"].isin(("queue", "audit"))]
+    kept = latest[latest["grade"] == "TruePositive"]
     # an audited incident stands for 1 / AUDIT_SHARE incidents that were not sampled
-    weight = kept["pile"].map({"queue": 1.0, "audit": 1 / AUDIT_SHARE}).astype(float)
+    weight = kept["pile"].map({"audit": 1 / AUDIT_SHARE}).fillna(1.0)
     reviewed = pd.DataFrame({"score": kept["score"], "weight": weight})
     own = scored[(scored["IncidentGrade"] == "TruePositive")
                  & ~scored["IncidentId"].isin(latest["IncidentId"])]

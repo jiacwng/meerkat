@@ -64,10 +64,14 @@ class LevelTests(unittest.TestCase):
         # an audit entry below every other one weighs 10 against a budget of 1.8
         self.assertIsNone(_level(*queue, _tp("x", 0.0, "audit")))
 
-    def test_only_the_latest_true_positive_grade_in_queue_or_audit_counts(self):
+    def test_a_true_positive_found_among_the_closed_lowers_the_level(self):
         rows = [_tp(str(i), i + 1.0) for i in range(19)]
         self.assertEqual(_level(*rows), 1.0)
-        self.assertEqual(_level(*rows, _tp("closed", 0.1, "closed")), 1.0)
+        # W = 19 + 1 + 1 = 21, budget 1.05: only the closed one fits under the level
+        self.assertEqual(_level(*rows, _tp("closed", 0.1, "closed")), 0.1)
+
+    def test_only_the_latest_grade_of_an_incident_counts(self):
+        rows = [_tp(str(i), i + 1.0) for i in range(19)]
         regraded = [*rows, ("t", "0", "FalsePositive", "", 1.0, "queue")]
         self.assertIsNone(_level(*regraded))
         self.assertEqual(len(close.calibration(_history(), _reviews(*regraded))), 18)

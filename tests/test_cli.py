@@ -415,6 +415,17 @@ class CliTests(unittest.TestCase):
             out, "Set aside under the close level: 3 (target: at most 5% of true positives)\n"
                  "Shown above as audit: 0\n")
 
+    def test_a_true_positive_graded_among_the_closed_lowers_the_level(self):
+        self._calibrate(0, 3)
+        self._run("review", "t19", "tp")
+        before = self._queue_json()
+        self.assertEqual(before["closed"], 3)
+        self._run("review", sampled_ids(False, 1)[0], "tp")
+        after = self._queue_json()
+        self.assertLess(after["close_level"], before["close_level"])
+        self._run("review", sampled_ids(False, 2)[1], "tp")
+        self.assertLess(self._queue_json()["close_level"], after["close_level"])
+
     def test_no_open_incidents_prints_plain_message(self):
         self._calibrate(0, 0)
         self._run("review", "t19", "tp")
