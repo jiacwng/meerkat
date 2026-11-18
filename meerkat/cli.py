@@ -25,6 +25,11 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("queue takes a FILE or --run, not both")
     if args.command == "queue" and args.file is None and args.mapping is not None:
         parser.error("--mapping needs FILE")
+    if args.command == "review":
+        if args.file is None and (args.incident is None or args.grade is None):
+            parser.error("review takes INCIDENT and GRADE, or --file")
+        if args.file is not None and (args.incident is not None or args.note):
+            parser.error("--file takes no INCIDENT, GRADE or --note")
     if args.command == "config":
         if (args.setting is None) != (args.value is None):
             parser.error("config takes SETTING and VALUE, or nothing")
@@ -75,13 +80,16 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_runs_dir(queue)
     queue.set_defaults(handler=_queue)
 
-    review = sub.add_parser("review", help="record the grade of an incident")
-    review.add_argument("incident", metavar="INCIDENT")
-    review.add_argument("grade", choices=tuple(GRADE_CODES), metavar="GRADE",
+    review = sub.add_parser("review", help="record the grade of an incident, or a file "
+                                           "of grades")
+    review.add_argument("incident", nargs="?", metavar="INCIDENT")
+    review.add_argument("grade", nargs="?", choices=tuple(GRADE_CODES), metavar="GRADE",
                         help="tp (true positive), bp (benign positive) or "
                              "fp (false positive)")
     review.add_argument("--note", default="", metavar="TEXT",
                         help="free text stored with the grade")
+    review.add_argument("--file", type=Path, metavar="FILE",
+                        help="CSV of grades with the columns IncidentId and IncidentGrade")
     _add_runs_dir(review)
     review.set_defaults(handler=_review)
 
@@ -277,27 +285,41 @@ def _settings(runs_dir: Path) -> dict:
 
 def _review(args: argparse.Namespace) -> None:
     from core import close, store
+    from core.incidents import read_grades
 
-    scored, level, _, settings = _scored(args.runs_dir)
-    found = scored[scored["IncidentId"] == args.incident]
-    if found.empty:
-        raise store.StoreError(f"no incident {args.incident!r} in {args.runs_dir}")
-    reviews = store.read_reviews(args.runs_dir)
-    earlier = reviews[reviews["IncidentId"] == args.incident]
-    if earlier.empty:
-        score = float(found["score"].iloc[0])
-        linked = int(found["linked_true_positive"].iloc[0])
-        rule_graded = int(found["rule_graded"].iloc[0])
-        if found["IncidentGrade"].iloc[0] != "":
-            pile = "queue"
-        else:
-            pile = close.pile_of(args.incident, score, level, linked, settings["keep_linked"],
-                                 rule_graded)
+    if args.file is None:
+        grades = [(args.incident, GRADE_CODES[args.grade])]
     else:
-        score, pile = float(earlier["score"].iloc[0]), earlier["pile"].iloc[0]
-    grade = GRADE_CODES[args.grade]
-    store.append_grade(args.runs_dir, args.incident, grade, args.note, score, pile)
-    print(f"{_printable(args.incident)} graded {grade}")
+        grades = read_grades(args.file)
+    scored, level, _, settings = _scored(args.runs_dir)
+    scored = scored.set_index("IncidentId")
+    for incident, _ in grades:
+        if incident not in scored.index:
+            raise store.StoreError(f"no incident {incident!r} in {args.runs_dir}")
+    reviews = store.read_reviews(args.runs_dir)
+    first = reviews.drop_duplicates("IncidentId").set_index("IncidentId")
+
+    true_positives = []
+    for incident, grade in grades:
+        found = scored.loc[incident]
+        if incident in first.index:
+            score, pile = float(first.at[incident, "score"]), first.at[incident, "pile"]
+        elif found["IncidentGrade"] != "":
+            score, pile = float(found["score"]), "queue"
+        else:
+            score = float(found["score"])
+            pile = close.pile_of(incident, score, level, int(found["linked_true_positive"]),
+                                 settings["keep_linked"], int(found["rule_graded"]))
+        store.append_grade(args.runs_dir, incident, grade, args.note, score, pile)
+        if grade == "TruePositive":
+            true_positives.append(pile)
+    if args.file is None:
+        print(f"{_printable(args.incident)} graded {grades[0][1]}")
+    else:
+        set_aside = true_positives.count("closed")
+        print(f"{len(grades)} incidents graded from {args.file}")
+        print(f"True positives: {len(true_positives) - set_aside} in the queue, "
+              f"{set_aside} set aside")
 
 
 def _scored(runs_dir: Path, incoming=None):

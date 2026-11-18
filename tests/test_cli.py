@@ -134,6 +134,34 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self._queue_ids(), ["b2", "a1", "a2", "c1"])
         self.assertEqual(json.loads(self._run("queue", "--json")[1])["open"], 4)
 
+    def test_review_file_records_every_grade_or_none(self):
+        self._run("queue", str(self.csv))
+        grades = self.tmp / "grades.csv"
+        grades.write_text("IncidentId,IncidentGrade\n200,FalsePositive\n201,TruePositive\n")
+        code, out, _ = self._run("review", "--file", str(grades))
+        self.assertEqual((code, out), (0, f"2 incidents graded from {grades}\n"
+                                          "True positives: 1 in the queue, 0 set aside\n"))
+        self.assertEqual(self._queue_ids(), ["202"])
+        record = json.loads(self._run("inspect", "201", "--json")[1])
+        self.assertEqual(record["IncidentGrade"], "TruePositive")
+
+        before = (self.runs_dir / "grades.csv").read_text()
+        for text, message in (
+                ("IncidentId,IncidentGrade\n202,TruePositive\nnope,TruePositive\n",
+                 "no incident 'nope'"),
+                ("IncidentId,IncidentGrade\n202,malicious\n", "'malicious' is not one of"),
+                ("IncidentId,IncidentGrade\n,TruePositive\n", "a row has no IncidentId"),
+                ("IncidentId,IncidentGrade\n", "no grade rows"),
+                ("IncidentId\n202\n", "missing column IncidentGrade"),
+                ("", "missing column IncidentId")):
+            grades.write_text(text)
+            code, _, err = self._run("review", "--file", str(grades))
+            self.assertEqual(code, 1)
+            self.assertIn(message, err)
+            self.assertEqual(err.count("\n"), 1)
+        self.assertEqual(self._run("review", "--file", str(self.tmp / "none.csv"))[0], 1)
+        self.assertEqual((self.runs_dir / "grades.csv").read_text(), before)
+
     def test_review_moves_the_queue(self):
         self._run("queue", str(self.csv))
         code, out, _ = self._run("review", "201", "fp", "--note", "test account")
@@ -268,6 +296,9 @@ class CliTests(unittest.TestCase):
             ("triage",),
             ("review", "200", "malicious"),
             ("review", "200"),
+            ("review",),
+            ("review", "200", "tp", "--file", "grades.csv"),
+            ("review", "--file", "grades.csv", "--note", "text"),
             ("queue", "--limit", "0"),
             ("queue", "--limit", "many"),
             ("queue", "--limit", "5", "--all"),
