@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -63,6 +64,22 @@ class ExampleTests(unittest.TestCase):
         readme = (EXAMPLES.parent / "README.md").read_text(encoding="utf-8")
         for line in footer:
             self.assertIn(line, readme)
+
+    def test_grades_file_shows_no_true_positive_was_set_aside(self):
+        runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        argv = ["--runs-dir", str(runs_dir)]
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["queue", str(EXAMPLES / "incidents.csv"), *argv])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            main(["queue", "--closed", "--all", "--json", *argv])
+        closed = {row["IncidentId"] for row in json.loads(out.getvalue())["queue"]}
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["review", "--file", str(EXAMPLES / "grades.csv"), *argv])
+        grades = store.read_reviews(runs_dir)
+        true_positive = set(grades.loc[grades["grade"] == "TruePositive", "IncidentId"])
+        self.assertEqual((len(closed), len(true_positive)), (9, 20))
+        self.assertFalse(closed & true_positive)
 
 
 if __name__ == "__main__":

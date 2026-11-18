@@ -27,6 +27,34 @@ def read_incidents(path, mapping: "Mapping") -> pd.DataFrame:
     return collapse(_read_rows(path, mapping))
 
 
+def read_grades(path) -> list[tuple[str, str]]:
+    try:
+        with open(path, encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            names = reader.fieldnames or ()
+            rows = list(reader)
+    except FileNotFoundError:
+        raise IncidentError(f"{path}: no such file") from None
+    except (OSError, UnicodeDecodeError, csv.Error) as error:
+        raise IncidentError(f"{path}: not a readable CSV ({error})") from None
+    for name in ("IncidentId", "IncidentGrade"):
+        if name not in names:
+            raise IncidentError(f"{path}: missing column {name}")
+    if not rows:
+        raise IncidentError(f"{path}: no grade rows")
+    grades = []
+    for row in rows:
+        incident = (row["IncidentId"] or "").strip()
+        grade = (row["IncidentGrade"] or "").strip()
+        if not incident:
+            raise IncidentError(f"{path}: a row has no IncidentId")
+        if grade not in GRADES:
+            raise IncidentError(
+                f"{path}: IncidentGrade {grade!r} is not one of {', '.join(GRADES)}")
+        grades.append((incident, grade))
+    return grades
+
+
 def collapse(rows: pd.DataFrame) -> pd.DataFrame:
     # an incident takes its time, rule, title and category from its earliest row
     grades = rows["IncidentGrade"].replace("", pd.NA).groupby(rows["IncidentId"]).last()
