@@ -73,7 +73,6 @@ class ScoreTests(unittest.TestCase):
 
     def test_no_history_leaves_both_other_scores_at_the_score(self):
         scored = score(self.incidents).set_index("IncidentId").loc["202"]
-        self.assertEqual(scored["reason"], "no history")
         self.assertEqual(scored["score_without_links"], scored["score"])
         self.assertEqual(scored["score_as_new_rule"], scored["score"])
 
@@ -81,19 +80,16 @@ class ScoreTests(unittest.TestCase):
         use_weights(self, dict(WEIGHTS, coefficients=[0, 0, 0, 0, 0, 1, 1, 0],
                                intercept=0.0))
         scored = score(self.incidents).set_index("IncidentId").loc["201"]
-        self.assertEqual(scored["reason"], "linked incidents raise it")
         self.assertLess(scored["score_without_links"], scored["score"])
         self.assertEqual(scored["score_as_new_rule"], scored["score"])
 
     def test_a_poor_rule_history_lowers_the_score(self):
         scored = score(self.incidents).set_index("IncidentId").loc["200"]
-        self.assertEqual(scored["reason"], "rule history lowers it")
         self.assertGreater(scored["score_as_new_rule"], scored["score"])
         self.assertEqual(scored["score_without_links"], scored["score"])
 
     def test_a_good_rule_history_raises_the_score(self):
         scored = score(self.incidents).set_index("IncidentId").loc["201"]
-        self.assertEqual(scored["reason"], "rule history raises it")
         self.assertLess(scored["score_as_new_rule"], scored["score"])
 
     def test_scored_as_a_new_rule_ignores_the_rule_history(self):
@@ -137,7 +133,6 @@ class ShippedWeightsTests(unittest.TestCase):
 
     def test_an_incident_with_no_history_is_scored_the_same_three_ways(self):
         found = score(pd.DataFrame([_open_row("only", 0, "")])).iloc[0]
-        self.assertEqual(found["reason"], "no history")
         self.assertEqual(found["score"], found["score_without_links"])
         self.assertEqual(found["score"], found["score_as_new_rule"])
 
@@ -145,7 +140,6 @@ class ShippedWeightsTests(unittest.TestCase):
         past = _open_row("past", 0, "") | {"IncidentGrade": "TruePositive"}
         found = score(pd.DataFrame([past, _open_row("new", 5, "")])).set_index("IncidentId")
         found = found.loc["new"]
-        self.assertTrue(found["reason"].startswith("rule history"))
         self.assertEqual(found["score_without_links"], found["score"])
         self.assertNotEqual(found["score_as_new_rule"], found["score"])
 

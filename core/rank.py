@@ -33,7 +33,6 @@ def score(incidents: pd.DataFrame) -> pd.DataFrame:
     scored["score"] = _logistic(logit)
     scored["score_without_links"] = _logistic(logit - links)
     scored["score_as_new_rule"] = _logistic(logit - rule)
-    scored["reason"] = [_reason(a, b) for a, b in zip(links, rule, strict=True)]
     return scored.sort_values(
         ["score", "Timestamp", "IncidentId"], ascending=[False, False, True],
         kind="stable").reset_index(drop=True)
@@ -48,11 +47,3 @@ def _shift(found: pd.DataFrame, weights: dict, neutral: dict) -> np.ndarray:
     standard = ((found[list(neutral)].to_numpy() - np.column_stack(list(neutral.values())))
                 / np.array(weights["scale"])[at])
     return standard @ np.array(weights["coefficients"])[at]
-
-
-def _reason(links: float, rule: float) -> str:
-    if links == 0.0 and rule == 0.0:
-        return "no history"
-    if abs(links) >= abs(rule):
-        return "linked incidents " + ("raise" if links > 0 else "lower") + " it"
-    return "rule history " + ("raises" if rule > 0 else "lowers") + " it"

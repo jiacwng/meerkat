@@ -53,28 +53,25 @@ class CliTests(unittest.TestCase):
         lines = out.splitlines()
         self.assertEqual(lines[0].split()[:3], ["#", "incident", "score"])
         self.assertEqual([line.split()[1] for line in lines[1:4]], ["201", "202", "200"])
-        self.assertIn("2 of 2 true positive", lines[1])
-        self.assertIn("never graded", lines[2])
         self.assertEqual(lines[4:], ["Total: 3  budget: none"])
         self.assertNotIn("100", [line.split()[1] for line in lines[1:4]])
 
-    def test_queue_table_and_json_carry_the_reason(self):
+    def test_queue_table_shows_counts_score_differences_and_techniques(self):
         code, out, _ = self._run("queue", str(self.csv))
         lines = out.splitlines()
-        self.assertRegex(lines[0], r"rule history\s+reason\s+time")
-        self.assertIn("rule history raises it", lines[1])
-        self.assertIn("no history", lines[2])
-        rows = json.loads(self._run("queue", "--json")[1])["queue"]
-        self.assertEqual([row["reason"] for row in rows],
-                         ["rule history raises it", "no history", "rule history lowers it"])
+        self.assertRegex(
+            lines[0], r"rule\s+rule_tp\s+linked_tp\s+rule_delta\s+link_delta\s+mitre\s+time")
+        self.assertRegex(lines[1], r"\s2/2\s+1/1\s+\+0\.14\s+0\.00\s+T1078\s")
+        self.assertRegex(lines[2], r"\s0/0\s+0/0\s+0\.00\s+0\.00\s+2024")
+        self.assertRegex(lines[3], r"\s0/2\s+0/0\s+-0\.14\s+0\.00\s+T1114\s")
 
     def test_inspect_shows_the_score_without_links_and_as_a_new_rule(self):
         self._run("queue", str(self.csv))
         out = self._run("inspect", "201")[1]
         self.assertRegex(out, r"score\s+0\.\d\d\nwithout links\s+0\.\d\d\n"
-                              r"as a new rule\s+0\.\d\d\nreason\s+rule history raises it\n")
+                              r"as a new rule\s+0\.\d\d\n")
+        self.assertRegex(out, r"rule_tp\s+2/2\n")
         record = json.loads(self._run("inspect", "201", "--json")[1])
-        self.assertEqual(record["reason"], "rule history raises it")
         self.assertEqual(record["score_without_links"], record["score"])
         self.assertEqual(record["score_as_new_rule"], 0.5)
 
@@ -200,7 +197,7 @@ class CliTests(unittest.TestCase):
         self.assertRegex(out, r"grade\s+TruePositive\n")
         self.assertRegex(out, r"IpAddress\s+10.0.0.1, 10.0.0.2\n")
         self.assertNotIn("Sha256", out)
-        self.assertRegex(out, r"rule history\s+never graded\nlinked incidents\s+none\n")
+        self.assertRegex(out, r"rule_tp\s+0/0\nlinked\s+0 \(0 TP, 0 BP, 0 FP\)\n")
         code, out, _ = self._run("inspect", "100", "--json")
         record = json.loads(out)
         self.assertEqual(record["IpAddress"], ["10.0.0.1", "10.0.0.2"])
@@ -209,8 +206,7 @@ class CliTests(unittest.TestCase):
     def test_linked_incidents_in_inspect_and_json(self):
         self._run("queue", str(self.csv))
         code, out, _ = self._run("inspect", "201")
-        self.assertRegex(out, r"\nlinked incidents\s+1 earlier \(1 true positive, "
-                              r"0 benign positive, 0 false positive\)\n")
+        self.assertRegex(out, r"\nlinked\s+1 \(1 TP, 0 BP, 0 FP\)\n")
         record = json.loads(self._run("inspect", "201", "--json")[1])
         keys = ("linked", "linked_true_positive", "linked_benign_positive",
                 "linked_false_positive")
@@ -500,7 +496,7 @@ class CliTests(unittest.TestCase):
     def test_inspect_shows_the_status(self):
         sampled = self._budget()
         self.assertRegex(self._run("inspect", sampled)[1],
-                         r"reason\s+rule history lowers it\nstatus\s+sample\n")
+                         r"as a new rule\s+0\.\d\d\nstatus\s+sample\n")
         self.assertEqual(json.loads(self._run("inspect", "h2", "--json")[1])["status"], "ranked")
         self._run("review", sampled, "fp")
         self.assertRegex(self._run("inspect", sampled)[1], r"status\s+sample\n")

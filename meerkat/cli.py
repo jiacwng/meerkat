@@ -211,11 +211,15 @@ def _queue(args: argparse.Namespace) -> None:
         return
     rows = [
         (str(position), row["IncidentId"], f"{row['score']:.2f}", _mark(row),
-         row["DetectorId"], _rule_history(row), row["reason"], row["Timestamp"],
-         row["AlertTitle"])
+         row["DetectorId"], _rule_tp(row),
+         f"{row['linked_true_positive']}/{row['linked']}",
+         _delta(row["score"] - row["score_as_new_rule"]),
+         _delta(row["score"] - row["score_without_links"]),
+         row["MitreTechniques"], row["Timestamp"], row["AlertTitle"])
         for position, row in enumerate(shown.to_dict("records"), start=1)]
-    _print_table(("#", "incident", "score", "status", "rule", "rule history", "reason",
-                  "time", "title"), rows, int((shown["status"] != "below").sum()))
+    _print_table(("#", "incident", "score", "status", "rule", "rule_tp", "linked_tp",
+                  "rule_delta", "link_delta", "mitre", "time", "title"), rows,
+                 int((shown["status"] != "below").sum()))
     if len(shown) < len(listed):
         print(f"{len(shown)} of {len(listed)} shown")
     total = f"Total: {len(open_incidents)}"
@@ -367,10 +371,9 @@ def _inspect(args: argparse.Namespace) -> None:
         ("score", f"{row['score']:.2f}"),
         ("without links", f"{row['score_without_links']:.2f}"),
         ("as a new rule", f"{row['score_as_new_rule']:.2f}"),
-        ("reason", row["reason"]),
         ("status", row["status"]),
-        ("rule history", _rule_history(row)),
-        ("linked incidents", _linked(row)),
+        ("rule_tp", _rule_tp(row)),
+        ("linked", _linked(row)),
         *((name, row[name].replace(SEPARATOR, ", ")) for name in LINKS),
     ]
     for name, value in lines:
@@ -398,18 +401,18 @@ def _runs(args: argparse.Namespace) -> None:
     _print_table(("run", "created", "incidents", "source"), rows)
 
 
-def _rule_history(row: dict) -> str:
-    if row["rule_graded"] == 0:
-        return "never graded"
-    return f"{row['rule_true_positives']} of {row['rule_graded']} true positive"
+def _rule_tp(row: dict) -> str:
+    return f"{row['rule_true_positives']}/{row['rule_graded']}"
 
 
 def _linked(row: dict) -> str:
-    if row["linked"] == 0:
-        return "none"
-    return (f"{row['linked']} earlier ({row['linked_true_positive']} true positive, "
-            f"{row['linked_benign_positive']} benign positive, "
-            f"{row['linked_false_positive']} false positive)")
+    return (f"{row['linked']} ({row['linked_true_positive']} TP, "
+            f"{row['linked_benign_positive']} BP, {row['linked_false_positive']} FP)")
+
+
+def _delta(value: float) -> str:
+    text = f"{value:+.2f}"
+    return "0.00" if text[1:] == "0.00" else text
 
 
 def _as_record(row: dict, position: int | None = None) -> dict:
