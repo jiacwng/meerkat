@@ -217,7 +217,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(record["linked_incidents"], [{
             "IncidentId": "100", "IncidentGrade": "TruePositive",
             "Timestamp": "2024-06-01T08:00:00Z", "DetectorId": "7",
-            "AlertTitle": "Suspicious sign in"}])
+            "AlertTitle": "Suspicious sign in",
+            "shared": ["AccountName alice", "IpAddress 10.0.0.1"]}])
         self.assertNotIn("linked incident ", self._run("inspect", "202")[1])
         rows = json.loads(self._run("queue", "--json")[1])["queue"]
         self.assertEqual([[row[key] for key in keys] for row in rows],

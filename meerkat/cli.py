@@ -1,4 +1,4 @@
-# The meerkat command line: queue, review, inspect, runs and config.
+# The meerkat command line: queue, review, inspect, runs, config and serve.
 
 import argparse
 import json
@@ -110,6 +110,12 @@ def _build_parser() -> argparse.ArgumentParser:
                              "up to 1 for sample_share")
     _add_runs_dir(config)
     config.set_defaults(handler=_config)
+
+    serve = sub.add_parser("serve", help="open the queue as a web page on this machine")
+    serve.add_argument("--port", type=int, default=0, metavar="N",
+                       help="port to listen on (default: a free one)")
+    _add_runs_dir(serve)
+    serve.set_defaults(handler=_serve)
     return parser
 
 
@@ -157,6 +163,7 @@ def _queue(args: argparse.Namespace) -> None:
     from core import budget, store
     from core.incidents import read_incidents
     from core.mapping import load_mapping
+    from meerkat import records
 
     incoming = None
     run = None
@@ -169,70 +176,55 @@ def _queue(args: argparse.Namespace) -> None:
         run = args.run
         run_ids = in_run["IncidentId"]
 
-    scored, settings = _scored(args.runs_dir, incoming)
-    limit, share = settings["budget"], settings["sample_share"]
+    settings = records.settings(args.runs_dir)
+    scored = records.scored(args.runs_dir, incoming)
+    limit = settings["budget"]
     if incoming is not None:
         run = store.save_run(args.runs_dir, incoming, args.file.name, mapping.name)["run"]
         if limit is not None:
             opened = scored.loc[scored["IncidentGrade"] == "", "IncidentId"].tolist()
-            sample = budget.draw(opened, limit, share, store.read_samples(args.runs_dir))
+            sample = budget.draw(opened, limit, settings["sample_share"],
+                                 store.read_samples(args.runs_dir))
             if sample["pool"]:
                 store.save_sample(args.runs_dir, run, sample)
-    placed, samples = _placed(args.runs_dir, scored, settings)
+    record = records.queue(args.runs_dir, scored, settings, run, run_ids)
 
-    open_incidents = placed[placed["IncidentGrade"] == ""]
-    if run_ids is not None:
-        open_incidents = open_incidents[open_incidents["IncidentId"].isin(run_ids)]
-    under = (open_incidents["status"] == "below").to_numpy()
-    open_incidents = open_incidents.iloc[under.argsort(kind="stable")]
-    reading = open_incidents[open_incidents["status"] != "below"]
-    below = open_incidents[open_incidents["status"] == "below"]
-    listed = open_incidents if args.all or args.json else reading
-    shown = listed if args.limit is None else listed.head(args.limit)
-    grades = dict(zip(placed["IncidentId"], placed["IncidentGrade"], strict=True))
-    sampled = budget.estimate(samples, grades)
-    sampled["not_sampled"] = budget.not_sampled(placed, samples)
-
+    reading = record["queue"][:record["to_read"]]
+    below = record["queue"][record["to_read"]:]
+    listed = record["queue"] if args.all or args.json else reading
+    shown = listed if args.limit is None else listed[:args.limit]
     if args.json:
-        rows = [_as_record(row, position)
-                for position, row in enumerate(shown.to_dict("records"), start=1)]
-        _print_json({
-            "run": run, "open": len(open_incidents), "budget": limit, "sample_share": share,
-            "to_read": len(reading), "below_budget": len(below),
-            "sample": {key: sampled[key]
-                       for key in ("drawn", "graded", "true_positive", "not_sampled")},
-            "unread_true_positives": sampled["unread_true_positives"],
-            "queue": rows})
+        _print_json({**record, "queue": shown})
         return
 
-    if open_incidents.empty:
+    if not record["queue"]:
         print("No open incidents." if run_ids is None
               else f"No open incidents in run {run}.")
         return
     rows = [
-        (str(position), row["IncidentId"], f"{row['score']:.2f}", _mark(row),
+        (str(row["position"]), row["IncidentId"], f"{row['score']:.2f}", _mark(row),
          row["DetectorId"], _rule_tp(row),
          f"{row['linked_true_positive']}/{row['linked']}",
          _delta(row["score"] - row["score_as_new_rule"]),
          _delta(row["score"] - row["score_without_links"]),
          row["MitreTechniques"], row["Timestamp"], row["AlertTitle"])
-        for position, row in enumerate(shown.to_dict("records"), start=1)]
+        for row in shown]
     _print_table(("#", "incident", "score", "status", "rule", "rule_tp", "linked_tp",
                   "rule_delta", "link_delta", "mitre", "time", "title"), rows,
-                 int((shown["status"] != "below").sum()))
+                 sum(row["status"] != "below" for row in shown))
     if len(shown) < len(listed):
         print(f"{len(shown)} of {len(listed)} shown")
-    total = f"Total: {len(open_incidents)}"
+    total = f"Total: {record['open']}"
     if limit is not None:
         total += f" (to read: {len(reading)}, below the budget: {len(below)})"
     total += f"  budget: {'none' if limit is None else limit}"
     print(total if run_ids is None else f"{total}  run: {run}")
-    marks = [_mark(row) for row in below.to_dict("records")]
+    marks = [_mark(row) for row in below]
     if "linked" in marks or "new rule" in marks:
         print(f"Below the budget: {marks.count('linked')} linked to a true positive, "
               f"{marks.count('new rule')} with a rule never graded")
     if run_ids is None and limit is not None:
-        print(_sample_line(sampled))
+        print(_sample_line(record))
 
 
 def _mark(row: dict) -> str:
@@ -243,19 +235,20 @@ def _mark(row: dict) -> str:
     return "new rule" if row["rule_graded"] == 0 else ""
 
 
-def _sample_line(sampled: dict) -> str:
-    unread = sampled["unread_true_positives"]
-    outside = f"{sampled['not_sampled']} not sampled"
+def _sample_line(record: dict) -> str:
+    sample, unread = record["sample"], record["unread_true_positives"]
+    outside = f"{sample['not_sampled']} not sampled"
     if unread is None:
-        return f"Sample: {sampled['drawn']} drawn, 0 graded, {outside}"
-    return (f"Sample: {sampled['graded']} graded, {sampled['true_positive']} true positive, "
+        return f"Sample: {sample['drawn']} drawn, 0 graded, {outside}"
+    return (f"Sample: {sample['graded']} graded, {sample['true_positive']} true positive, "
             f"{outside}. Unread true positives: {unread['low']} to {unread['high']} (95%)")
 
 
 def _config(args: argparse.Namespace) -> None:
     from core import store
+    from meerkat import records
 
-    settings = _settings(args.runs_dir)
+    settings = records.settings(args.runs_dir)
     if args.setting is None:
         for name, value in settings.items():
             print(_setting_line(name, value))
@@ -277,112 +270,67 @@ def _setting_line(name: str, value: float | None) -> str:
     return f"{name}={str(value).lower()}"
 
 
-def _settings(runs_dir: Path) -> dict:
-    from core import budget, store
-
-    return {"budget": None, "sample_share": budget.DEFAULT_SAMPLE_SHARE,
-            **store.read_settings(runs_dir)}
-
-
 def _review(args: argparse.Namespace) -> None:
-    from core import budget, store
+    from core import budget
     from core.incidents import read_grades
+    from meerkat import records
 
     if args.file is None:
         grades = [(args.incident, GRADE_CODES[args.grade])]
     else:
         grades = read_grades(args.file)
-    scored, settings = _scored(args.runs_dir)
-    placed, _ = _placed(args.runs_dir, scored, settings)
-    placed = placed.set_index("IncidentId")
-    for incident, _ in grades:
-        if incident not in placed.index:
-            raise store.StoreError(f"no incident {incident!r} in {args.runs_dir}")
-    reviews = store.read_reviews(args.runs_dir)
-    first = reviews.drop_duplicates("IncidentId").set_index("IncidentId")
-
-    true_positives = []
-    for incident, grade in grades:
-        if incident in first.index:
-            score, status = float(first.at[incident, "score"]), first.at[incident, "status"]
-        else:
-            score, status = float(placed.at[incident, "score"]), placed.at[incident, "status"]
-        store.append_grade(args.runs_dir, incident, grade, args.note, score, status)
-        if grade == budget.TRUE_POSITIVE:
-            true_positives.append(status)
+    scored = records.scored(args.runs_dir)
+    true_positives = records.grade(args.runs_dir, scored, grades, args.note)
     if args.file is None:
         print(f"{_printable(args.incident)} graded {grades[0][1]}")
         return
     print(f"{len(grades)} incidents graded from {args.file}")
     line = f"True positives: {len(true_positives)}"
-    if settings["budget"] is not None:
+    if records.settings(args.runs_dir)["budget"] is not None:
         ranked, sample, below = (true_positives.count(name) for name in budget.STATUSES)
         line += f" (to read: {ranked}, sample: {sample}, below the budget: {below})"
     print(line)
 
 
-def _scored(runs_dir: Path, incoming=None):
-    from core import rank, store
-
-    settings = _settings(runs_dir)
-    return rank.score(store.load_history(runs_dir, incoming)), settings
-
-
-def _placed(runs_dir: Path, scored, settings: dict):
-    from core import budget, store
-
-    samples = store.read_samples(runs_dir)
-    placed = budget.place(scored, store.read_reviews(runs_dir), settings["budget"], samples)
-    return placed, samples
-
-
 def _inspect(args: argparse.Namespace) -> None:
-    from core import features, store
-    from core.incidents import DESCRIPTIVE, LINKS, SEPARATOR
+    from core.incidents import DESCRIPTIVE, LINKS
+    from meerkat import records
 
-    scored, settings = _scored(args.runs_dir)
-    scored, _ = _placed(args.runs_dir, scored, settings)
-    history = scored
-    if args.run is not None:
-        _, in_run = store.load_run(args.runs_dir, args.run)
-        scored = scored[scored["IncidentId"].isin(in_run["IncidentId"])]
-    found = scored[scored["IncidentId"] == args.incident]
-    if found.empty:
-        raise store.StoreError(f"no incident {args.incident!r} in {args.runs_dir}")
-    row = found.iloc[0].to_dict()
-    shown = ["IncidentId", "IncidentGrade", "Timestamp", "DetectorId", "AlertTitle"]
-    linked = features.linked_to(history, args.incident)[shown]
-
+    scored = records.scored(args.runs_dir)
+    record = records.incident(args.runs_dir, scored, args.incident, args.run)
     if args.json:
-        record = _as_record(row)
-        for column in ("MitreTechniques", *LINKS):
-            record[column] = [v for v in row[column].split(SEPARATOR) if v]
-        record["linked_incidents"] = linked.to_dict("records")
         _print_json(record)
         return
 
     lines = [
-        ("incident", row["IncidentId"]),
-        ("time", row["Timestamp"]),
-        ("rule", row["DetectorId"]),
-        *((name, row[name]) for name in DESCRIPTIVE),
-        ("MitreTechniques", row["MitreTechniques"].replace(SEPARATOR, ", ")),
-        ("grade", row["IncidentGrade"] or "open"),
-        ("score", f"{row['score']:.2f}"),
-        ("without links", f"{row['score_without_links']:.2f}"),
-        ("as a new rule", f"{row['score_as_new_rule']:.2f}"),
-        ("status", row["status"]),
-        ("rule_tp", _rule_tp(row)),
-        ("linked", _linked(row)),
-        *((name, row[name].replace(SEPARATOR, ", ")) for name in LINKS),
+        ("incident", record["IncidentId"]),
+        ("time", record["Timestamp"]),
+        ("rule", record["DetectorId"]),
+        *((name, record[name]) for name in DESCRIPTIVE),
+        ("MitreTechniques", ", ".join(record["MitreTechniques"])),
+        ("grade", record["IncidentGrade"] or "open"),
+        ("score", f"{record['score']:.2f}"),
+        ("without links", f"{record['score_without_links']:.2f}"),
+        ("as a new rule", f"{record['score_as_new_rule']:.2f}"),
+        ("status", record["status"]),
+        ("rule_tp", _rule_tp(record)),
+        ("linked", _linked(record)),
+        *((name, ", ".join(record[name])) for name in LINKS),
     ]
     for name, value in lines:
         if value:
             print(f"{name:<16} {_printable(value)}")
-    if not linked.empty:
+    if record["linked_incidents"]:
         print()
         _print_table(("linked incident", "grade", "time", "rule", "title"),
-                     list(linked.itertuples(index=False, name=None)))
+                     [tuple(linked[name] for name in records.LINKED_SHOWN)
+                      for linked in record["linked_incidents"]])
+
+
+def _serve(args: argparse.Namespace) -> None:
+    from meerkat import web
+
+    web.serve(args.runs_dir, args.port)
 
 
 def _runs(args: argparse.Namespace) -> None:
@@ -413,18 +361,6 @@ def _linked(row: dict) -> str:
 def _delta(value: float) -> str:
     text = f"{value:+.2f}"
     return "0.00" if text[1:] == "0.00" else text
-
-
-def _as_record(row: dict, position: int | None = None) -> dict:
-    record = dict(row)
-    for column in ("score", "score_without_links", "score_as_new_rule"):
-        record[column] = round(float(row[column]), 4)
-    for column in ("rule_graded", "rule_true_positives", "linked", "linked_true_positive",
-                   "linked_benign_positive", "linked_false_positive"):
-        record[column] = int(row[column])
-    if position is not None:
-        record = {"position": position, **record}
-    return record
 
 
 def _print_json(value) -> None:
