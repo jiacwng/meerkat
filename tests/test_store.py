@@ -25,17 +25,23 @@ class StoreTests(unittest.TestCase):
         meta = store.save_run(self.runs_dir, self.incidents, "incidents.csv", "defender")
         loaded_meta, loaded = store.load_run(self.runs_dir, meta["run"])
         self.assertEqual(loaded_meta, {k: v for k, v in meta.items() if k != "mapping"})
-        self.assertEqual(meta["incidents"], 7)
+        self.assertEqual(meta["incidents_in_file"], 7)
         self.assertTrue(loaded.equals(self.incidents))
 
     def test_two_runs_in_one_second_get_distinct_ids(self):
         first = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
-        second = store.save_run(self.runs_dir, self.incidents, "b.csv", "defender")
+        second = store.save_run(self.runs_dir, self.incidents.iloc[1:], "b.csv", "defender")
         self.assertNotEqual(first["run"], second["run"])
-        self.assertEqual([m["source"] for m in store.list_runs(self.runs_dir)],
+        self.assertEqual([m["file"] for m in store.list_runs(self.runs_dir)],
                          ["a.csv", "b.csv"])
-        self.assertEqual(store.load_run(self.runs_dir, second["run"])[0]["source"], "b.csv")
-        self.assertEqual(store.load_run(self.runs_dir, first["run"])[0]["source"], "a.csv")
+        self.assertEqual(store.load_run(self.runs_dir, second["run"])[0]["file"], "b.csv")
+        self.assertEqual(store.load_run(self.runs_dir, first["run"])[0]["file"], "a.csv")
+
+    def test_the_same_incidents_are_saved_once(self):
+        first = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
+        again = store.save_run(self.runs_dir, self.incidents, "b.csv", "defender")
+        self.assertEqual(again["run"], first["run"])
+        self.assertEqual(len(store.list_runs(self.runs_dir)), 1)
 
     def test_no_runs(self):
         self.assertEqual(store.list_runs(self.runs_dir), [])
@@ -47,30 +53,30 @@ class StoreTests(unittest.TestCase):
     def test_latest_review_wins_over_the_file_and_over_earlier_reviews(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         self.assertEqual(self._grade_of("200"), "")
-        store.append_grade(self.runs_dir, "200", "FalsePositive", "", 0.5, "queue")
+        store.append_grade(self.runs_dir, "200", "FalsePositive", "", 0.5, "to read")
         store.append_grade(self.runs_dir, "200", "TruePositive", "second look, real",
-                           0.5, "queue")
-        store.append_grade(self.runs_dir, "102", "TruePositive", "", 0.5, "queue")
+                           0.5, "to read")
+        store.append_grade(self.runs_dir, "102", "TruePositive", "", 0.5, "to read")
         self.assertEqual(self._grade_of("200"), "TruePositive")
         self.assertEqual(self._grade_of("102"), "TruePositive")
         self.assertEqual(self._grade_of("103"), "FalsePositive")
 
-    def test_notes_with_commas_quotes_and_newlines_survive(self):
+    def test_comments_with_commas_quotes_and_newlines_survive(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
-        store.append_grade(self.runs_dir, "200", "TruePositive", 'a, "b"\nc', 0.5, "queue")
-        store.append_grade(self.runs_dir, "201", "BenignPositive", "", 0.5, "queue")
+        store.append_grade(self.runs_dir, "200", "TruePositive", 'a, "b"\nc', 0.5, "to read")
+        store.append_grade(self.runs_dir, "201", "BenignPositive", "", 0.5, "to read")
         self.assertEqual(self._grade_of("200"), "TruePositive")
         self.assertEqual(self._grade_of("201"), "BenignPositive")
 
-    def test_a_review_stores_the_score_and_pile_it_had(self):
+    def test_a_review_stores_the_score_and_placement_it_had(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
         self.assertTrue(store.read_reviews(self.runs_dir).empty)
-        store.append_grade(self.runs_dir, "200", "TruePositive", "", 0.123456789, "audit")
+        store.append_grade(self.runs_dir, "200", "TruePositive", "", 0.123456789, "sample")
         header = (self.runs_dir / store.GRADES_FILE).read_text().splitlines()[0]
-        self.assertEqual(header, "time,IncidentId,grade,note,score,pile")
+        self.assertEqual(header, "time,IncidentId,grade,comment,score,placement")
         reviews = store.read_reviews(self.runs_dir)
         self.assertEqual(reviews["score"].tolist(), [0.123456789])
-        self.assertEqual(reviews["pile"].tolist(), ["audit"])
+        self.assertEqual(reviews["placement"].tolist(), ["sample"])
 
     def test_history_merges_repeats_to_one_row(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
@@ -138,19 +144,51 @@ class StoreTests(unittest.TestCase):
 
     def test_settings_round_trip_and_absence(self):
         self.assertEqual(store.read_settings(self.runs_dir), {})
-        both = {"miss_rate": 0.01, "keep_linked": False}
+        both = {"budget": 25, "sample_share": 0.2}
         store.write_settings(self.runs_dir, both)
         self.assertEqual(store.read_settings(self.runs_dir), both)
         self.assertEqual((self.runs_dir / store.SETTINGS_FILE).read_text(),
-                         '{\n  "miss_rate": 0.01,\n  "keep_linked": false\n}\n')
+                         '{\n  "budget": 25,\n  "sample_share": 0.2\n}\n')
+
+    def test_a_sample_is_kept_with_its_run(self):
+        self.assertEqual(store.read_samples(self.runs_dir), [])
+        first = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")["run"]
+        store.save_run(self.runs_dir, self.incidents, "b.csv", "defender")
+        sample = {"pool": ["200", "202"], "drawn": ["202"]}
+        store.save_sample(self.runs_dir, first, sample)
+        self.assertEqual(store.read_samples(self.runs_dir), [sample])
+        for text in ("not json", "[]", '{"pool": ["200"]}', '{"pool": [200], "drawn": []}',
+                     '{"pool": "200", "drawn": 5}', '{"pool": ["200"], "drawn": ["202"]}'):
+            with self.subTest(text):
+                (self.runs_dir / first / store.SAMPLE_FILE).write_text(text)
+                with self.assertRaisesRegex(store.StoreError, store.SAMPLE_FILE):
+                    store.read_samples(self.runs_dir)
+
+    def test_a_damaged_run_or_grade_file_is_refused(self):
+        run = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")["run"]
+        (self.runs_dir / store.GRADES_FILE).write_text("time,IncidentId\nx,200\n")
+        with self.assertRaisesRegex(store.StoreError, store.GRADES_FILE):
+            store.read_reviews(self.runs_dir)
+        for text in ("not json", "[]", '{"created": "2024-06-01T00:00:00Z"}'):
+            with self.subTest(text):
+                (self.runs_dir / run / "meta.json").write_text(text)
+                with self.assertRaisesRegex(store.StoreError, "meta.json"):
+                    store.list_runs(self.runs_dir)
+
+    def test_a_run_saved_without_a_column_of_this_version_is_refused(self):
+        run = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")["run"]
+        saved = self.runs_dir / run / "incidents.csv"
+        self.incidents.drop(columns="Severity").to_csv(saved, index=False)
+        with self.assertRaisesRegex(store.StoreError, "another version"):
+            store.load_history(self.runs_dir)
 
     def test_a_bad_settings_file_is_refused(self):
         self.runs_dir.mkdir()
-        cases = ("not json", "[0.01]", '{"miss_rate": "0.05"}', '{"miss_rate": true}',
-                 '{"miss_rate": 0}', '{"miss_rate": 1}', '{"miss_rate": -0.1}',
-                 '{"miss_rate": NaN}', '{"miss_rate": Infinity}', '{"other": 1}',
-                 '{"miss_rate": 0.05, "other": 1}', '{"keep_linked": 1}',
-                 '{"keep_linked": "true"}', '{"keep_linked": null}')
+        cases = ("not json", "[0.01]", '{"sample_share": "0.1"}', '{"sample_share": true}',
+                 '{"sample_share": 1}', '{"sample_share": -0.1}', '{"sample_share": NaN}',
+                 '{"sample_share": Infinity}', '{"other": 1}', '{"budget": 5, "other": 1}',
+                 '{"budget": 0}', '{"budget": 2.5}', '{"budget": "5"}', '{"budget": true}',
+                 '{"budget": null}', '{"miss_rate": 0.05}')
         for text in cases:
             with self.subTest(text):
                 (self.runs_dir / store.SETTINGS_FILE).write_text(text)

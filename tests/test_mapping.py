@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.incidents import COLUMNS
+from core.incidents import COLUMNS, read_incidents
 from core.mapping import PRESETS, MappingError, load_mapping
 
 
@@ -35,11 +35,24 @@ class MappingTests(unittest.TestCase):
                 self.assertEqual(set(mapping.grades.values()) - {""},
                                  {"TruePositive", "BenignPositive", "FalsePositive"})
 
-    def test_an_empty_file_equals_defender(self):
+    def test_an_empty_file_has_the_defender_columns(self):
         site = load_mapping(self._site(""))
         defender = load_mapping("defender")
-        self.assertEqual((site.columns, site.grades), (defender.columns, defender.grades))
+        self.assertEqual(site.columns, defender.columns)
         self.assertEqual(site.name, "site.toml")
+
+    def test_defender_reads_the_words_microsoft_documents(self):
+        words = ["TruePositive", "Informational, expected activity", "FalsePositive",
+                 "truePositive", "informationalExpectedActivity", "falsePositive", "unknown"]
+        lines = ["IncidentId,Timestamp,DetectorId,IncidentGrade"]
+        for number, word in enumerate(words):
+            lines.append(f'{number},2024-05-20T17:00:07Z,rule,"{word}"')
+        path = self.tmp / "incidents.csv"
+        path.write_text("\n".join(lines) + "\n")
+        incidents = read_incidents(path, load_mapping("defender"))
+        self.assertEqual(list(incidents["IncidentGrade"]), [
+            "TruePositive", "BenignPositive", "FalsePositive",
+            "TruePositive", "BenignPositive", "FalsePositive", ""])
 
     def test_a_missing_path_is_refused_with_the_presets(self):
         with self.assertRaisesRegex(

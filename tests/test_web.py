@@ -1,0 +1,148 @@
+# The web page's server: the page, its three JSON routes and the requests it refuses.
+
+import contextlib
+import http.client
+import io
+import json
+import re
+import socket
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+
+from meerkat import web
+from meerkat.cli import main
+from tests.fixtures import ROWS, use_weights, write_csv
+
+HOSTILE = "<img src=x onerror=alert(1)>"
+
+
+class WebTests(unittest.TestCase):
+    def setUp(self):
+        use_weights(self)
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.runs_dir = tmp / "runs"
+        rows = (*ROWS[:-1], (*ROWS[-1][:5], HOSTILE, *ROWS[-1][6:]))
+        source = write_csv(tmp / "incidents.csv", rows)
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["queue", str(source), "--runs-dir", str(self.runs_dir)])
+        self.server = web.make_server(self.runs_dir, 0)
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join)
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def _request(self, method: str, path: str, body: dict | str | None = None,
+                 token: bool = True, host: str | None = None) -> tuple[int, dict, str]:
+        port = self.server.server_port
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+        self.addCleanup(connection.close)
+        headers = {"Host": host or f"127.0.0.1:{port}"}
+        if token:
+            headers[web.TOKEN_HEADER] = self.server.token
+        if isinstance(body, dict):
+            body = json.dumps(body)
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        return response.status, dict(response.getheaders()), response.read().decode()
+
+    def _queue_ids(self) -> list[str]:
+        status, _, body = self._request("GET", "/api/queue")
+        self.assertEqual(status, 200)
+        return [row["IncidentId"] for row in json.loads(body)["queue"]]
+
+    def test_the_page_carries_the_token_and_a_content_security_policy(self):
+        status, headers, body = self._request("GET", "/", token=False)
+        self.assertEqual(status, 200)
+        self.assertIn(self.server.token, body)
+        self.assertNotIn("__TOKEN__", body)
+        self.assertNotIn("__NONCE__", body)
+        policy = headers["Content-Security-Policy"]
+        self.assertIn("default-src 'none'", policy)
+        nonce = re.search(r"script-src 'nonce-([^']+)'", policy).group(1)
+        self.assertIn(f'<script nonce="{nonce}">', body)
+
+    def test_the_queue_route_lists_the_open_incidents_by_score(self):
+        self.assertEqual(self._queue_ids(), ["201", "202", "200"])
+
+    def test_the_queue_route_sends_the_grades_links_and_row_columns(self):
+        record = json.loads(self._request("GET", "/api/queue")[2])
+        self.assertEqual(record["grades"], ["TruePositive", "BenignPositive", "FalsePositive"])
+        self.assertIn("AccountUpn", record["links"])
+        first = record["queue"][0]
+        self.assertEqual((first["host"], first["user"], first["flag"]), ("", "alice", ""))
+
+    def test_a_request_without_the_token_is_refused(self):
+        self.assertEqual(self._request("GET", "/api/queue", token=False)[0], 403)
+        grade = {"incident": "201", "grade": "TruePositive"}
+        self.assertEqual(self._request("POST", "/api/grade", grade, token=False)[0], 403)
+        self.assertEqual(self._queue_ids(), ["201", "202", "200"])
+
+    def test_a_request_under_another_host_name_is_refused(self):
+        for path in ("/", "/api/queue"):
+            self.assertEqual(self._request("GET", path, host="evil.example")[0], 403)
+        port = self.server.server_port
+        self.assertEqual(self._request("GET", "/", host=f"localhost:{port}")[0], 200)
+
+    def test_a_grade_from_the_page_closes_the_incident(self):
+        self.assertEqual(self._queue_ids(), ["201", "202", "200"])
+        grade = {"incident": "201", "grade": "TruePositive", "comment": "checked with the user"}
+        status, _, body = self._request("POST", "/api/grade", grade)
+        self.assertEqual((status, json.loads(body)["grade"]), (200, "TruePositive"))
+        self.assertEqual(self._queue_ids(), ["202", "200"])
+        self.assertIn("checked with the user", (self.runs_dir / "grades.csv").read_text())
+        record = json.loads(self._request("GET", "/api/incident?id=201")[2])
+        self.assertEqual(record["IncidentGrade"], "TruePositive")
+        linked = record["linked_incidents"]
+        self.assertEqual([row["IncidentId"] for row in linked], ["100"])
+        self.assertEqual(linked[0]["shared"], ["AccountName alice", "IpAddress 10.0.0.1"])
+        self.assertEqual(record["entities"], [
+            {"field": "AccountName", "value": "alice", "graded_before": 1,
+             "TruePositive": 1, "BenignPositive": 0, "FalsePositive": 0},
+            {"field": "IpAddress", "value": "10.0.0.1", "graded_before": 1,
+             "TruePositive": 1, "BenignPositive": 0, "FalsePositive": 0}])
+
+    def test_a_grade_recorded_in_the_terminal_reaches_the_page(self):
+        self.assertEqual(self._queue_ids(), ["201", "202", "200"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["review", "202", "fp", "--runs-dir", str(self.runs_dir)])
+        self.assertEqual(self._queue_ids(), ["201", "200"])
+
+    def test_a_wrong_grade_an_unknown_incident_and_a_long_body_are_refused(self):
+        wrong = {"incident": "201", "grade": "Malicious"}
+        self.assertEqual(self._request("POST", "/api/grade", wrong)[0], 400)
+        wrong = {"incident": "201", "grade": "TruePositive", "group": "yes"}
+        self.assertEqual(self._request("POST", "/api/grade", wrong)[0], 400)
+        unknown = {"incident": "999", "grade": "TruePositive"}
+        self.assertEqual(self._request("POST", "/api/grade", unknown)[0], 404)
+        self.assertEqual(self._request("POST", "/api/grade", "not json")[0], 400)
+        long = "x" * (web.BODY_LIMIT + 1)
+        self.assertEqual(self._request("POST", "/api/grade", long)[0], 400)
+        self.assertEqual(self._request("GET", "/api/incident?id=999")[0], 404)
+        self.assertEqual(self._request("GET", "/api/other")[0], 404)
+        self.assertEqual(self._queue_ids(), ["201", "202", "200"])
+
+    def test_a_connection_that_sends_nothing_does_not_hold_the_other_requests(self):
+        idle = socket.create_connection(("127.0.0.1", self.server.server_port))
+        self.addCleanup(idle.close)
+        self.assertEqual(self._queue_ids(), ["201", "202", "200"])
+
+    def test_a_damaged_grade_file_is_answered_with_an_error(self):
+        (self.runs_dir / "grades.csv").write_text('"open quote')
+        status, _, body = self._request("GET", "/api/queue")
+        self.assertEqual(status, 404)
+        self.assertIn("grades.csv", json.loads(body)["error"])
+
+    def test_incident_text_reaches_the_page_as_data_and_is_never_parsed_as_html(self):
+        status, headers, body = self._request("GET", "/api/incident?id=202")
+        self.assertEqual((status, headers["Content-Type"]), (200, "application/json"))
+        self.assertEqual(json.loads(body)["AlertTitle"], HOSTILE)
+        page = web.PAGE.read_text(encoding="utf-8")
+        for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
+            self.assertNotIn(sink, page)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from core.mapping import Mapping
 
 REQUIRED = ("IncidentId", "Timestamp", "DetectorId")
-DESCRIPTIVE = ("AlertTitle", "Category")
+DESCRIPTIVE = ("AlertTitle", "Category", "Severity")
 LINKS = (
     "DeviceId", "DeviceName", "AccountObjectId", "AccountSid", "AccountUpn",
     "AccountName", "IpAddress", "Sha256", "Url",

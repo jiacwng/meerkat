@@ -144,6 +144,17 @@ class ReadIncidentsTests(unittest.TestCase):
         self.assertEqual(incidents.loc["n0", "IpAddress"], "10.0.0.1")
         self.assertEqual(incidents.loc["n0", "DeviceName"], "host1")
 
+    def test_severity_comes_from_the_earliest_row_under_the_mapped_name(self):
+        header = ("IncidentId", "Timestamp", "DetectorId", "Severity")
+        rows = (("1", "2024-06-02T00:00:00Z", "7", "Low"), ("1", "2024-06-01T00:00:00Z", "7", "High"))
+        incidents = read_incidents(write_csv(self.path, rows, header), DEFENDER)
+        self.assertEqual(list(incidents["Severity"]), ["High"])
+        mapping = self.path.with_name("urgency.toml")
+        mapping.write_text('[columns]\nSeverity = "urgency"\n')
+        renamed = write_csv(self.path, rows, (*header[:3], "urgency"))
+        self.assertEqual(list(read_incidents(renamed, load_mapping(str(mapping)))["Severity"]),
+                         ["High"])
+
     def test_sentinel_export_collapses_rows_per_incident(self):
         header = ("IncidentNumber", "CreatedTime", "RelatedAnalyticRuleIds", "Title",
                   "Classification")

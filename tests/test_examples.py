@@ -2,7 +2,6 @@
 
 import contextlib
 import io
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -55,31 +54,44 @@ class ExampleTests(unittest.TestCase):
         pd.testing.assert_frame_equal(merged.reset_index(drop=True),
                                       single.reset_index(drop=True))
 
-    def test_readme_quotes_the_footer_the_quick_start_prints(self):
-        runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+    def _quick_start(self, runs_dir: Path) -> str:
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
+            main(["config", "budget", "10", "--runs-dir", str(runs_dir)])
             main(["queue", str(EXAMPLES / "incidents.csv"), "--runs-dir", str(runs_dir)])
-        footer = out.getvalue().splitlines()[-5:]
+        return out.getvalue()
+
+    def test_readme_quotes_the_footer_the_quick_start_prints(self):
+        runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        footer = self._quick_start(runs_dir).split("\n\n")[-1].splitlines()
+        self.assertEqual(footer[0], "OPEN           42 incidents in 42 rows, 10 listed")
         readme = (EXAMPLES.parent / "README.md").read_text(encoding="utf-8")
         for line in footer:
             self.assertIn(line, readme)
 
-    def test_grades_file_shows_no_true_positive_was_set_aside(self):
+    def test_readme_quotes_what_budget_prints_once_the_sample_is_graded(self):
         runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        argv = ["--runs-dir", str(runs_dir)]
-        with contextlib.redirect_stdout(io.StringIO()):
-            main(["queue", str(EXAMPLES / "incidents.csv"), *argv])
+        self._quick_start(runs_dir)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            main(["queue", "--closed", "--all", "--json", *argv])
-        closed = {row["IncidentId"] for row in json.loads(out.getvalue())["queue"]}
-        with contextlib.redirect_stdout(io.StringIO()):
-            main(["review", "--file", str(EXAMPLES / "grades.csv"), *argv])
-        grades = store.read_reviews(runs_dir)
-        true_positive = set(grades.loc[grades["grade"] == "TruePositive", "IncidentId"])
-        self.assertEqual((len(closed), len(true_positive)), (9, 20))
-        self.assertFalse(closed & true_positive)
+            main(["review", store.read_samples(runs_dir)[0]["drawn"][0], "fp",
+                  "--runs-dir", str(runs_dir)])
+            out.truncate(0)
+            out.seek(0)
+            main(["budget", "--runs-dir", str(runs_dir)])
+        readme = (EXAMPLES.parent / "README.md").read_text(encoding="utf-8")
+        self.assertIn(f"```text\n{out.getvalue()}```", readme)
+
+    def test_grades_file_counts_the_true_positives_in_the_list_and_below_it(self):
+        runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self._quick_start(runs_dir)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            main(["review", "--file", str(EXAMPLES / "grades.csv"), "--runs-dir", str(runs_dir)])
+        self.assertEqual(out.getvalue().splitlines()[-1],
+                         "GRADED   incidents 42   tp 20   tp_to_read 9   tp_sample 0   tp_below 11")
+        sample = store.read_samples(runs_dir)[0]
+        self.assertEqual((len(sample["pool"]), len(sample["drawn"])), (33, 1))
 
 
 if __name__ == "__main__":

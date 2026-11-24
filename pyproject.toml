@@ -25,6 +25,7 @@ packages = ["core", "meerkat"]
 
 [tool.setuptools.package-data]
 core = ["data/*.json", "data/mappings/*.toml"]
+meerkat = ["page.html"]
 
 [tool.ruff]
 line-length = 88

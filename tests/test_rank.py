@@ -37,8 +37,8 @@ class ScoreTests(unittest.TestCase):
         self.assertAlmostEqual(scored.loc["202", "score"], 0.5)
 
     def test_inputs_are_standardised_before_the_coefficients(self):
-        weights = dict(WEIGHTS, mean=[0.5] * 10, scale=[2.0] * 10,
-                       coefficients=[1.0, -1.0, 0.5, 0.25, 2.0, 1.0, -0.5, 0.3, 1.5, -2.0],
+        weights = dict(WEIGHTS, mean=[0.5] * 8, scale=[2.0] * 8,
+                       coefficients=[1.0, -1.0, 0.5, 0.25, 2.0, 1.0, -0.5, 0.3],
                        intercept=0.1)
         use_weights(self, weights)
         scored = score(self.incidents).set_index("IncidentId")
@@ -71,37 +71,17 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(set(scored["score"]), {0.5})
         self.assertEqual(list(scored["IncidentId"]), ["150", "202", "201", "200"])
 
-    def test_no_history_leaves_both_other_scores_at_the_score(self):
-        scored = score(self.incidents).set_index("IncidentId").loc["202"]
-        self.assertEqual(scored["reason"], "no history")
-        self.assertEqual(scored["score_without_links"], scored["score"])
-        self.assertEqual(scored["score_as_new_rule"], scored["score"])
-
     def test_linked_true_positives_raise_the_score(self):
-        use_weights(self, dict(WEIGHTS, coefficients=[0, 0, 0, 0, 0, 1, 0, 0, 1, 0],
+        use_weights(self, dict(WEIGHTS, coefficients=[0, 0, 0, 0, 0, 1, 1, 0],
                                intercept=0.0))
-        scored = score(self.incidents).set_index("IncidentId").loc["201"]
-        self.assertEqual(scored["reason"], "linked incidents raise it")
-        self.assertLess(scored["score_without_links"], scored["score"])
-        self.assertEqual(scored["score_as_new_rule"], scored["score"])
+        scored = score(self.incidents).set_index("IncidentId")["score"]
+        self.assertGreater(scored["201"], scored["202"])
 
-    def test_a_poor_rule_history_lowers_the_score(self):
-        scored = score(self.incidents).set_index("IncidentId").loc["200"]
-        self.assertEqual(scored["reason"], "rule history lowers it")
-        self.assertGreater(scored["score_as_new_rule"], scored["score"])
-        self.assertEqual(scored["score_without_links"], scored["score"])
-
-    def test_a_good_rule_history_raises_the_score(self):
-        scored = score(self.incidents).set_index("IncidentId").loc["201"]
-        self.assertEqual(scored["reason"], "rule history raises it")
-        self.assertLess(scored["score_as_new_rule"], scored["score"])
-
-    def test_scored_as_a_new_rule_ignores_the_rule_history(self):
-        use_weights(self, dict(WEIGHTS, coefficients=[0, 4, 0, 0.5, 0, 1, 0, 0, 1, 0]))
-        scored = score(self.incidents).set_index("IncidentId")
-        self.assertNotEqual(scored.loc["200", "score"], scored.loc["202", "score"])
-        self.assertAlmostEqual(scored.loc["200", "score_as_new_rule"],
-                               scored.loc["202", "score_as_new_rule"])
+    def test_a_rule_history_moves_the_score_from_that_of_an_ungraded_rule(self):
+        use_weights(self, dict(WEIGHTS, coefficients=[0, 4, 0, 0, 0, 0, 0, 0]))
+        scored = score(self.incidents).set_index("IncidentId")["score"]
+        self.assertLess(scored["200"], scored["202"])
+        self.assertGreater(scored["201"], scored["202"])
 
     def test_input_is_left_unchanged(self):
         before = self.incidents.copy()
@@ -113,9 +93,9 @@ class ShippedWeightsTests(unittest.TestCase):
     def test_the_weights_file_has_one_value_per_input(self):
         weights = load_weights()
         self.assertEqual(weights["inputs"], list(features.INPUTS))
-        self.assertEqual(len(weights["inputs"]), 10)
+        self.assertEqual(len(weights["inputs"]), 8)
         for name in ("mean", "scale", "coefficients"):
-            self.assertEqual(len(weights[name]), 10)
+            self.assertEqual(len(weights[name]), 8)
         self.assertTrue(0 < weights["prior"] < 1)
         self.assertEqual(set(weights["provenance"]),
                          {"dataset", "incidents", "organisations", "time_cut", "date"})
@@ -134,20 +114,6 @@ class ShippedWeightsTests(unittest.TestCase):
                             for frame in (linked, unlinked))
         self.assertEqual(linked["linked"], 0)
         self.assertEqual(linked["score"], unlinked["score"])
-
-    def test_an_incident_with_no_history_is_scored_the_same_three_ways(self):
-        found = score(pd.DataFrame([_open_row("only", 0, "")])).iloc[0]
-        self.assertEqual(found["reason"], "no history")
-        self.assertEqual(found["score"], found["score_without_links"])
-        self.assertEqual(found["score"], found["score_as_new_rule"])
-
-    def test_a_rule_history_without_links_changes_only_the_new_rule_score(self):
-        past = _open_row("past", 0, "") | {"IncidentGrade": "TruePositive"}
-        found = score(pd.DataFrame([past, _open_row("new", 5, "")])).set_index("IncidentId")
-        found = found.loc["new"]
-        self.assertTrue(found["reason"].startswith("rule history"))
-        self.assertEqual(found["score_without_links"], found["score"])
-        self.assertNotEqual(found["score_as_new_rule"], found["score"])
 
 
 if __name__ == "__main__":
