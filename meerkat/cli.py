@@ -298,6 +298,8 @@ def _budget_report(args: argparse.Namespace) -> None:
         estimated = "not estimated, 0 graded samples"
     elif unread == 0:
         estimated = "not estimated, 0 incidents below budget"
+    elif unread == sample["not_sampled"]:
+        estimated = f"not estimated, {sample['not_sampled']} not sampled"
     else:
         estimated = (f"{interval['low']} to {interval['high']} of "
                      f"{unread - sample['not_sampled']}, 95% interval, "
@@ -331,11 +333,12 @@ def _config(args: argparse.Namespace) -> None:
         saved.pop(args.setting, None)
     else:
         saved[args.setting] = args.value
-    store.write_settings(args.runs_dir, saved)
     runs = store.list_runs(args.runs_dir)
     if runs:
-        newest = runs[-1]["run"]
         scored = records.scored(args.runs_dir)
+    store.write_settings(args.runs_dir, saved)
+    if runs:
+        newest = runs[-1]["run"]
         graded = set(scored.loc[scored["IncidentGrade"] != "", "IncidentId"])
         if (store.has_sample(args.runs_dir, newest)
                 and not graded & set(store.read_samples(args.runs_dir)[-1]["drawn"])):

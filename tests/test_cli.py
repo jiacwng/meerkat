@@ -170,6 +170,11 @@ class CliTests(unittest.TestCase):
                          ("config", "budget", "2")):
                 with self.subTest(text=text, argv=argv):
                     self._assert_one_line_error(argv, "grades.csv")
+        grades.write_text('"open quote')
+        settings = self.runs_dir / "settings.json"
+        before = settings.read_text() if settings.exists() else None
+        self.assertEqual(self._run("config", "budget", "2")[0], 1)
+        self.assertEqual(settings.read_text() if settings.exists() else None, before)
         grades.write_text(kept)
         meta = next(self.runs_dir.glob("*/meta.json"))
         for text in ("not json", "[]", "{}", '{"created": 5, "file": "a", "incidents_in_file": 1}'):
@@ -662,6 +667,18 @@ class CliTests(unittest.TestCase):
             "BELOW BUDGET      0 rows, 0 incidents",
             "SAMPLE            1 drawn, 1 graded, 0 TP",
             "TP BELOW BUDGET   not estimated, 0 incidents below budget"])
+
+    def test_incidents_below_the_budget_that_met_no_draw_are_not_estimated(self):
+        self._budget()
+        for row in self._queue_json()["queue"]:
+            self._run("review", row["IncidentId"], "fp")
+        self._run("config", "sample_share", "0")
+        later = [plain_row(f"n{i}", "9", time=f"2024-06-11T00:0{i}:00Z") for i in range(6)]
+        self._run("queue", str(write_csv(self.tmp / "later.csv", later)))
+        self.assertEqual(self._run("budget")[1].splitlines()[-3:], [
+            "SAMPLE            1 drawn, 1 graded, 0 TP",
+            "  not sampled     2",
+            "TP BELOW BUDGET   not estimated, 2 not sampled"])
 
     def test_config_prints_the_defaults_on_an_empty_runs_folder(self):
         code, out, err = self._run("config")
