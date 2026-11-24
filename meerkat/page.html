@@ -6,6 +6,7 @@
 <title>meerkat</title>
 <style nonce="__NONCE__">
 :root {
+  color-scheme: light dark;
   --bg: #f4f4f1; --panel: #ffffff; --text: #1c1c1a; --soft: #6b6a64; --line: #dedcd3;
   --pick: #e6f1fb; --pick-text: #0c447c; --bad: #a32d2d; --cell: #f1efe8;
 }
@@ -32,16 +33,18 @@ input { font: inherit; color: var(--text); background: var(--panel);
         border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; }
 #search { width: 280px; }
 #keys { margin-left: auto; color: var(--soft); }
+#keys span { margin-left: 12px; }
 kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; background: var(--panel); }
 main { flex: 1; min-height: 0; display: grid; gap: 10px; padding: 0 14px 14px;
-       grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr); }
-@media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+       grid-template-columns: minmax(0, 1fr) clamp(440px, 34%, 520px); }
+@media (max-width: 1200px) { main { grid-template-columns: minmax(0, 1fr); } }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
          overflow: auto; min-height: 0; }
 table { width: 100%; border-collapse: collapse; }
 th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 500;
-     color: var(--soft); font-size: 11px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-td { padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+     color: var(--soft); font-size: 11px; padding: 6px; border-bottom: 1px solid var(--line); }
+td { padding: 5px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+#detail td { white-space: normal; overflow-wrap: break-word; }
 td.title { font-family: system-ui, sans-serif; max-width: 0; width: 40%;
            overflow: hidden; text-overflow: ellipsis; }
 #rows tr[data-id], #linked tr, #members tr { cursor: pointer; }
@@ -54,17 +57,20 @@ td.title { font-family: system-ui, sans-serif; max-width: 0; width: 40%;
 #linked tr.other td.tp { color: var(--bad); }
 td.divider { font-size: 11px; color: var(--soft); background: var(--bg); }
 #detail { padding: 12px 14px; }
-#nav { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; color: var(--soft); }
+#top { position: sticky; top: -12px; z-index: 1; background: var(--panel); margin: -12px -14px 0;
+       padding: 12px 14px 10px; border-bottom: 1px solid var(--line); }
+#top + dl { padding-top: 10px; }
+#nav { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; color: var(--soft); }
 #detail h2 { font-size: 15px; margin: 0 0 10px; overflow-wrap: anywhere; }
 #detail h3 { font-size: 11px; font-weight: 500; color: var(--soft); text-transform: uppercase;
              letter-spacing: .04em; margin: 14px 0 6px; padding-top: 10px;
              border-top: 1px solid var(--line); }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 0; }
 dt { color: var(--soft); }
-dd { margin: 0; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
-.stats { display: flex; flex-wrap: wrap; gap: 6px; }
+dd { margin: 0; font-family: ui-monospace, monospace; overflow-wrap: anywhere;
+     white-space: pre-wrap; }
 .tp { color: var(--bad); font-weight: 600; }
-#grade { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+#grade { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
 #comment { width: 100%; }
 button { font: inherit; color: var(--text); background: var(--panel); cursor: pointer;
          border: 1px solid var(--line); border-radius: 4px; padding: 5px 10px; }
@@ -76,7 +82,7 @@ button:hover { background: var(--cell); }
 <header><h1>meerkat</h1></header>
 <div id="bar">
   <input id="search" type="search" aria-label="filter" placeholder="filter">
-  <label><input id="all" type="checkbox"> <span id="all-label">below</span></label>
+  <label><input id="all" type="checkbox"> <span id="all-label">show below budget</span></label>
   <span id="notice" aria-live="polite"></span>
   <span id="keys"></span>
 </div>
@@ -110,8 +116,13 @@ function el(tag, text, className) {
   return node;
 }
 
-function gradedBefore(tp, bp, total) {
-  return `${tp} TP  ${bp} BP  ${total - tp - bp} FP  of ${total}`;
+function gradedBefore(...counts) {
+  const cells = counts.map(([tp, bp, total]) => [tp, bp, total - tp - bp, total].map(String));
+  const wide = [0, 1, 2, 3].map(at => Math.max(...cells.map(cell => cell[at].length)));
+  return cells.map(cell => {
+    const [tp, bp, fp, total] = cell.map((text, at) => text.padStart(wide[at]));
+    return `${tp} TP  ${bp} BP  ${fp} FP  of ${total} graded before`;
+  });
 }
 
 function stat(label, value) {
@@ -158,10 +169,13 @@ async function load(keep) {
     stats.push(stat("to read", record.to_read), stat("below budget", record.below_budget));
   }
   header.replaceChildren(el("h1", "meerkat"), ...stats);
-  document.getElementById("all-label").textContent = `below budget ${record.below_budget}`;
+  document.getElementById("all-label").textContent = `show below budget ${record.below_budget}`;
   const keys = document.getElementById("keys");
   keys.replaceChildren();
-  for (const key of ["j", "k", ...Object.keys(state.keys), "/"]) keys.append(el("kbd", key), " ");
+  const hints = [["j", "next"], ["k", "previous"],
+                 ...Object.entries(state.keys).map(([key, grade]) => [key, grade.replace(/[a-z]/g, "")]),
+                 ["/", "filter"]];
+  for (const [key, label] of hints) keys.append(el("span", undefined), el("kbd", key), ` ${label}`);
   draw(keep);
 }
 
@@ -238,21 +252,41 @@ async function show(id) {
     nav.append(back);
   }
 
-  const parts = [nav, el("h2", row.AlertTitle || row.IncidentId), fields([
+  const comment = el("input");
+  comment.id = "comment";
+  comment.type = "text";
+  comment.setAttribute("aria-label", "comment");
+  comment.placeholder = "comment";
+  const buttons = el("div");
+  buttons.id = "grade";
+  for (const [key, grade] of Object.entries(state.keys)) {
+    const button = el("button", state.open ? `${grade} ${key}` : grade);
+    button.addEventListener("click", () => gradeIt(grade));
+    buttons.append(button);
+  }
+  if (state.open && row.members.length) {
+    const whole = el("input"), label = el("label");
+    whole.id = "whole";
+    whole.type = "checkbox";
+    label.append(whole, ` group ${row.members.length + 1}`);
+    buttons.append(label);
+  }
+  const top = el("div");
+  top.id = "top";
+  top.append(nav, el("h2", row.AlertTitle || row.IncidentId), buttons, comment);
+
+  const [rule, linked] = gradedBefore(
+    [row.rule_true_positives, row.rule_benign_positives, row.rule_graded],
+    [row.linked_true_positive, row.linked_benign_positive, row.linked]);
+  const parts = [top, fields([
     ["incident", row.IncidentId], ["time", row.Timestamp], ["rule", row.DetectorId],
     ["category", row.Category], ["severity", row.Severity],
     ["techniques", row.MitreTechniques.join(", ")],
     ["grade", row.IncidentGrade || "open"], ["placement", row.placement],
+  ]), el("h3", "score"), fields([
+    ["score", row.score.toFixed(2)], ["rule", rule], ["linked", linked],
+    ["same rule", row.linked ? `${row.linked_same_rule} of ${row.linked}` : ""],
   ])];
-
-  const scores = el("div", undefined, "stats");
-  scores.append(stat("score", row.score.toFixed(2)),
-                stat("rule", gradedBefore(row.rule_true_positives, row.rule_benign_positives,
-                                          row.rule_graded)),
-                stat("linked", gradedBefore(row.linked_true_positive, row.linked_benign_positive,
-                                            row.linked)));
-  if (row.linked) scores.append(stat("same rule", `${row.linked_same_rule} of ${row.linked}`));
-  parts.push(el("h3", "score"), scores);
 
   if (row.entities.length) {
     const short = state.record.grades.map(grade => grade.replace(/[a-z]/g, ""));
@@ -310,28 +344,6 @@ async function show(id) {
     parts.push(el("h3", "history"), table);
   }
 
-  parts.push(el("h3", "grade"));
-  const comment = el("input");
-  comment.id = "comment";
-  comment.type = "text";
-  comment.setAttribute("aria-label", "comment");
-  comment.placeholder = "comment";
-  const buttons = el("div");
-  buttons.id = "grade";
-  for (const [key, grade] of Object.entries(state.keys)) {
-    const button = el("button", state.open ? `${grade} ${key}` : grade);
-    button.addEventListener("click", () => gradeIt(grade));
-    buttons.append(button);
-  }
-  parts.push(comment);
-  if (state.open && row.members.length) {
-    const whole = el("input"), label = el("label");
-    whole.id = "whole";
-    whole.type = "checkbox";
-    label.append(whole, ` group ${row.members.length + 1}`);
-    parts.push(label);
-  }
-  parts.push(buttons);
   pane.replaceChildren(...parts);
   pane.scrollTop = 0;
 }
