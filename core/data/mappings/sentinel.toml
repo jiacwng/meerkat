@@ -1,0 +1,11 @@
+# Microsoft Sentinel SecurityIncident table, one row per incident and alert.
+
+[columns]
+IncidentId = "IncidentNumber"
+Timestamp = "CreatedTime"
+DetectorId = "RelatedAnalyticRuleIds"
+AlertTitle = "Title"
+IncidentGrade = "Classification"
+
+[grades]
+open = ["Undetermined"]
