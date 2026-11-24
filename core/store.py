@@ -9,20 +9,25 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.incidents import collapse
+from core.incidents import COLUMNS, collapse
 
 GRADES_FILE = "grades.csv"
 SETTINGS_FILE = "settings.json"
 SAMPLE_FILE = "sample.json"
-GRADE_COLUMNS = ("time", "IncidentId", "grade", "note", "score", "status")
+GRADE_COLUMNS = ("time", "IncidentId", "grade", "comment", "score", "placement")
 
 
 class StoreError(ValueError):
     pass
 
 
-def save_run(runs_dir: Path, incidents: pd.DataFrame, source: str,
+def save_run(runs_dir: Path, incidents: pd.DataFrame, file: str,
              mapping: str) -> dict:
+    text = incidents.to_csv(index=False, lineterminator="\n")
+    for meta in list_runs(runs_dir):
+        saved = runs_dir / meta["run"] / "incidents.csv"
+        if saved.read_text(encoding="utf-8") == text:
+            return meta
     now = datetime.now(UTC)
     stamp = now.strftime("%Y%m%dT%H%M%SZ")
     run_id, attempt = stamp, 1
@@ -37,11 +42,11 @@ def save_run(runs_dir: Path, incidents: pd.DataFrame, source: str,
     meta = {
         "run": run_id,
         "created": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "source": source,
+        "file": file,
         "mapping": mapping,
-        "incidents": len(incidents),
+        "incidents_in_file": len(incidents),
     }
-    incidents.to_csv(runs_dir / run_id / "incidents.csv", index=False)
+    (runs_dir / run_id / "incidents.csv").write_text(text, encoding="utf-8", newline="\n")
     (runs_dir / run_id / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
     return meta
 
@@ -51,12 +56,19 @@ def list_runs(runs_dir: Path) -> list[dict]:
         return []
     runs = []
     for meta_file in sorted(runs_dir.glob("*/meta.json")):
-        meta = json.loads(meta_file.read_text())
+        try:
+            meta = json.loads(meta_file.read_text())
+        except (OSError, ValueError) as error:
+            raise StoreError(f"{meta_file}: unreadable ({error})") from None
+        if not (isinstance(meta, dict) and isinstance(meta.get("created"), str)
+                and isinstance(meta.get("file"), str)
+                and isinstance(meta.get("incidents_in_file"), int)):
+            raise StoreError(f"{meta_file}: expected created, file and incidents_in_file")
         runs.append({
             "run": meta_file.parent.name,
             "created": meta["created"],
-            "source": meta["source"],
-            "incidents": meta["incidents"],
+            "file": meta["file"],
+            "incidents_in_file": meta["incidents_in_file"],
         })
     return sorted(runs, key=lambda meta: (meta["created"], meta["run"]))
 
@@ -119,6 +131,14 @@ def save_sample(runs_dir: Path, run_id: str, sample: dict) -> None:
     (runs_dir / run_id / SAMPLE_FILE).write_text(json.dumps(sample) + "\n")
 
 
+def drop_sample(runs_dir: Path, run_id: str) -> None:
+    (runs_dir / run_id / SAMPLE_FILE).unlink()
+
+
+def has_sample(runs_dir: Path, run_id: str) -> bool:
+    return (runs_dir / run_id / SAMPLE_FILE).exists()
+
+
 def read_samples(runs_dir: Path) -> list[dict]:
     found = []
     for meta in list_runs(runs_dir):
@@ -139,15 +159,15 @@ def read_samples(runs_dir: Path) -> list[dict]:
     return found
 
 
-def append_grade(runs_dir: Path, incident_id: str, grade: str, note: str,
-                 score: float, status: str) -> None:
+def append_grade(runs_dir: Path, incident_id: str, grade: str, comment: str,
+                 score: float, placement: str) -> None:
     grades_file = runs_dir / GRADES_FILE
     with grades_file.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         if os.fstat(handle.fileno()).st_size == 0:
             writer.writerow(GRADE_COLUMNS)
         now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        writer.writerow((now, incident_id, grade, note, repr(score), status))
+        writer.writerow((now, incident_id, grade, comment, repr(score), placement))
 
 
 def read_reviews(runs_dir: Path) -> pd.DataFrame:
@@ -155,12 +175,25 @@ def read_reviews(runs_dir: Path) -> pd.DataFrame:
     if not grades_file.exists():
         empty = pd.DataFrame({name: [] for name in GRADE_COLUMNS})
         return empty.astype({"score": float})
-    reviews = pd.read_csv(grades_file, dtype=str, keep_default_na=False)
-    return reviews.astype({"score": float})
+    try:
+        reviews = pd.read_csv(grades_file, dtype=str, keep_default_na=False)
+        if not set(GRADE_COLUMNS) <= set(reviews.columns):
+            raise ValueError(f"expected the columns {', '.join(GRADE_COLUMNS)}")
+        return reviews.astype({"score": float})
+    except (OSError, ValueError) as error:
+        raise StoreError(f"{grades_file}: unreadable ({error})") from None
 
 
 def _read_run(runs_dir: Path, run_id: str) -> pd.DataFrame:
-    return pd.read_csv(runs_dir / run_id / "incidents.csv", dtype=str, keep_default_na=False)
+    saved = runs_dir / run_id / "incidents.csv"
+    try:
+        incidents = pd.read_csv(saved, dtype=str, keep_default_na=False)
+    except (OSError, ValueError) as error:
+        raise StoreError(f"{saved}: unreadable ({error})") from None
+    if list(incidents.columns) != list(COLUMNS):
+        raise StoreError(f"{saved}: saved by another version of meerkat, remove "
+                         f"{saved.parent} and load its file again")
+    return incidents
 
 
 def _apply_grades(runs_dir: Path, incidents: pd.DataFrame) -> pd.DataFrame:

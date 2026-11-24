@@ -2,8 +2,9 @@
 
 import json
 import secrets
+import threading
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -28,9 +29,10 @@ def serve(runs_dir: Path, port: int) -> None:
         server.server_close()
 
 
-def make_server(runs_dir: Path, port: int) -> HTTPServer:
-    server = HTTPServer((HOST, port), _Handler)
+def make_server(runs_dir: Path, port: int) -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer((HOST, port), _Handler)
     server.runs_dir = runs_dir
+    server.lock = threading.Lock()
     server.token = secrets.token_urlsafe(32)
     server.scored = (None, None)
     return server
@@ -97,23 +99,30 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             body = json.loads(self.rfile.read(size))
-            incident, grade, note = body["incident"], body["grade"], body.get("note", "")
+            incident, grade = body["incident"], body["grade"]
+            comment = body.get("comment", "")
+            whole = body.get("group", False)
         except (ValueError, KeyError, TypeError, AttributeError):
             self._json(HTTPStatus.BAD_REQUEST, {"error": "expected incident and grade"})
             return
-        if not isinstance(incident, str) or not isinstance(note, str) or grade not in GRADES:
+        if (not isinstance(incident, str) or not isinstance(comment, str)
+                or not isinstance(whole, bool) or grade not in GRADES):
             self._json(HTTPStatus.BAD_REQUEST,
                        {"error": f"grade is one of {', '.join(GRADES)}"})
             return
-        self._answer(lambda: self._record(incident, grade, note))
+        self._answer(lambda: self._record(incident, grade, comment, whole))
 
-    def _record(self, incident: str, grade: str, note: str) -> dict:
-        records.grade(self.server.runs_dir, self._scores(), [(incident, grade)], note)
-        return {"incident": incident, "grade": grade}
+    def _record(self, incident: str, grade: str, comment: str, whole: bool) -> dict:
+        runs_dir, scores = self.server.runs_dir, self._scores()
+        graded = records.with_group(runs_dir, scores, incident) if whole else [incident]
+        records.grade(runs_dir, scores, [(one, grade) for one in graded], comment)
+        return {"incident": incident, "grade": grade, "graded": len(graded)}
 
     def _answer(self, build) -> None:
         try:
-            self._json(HTTPStatus.OK, build())
+            with self.server.lock:
+                built = build()
+            self._json(HTTPStatus.OK, built)
         except StoreError as error:
             self._json(HTTPStatus.NOT_FOUND, {"error": str(error)})
 

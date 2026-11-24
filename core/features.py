@@ -12,7 +12,7 @@ INPUTS = (
 )
 LINKED = ("linked", "linked_true_positive", "linked_benign_positive",
           "linked_false_positive")
-RULE = ("rule_graded", "rule_true_positives")
+RULE = ("rule_graded", "rule_true_positives", "rule_benign_positives")
 SMOOTH = 5.0
 LINK_SMOOTH = 1.0
 PLACEHOLDER_SHARE = 0.5
@@ -30,6 +30,7 @@ def compute(incidents: pd.DataFrame, prior: float) -> pd.DataFrame:
     org_graded, org_tp = _earlier_totals(whole, rank, graded, true_positive)
     rule = pd.factorize(incidents["DetectorId"])[0]
     rule_graded, rule_tp = _earlier_totals(rule, rank, graded, true_positive)
+    _, rule_bp = _earlier_totals(rule, rank, graded, grade == 1)
     by_grade, has_link = _links(incidents, rank, grade)
     linked = by_grade.sum(axis=0)
 
@@ -46,6 +47,7 @@ def compute(incidents: pd.DataFrame, prior: float) -> pd.DataFrame:
         "linked_false_positive": by_grade[2],
         "rule_graded": rule_graded,
         "rule_true_positives": rule_tp,
+        "rule_benign_positives": rule_bp,
     }
     return pd.DataFrame(columns, index=incidents.index)
 

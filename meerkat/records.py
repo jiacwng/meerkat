@@ -4,10 +4,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from core import budget, features, rank, store
-from core.incidents import LINKS, SEPARATOR
+from core import budget, features, groups, rank, store
+from core.incidents import GRADES, LINKS, SEPARATOR
 
 LINKED_SHOWN = ("IncidentId", "IncidentGrade", "Timestamp", "DetectorId", "AlertTitle")
+HOST = ("DeviceName", "DeviceId")
+USER = ("AccountUpn", "AccountName", "AccountSid", "AccountObjectId")
 
 
 def settings(runs_dir: Path) -> dict:
@@ -23,7 +25,8 @@ def placed(runs_dir: Path, scores: pd.DataFrame,
            chosen: dict) -> tuple[pd.DataFrame, list[dict]]:
     samples = store.read_samples(runs_dir)
     reviews = store.read_reviews(runs_dir)
-    return budget.place(scores, reviews, chosen["budget"], samples), samples
+    lead = groups.leads(scores, budget.drawn_ids(samples))
+    return budget.place(scores, reviews, chosen["budget"], samples, lead), samples
 
 
 def queue(runs_dir: Path, scores: pd.DataFrame, chosen: dict, run: str | None = None,
@@ -32,21 +35,49 @@ def queue(runs_dir: Path, scores: pd.DataFrame, chosen: dict, run: str | None = 
     opened = found[found["IncidentGrade"] == ""]
     if run_ids is not None:
         opened = opened[opened["IncidentId"].isin(run_ids)]
-    under = (opened["status"] == "below").to_numpy()
-    opened = opened.iloc[under.argsort(kind="stable")]
+    together = {name: part.to_dict("records")
+                for name, part in opened.groupby("group_lead", sort=False)}
+    rows = opened.drop_duplicates("group_lead")
+    under = (rows["placement"] == "below budget").to_numpy()
+    rows = rows.iloc[under.argsort(kind="stable")]
     grades = dict(zip(found["IncidentId"], found["IncidentGrade"], strict=True))
-    sampled = budget.estimate(samples, grades)
+    unread = found.loc[(found["IncidentGrade"] == "") & (found["placement"] == "below budget"),
+                       "IncidentId"]
+    sampled = budget.estimate(samples, grades, set(unread))
+    waiting = opened.loc[opened["placement"] == "below budget", "Timestamp"]
     return {
-        "run": run, "open": len(opened), "budget": chosen["budget"],
-        "sample_share": chosen["sample_share"],
+        "below_oldest": waiting.min() if len(waiting) else None,
+        "run": run, "open": len(opened), "grouped": len(opened) - len(rows),
+        "budget": chosen["budget"], "sample_share": chosen["sample_share"],
         "to_read": int((~under).sum()), "below_budget": int(under.sum()),
         "sample": {"drawn": sampled["drawn"], "graded": sampled["graded"],
                    "true_positive": sampled["true_positive"],
                    "not_sampled": budget.not_sampled(found, samples)},
-        "unread_true_positives": sampled["unread_true_positives"],
-        "queue": [as_record(row, position)
-                  for position, row in enumerate(opened.to_dict("records"), start=1)],
+        "tp_below_budget": sampled["tp_below_budget"],
+        "grades": list(GRADES), "links": list(LINKS),
+        "queue": [{**as_record(row, position), "host": _first(together[row["group_lead"]], HOST),
+                   "user": _first(together[row["group_lead"]], USER), "flag": _flag(row),
+                   "latest": max(other["Timestamp"] for other in together[row["group_lead"]]),
+                   "members": [other["IncidentId"] for other in together[row["group_lead"]]][1:]}
+                  for position, row in enumerate(rows.to_dict("records"), start=1)],
     }
+
+
+def _first(rows: list[dict], columns: tuple[str, ...]) -> str:
+    for column in columns:
+        values = list(dict.fromkeys(value for row in rows
+                                    for value in row[column].split(SEPARATOR) if value))
+        if values:
+            return values[0] if len(values) == 1 else f"{values[0]} +{len(values) - 1}"
+    return ""
+
+
+def _flag(row: dict) -> str:
+    if row["placement"] != "below budget":
+        return "sample" if row["placement"] == "sample" else ""
+    if row["linked_true_positive"] >= 1:
+        return "linked TP"
+    return "ungraded rule" if row["rule_graded"] == 0 else ""
 
 
 def incident(runs_dir: Path, scores: pd.DataFrame, incident_id: str,
@@ -68,11 +99,28 @@ def incident(runs_dir: Path, scores: pd.DataFrame, incident_id: str,
          "shared": [f"{column} {value}" for column in LINKS
                     for value in other[column].split(SEPARATOR) if value in mine[column]]}
         for other in features.linked_to(history, incident_id).to_dict("records")]
+    record["linked_same_rule"] = sum(other["DetectorId"] == record["DetectorId"]
+                                     for other in record["linked_incidents"])
+    entities = [_entity(column, value, record["linked_incidents"])
+                for column in LINKS for value in record[column]]
+    record["entities"] = sorted(entities, key=lambda entity: -entity["graded_before"])
+    together = history[(history["group_lead"] == record["group_lead"]) & (history["group_lead"] != "")]
+    record["members"] = [other for other in together["IncidentId"] if other != incident_id]
+    reviews = store.read_reviews(runs_dir)
+    reviews = reviews[reviews["IncidentId"] == incident_id]
+    record["grade_history"] = reviews[["time", "grade", "comment"]].to_dict("records")
     return record
 
 
+def _entity(column: str, value: str, linked: list[dict]) -> dict:
+    grades = [other["IncidentGrade"] for other in linked
+              if f"{column} {value}" in other["shared"]]
+    return {"field": column, "value": value, "graded_before": len(grades),
+            **{grade: grades.count(grade) for grade in GRADES}}
+
+
 def grade(runs_dir: Path, scores: pd.DataFrame, grades: list[tuple[str, str]],
-          note: str) -> list[str]:
+          comment: str) -> list[str]:
     found, _ = placed(runs_dir, scores, settings(runs_dir))
     found = found.set_index("IncidentId")
     for incident_id, _ in grades:
@@ -84,18 +132,39 @@ def grade(runs_dir: Path, scores: pd.DataFrame, grades: list[tuple[str, str]],
     true_positives = []
     for incident_id, given in grades:
         source = first if incident_id in first.index else found
-        score, status = float(source.at[incident_id, "score"]), source.at[incident_id, "status"]
-        store.append_grade(runs_dir, incident_id, given, note, score, status)
+        score = float(source.at[incident_id, "score"])
+        placement = source.at[incident_id, "placement"]
+        store.append_grade(runs_dir, incident_id, given, comment, score, placement)
         if given == budget.TRUE_POSITIVE:
-            true_positives.append(status)
+            true_positives.append(placement)
     return true_positives
+
+
+def with_group(runs_dir: Path, scores: pd.DataFrame, incident_id: str) -> list[str]:
+    mine = scores["IncidentId"] == incident_id
+    if not mine.any():
+        raise store.StoreError(f"no incident {incident_id!r} in {runs_dir}")
+    reopened = scores.assign(IncidentGrade=scores["IncidentGrade"].mask(mine, ""))
+    lead = groups.leads(reopened, budget.drawn_ids(store.read_samples(runs_dir)))
+    return [incident_id, *(other for other, top in lead.items()
+                           if other != incident_id and top == lead[incident_id])]
+
+
+def reviewed_with(runs_dir: Path, scores: pd.DataFrame, incident_id: str) -> dict[str, str]:
+    # the group as it would be if no incident in it had been reviewed yet
+    reviews = store.read_reviews(runs_dir).drop_duplicates("IncidentId", keep="last")
+    given = dict(zip(reviews["IncidentId"], reviews["grade"], strict=True))
+    reviewed = scores["IncidentId"].isin(list(given)) | (scores["IncidentId"] == incident_id)
+    reopened = scores.assign(IncidentGrade=scores["IncidentGrade"].mask(reviewed, ""))
+    lead = groups.leads(reopened, budget.drawn_ids(store.read_samples(runs_dir)))
+    return {other: grade for other, grade in given.items()
+            if other != incident_id and lead.get(other) == lead[incident_id]}
 
 
 def as_record(row: dict, position: int | None = None) -> dict:
     record = dict(row)
-    for column in ("score", "score_without_links", "score_as_new_rule"):
-        record[column] = round(float(row[column]), 4)
-    for column in ("rule_graded", "rule_true_positives", "linked", "linked_true_positive",
+    record["score"] = round(float(row["score"]), 4)
+    for column in (*features.RULE, "linked", "linked_true_positive",
                    "linked_benign_positive", "linked_false_positive"):
         record[column] = int(row[column])
     if position is not None:

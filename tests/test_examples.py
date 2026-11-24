@@ -57,28 +57,41 @@ class ExampleTests(unittest.TestCase):
     def _quick_start(self, runs_dir: Path) -> str:
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            main(["config", "budget", "25", "--runs-dir", str(runs_dir)])
+            main(["config", "budget", "10", "--runs-dir", str(runs_dir)])
             main(["queue", str(EXAMPLES / "incidents.csv"), "--runs-dir", str(runs_dir)])
         return out.getvalue()
 
     def test_readme_quotes_the_footer_the_quick_start_prints(self):
         runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        footer = self._quick_start(runs_dir).splitlines()[-3:]
-        self.assertEqual(footer[0], "Total: 42 (to read: 25, below the budget: 17)  budget: 25")
+        footer = self._quick_start(runs_dir).split("\n\n")[-1].splitlines()
+        self.assertEqual(footer[0], "OPEN           42 incidents in 42 rows, 10 listed")
         readme = (EXAMPLES.parent / "README.md").read_text(encoding="utf-8")
         for line in footer:
             self.assertIn(line, readme)
 
-    def test_grades_file_shows_every_true_positive_was_in_the_list_to_read(self):
+    def test_readme_quotes_what_budget_prints_once_the_sample_is_graded(self):
+        runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self._quick_start(runs_dir)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            main(["review", store.read_samples(runs_dir)[0]["drawn"][0], "fp",
+                  "--runs-dir", str(runs_dir)])
+            out.truncate(0)
+            out.seek(0)
+            main(["budget", "--runs-dir", str(runs_dir)])
+        readme = (EXAMPLES.parent / "README.md").read_text(encoding="utf-8")
+        self.assertIn(f"```text\n{out.getvalue()}```", readme)
+
+    def test_grades_file_counts_the_true_positives_in_the_list_and_below_it(self):
         runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self._quick_start(runs_dir)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             main(["review", "--file", str(EXAMPLES / "grades.csv"), "--runs-dir", str(runs_dir)])
         self.assertEqual(out.getvalue().splitlines()[-1],
-                         "True positives: 20 (to read: 20, sample: 0, below the budget: 0)")
+                         "GRADED   incidents 42   tp 20   tp_to_read 9   tp_sample 0   tp_below 11")
         sample = store.read_samples(runs_dir)[0]
-        self.assertEqual((len(sample["pool"]), len(sample["drawn"])), (19, 2))
+        self.assertEqual((len(sample["pool"]), len(sample["drawn"])), (33, 1))
 
 
 if __name__ == "__main__":

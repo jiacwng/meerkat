@@ -5,6 +5,7 @@ import http.client
 import io
 import json
 import re
+import socket
 import tempfile
 import threading
 import unittest
@@ -66,6 +67,13 @@ class WebTests(unittest.TestCase):
     def test_the_queue_route_lists_the_open_incidents_by_score(self):
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
 
+    def test_the_queue_route_sends_the_grades_links_and_row_columns(self):
+        record = json.loads(self._request("GET", "/api/queue")[2])
+        self.assertEqual(record["grades"], ["TruePositive", "BenignPositive", "FalsePositive"])
+        self.assertIn("AccountUpn", record["links"])
+        first = record["queue"][0]
+        self.assertEqual((first["host"], first["user"], first["flag"]), ("", "alice", ""))
+
     def test_a_request_without_the_token_is_refused(self):
         self.assertEqual(self._request("GET", "/api/queue", token=False)[0], 403)
         grade = {"incident": "201", "grade": "TruePositive"}
@@ -80,7 +88,7 @@ class WebTests(unittest.TestCase):
 
     def test_a_grade_from_the_page_closes_the_incident(self):
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
-        grade = {"incident": "201", "grade": "TruePositive", "note": "checked with the user"}
+        grade = {"incident": "201", "grade": "TruePositive", "comment": "checked with the user"}
         status, _, body = self._request("POST", "/api/grade", grade)
         self.assertEqual((status, json.loads(body)["grade"]), (200, "TruePositive"))
         self.assertEqual(self._queue_ids(), ["202", "200"])
@@ -90,6 +98,11 @@ class WebTests(unittest.TestCase):
         linked = record["linked_incidents"]
         self.assertEqual([row["IncidentId"] for row in linked], ["100"])
         self.assertEqual(linked[0]["shared"], ["AccountName alice", "IpAddress 10.0.0.1"])
+        self.assertEqual(record["entities"], [
+            {"field": "AccountName", "value": "alice", "graded_before": 1,
+             "TruePositive": 1, "BenignPositive": 0, "FalsePositive": 0},
+            {"field": "IpAddress", "value": "10.0.0.1", "graded_before": 1,
+             "TruePositive": 1, "BenignPositive": 0, "FalsePositive": 0}])
 
     def test_a_grade_recorded_in_the_terminal_reaches_the_page(self):
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
@@ -100,6 +113,8 @@ class WebTests(unittest.TestCase):
     def test_a_wrong_grade_an_unknown_incident_and_a_long_body_are_refused(self):
         wrong = {"incident": "201", "grade": "Malicious"}
         self.assertEqual(self._request("POST", "/api/grade", wrong)[0], 400)
+        wrong = {"incident": "201", "grade": "TruePositive", "group": "yes"}
+        self.assertEqual(self._request("POST", "/api/grade", wrong)[0], 400)
         unknown = {"incident": "999", "grade": "TruePositive"}
         self.assertEqual(self._request("POST", "/api/grade", unknown)[0], 404)
         self.assertEqual(self._request("POST", "/api/grade", "not json")[0], 400)
@@ -108,6 +123,17 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self._request("GET", "/api/incident?id=999")[0], 404)
         self.assertEqual(self._request("GET", "/api/other")[0], 404)
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
+
+    def test_a_connection_that_sends_nothing_does_not_hold_the_other_requests(self):
+        idle = socket.create_connection(("127.0.0.1", self.server.server_port))
+        self.addCleanup(idle.close)
+        self.assertEqual(self._queue_ids(), ["201", "202", "200"])
+
+    def test_a_damaged_grade_file_is_answered_with_an_error(self):
+        (self.runs_dir / "grades.csv").write_text('"open quote')
+        status, _, body = self._request("GET", "/api/queue")
+        self.assertEqual(status, 404)
+        self.assertIn("grades.csv", json.loads(body)["error"])
 
     def test_incident_text_reaches_the_page_as_data_and_is_never_parsed_as_html(self):
         status, headers, body = self._request("GET", "/api/incident?id=202")

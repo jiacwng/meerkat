@@ -1,4 +1,4 @@
-# The meerkat command line: queue, review, inspect, runs, config and serve.
+# The meerkat command line: queue, review, inspect, runs, config, budget and serve.
 
 import argparse
 import json
@@ -10,6 +10,7 @@ from pathlib import Path
 from meerkat import __version__
 
 EXIT_ERROR = 1
+STYLES = {"dim": "2", "cyan": "36", "red": "31"}
 GRADE_CODES = {
     "tp": "TruePositive",
     "bp": "BenignPositive",
@@ -27,8 +28,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "review":
         if args.file is None and (args.incident is None or args.grade is None):
             parser.error("review takes INCIDENT and GRADE, or --file")
-        if args.file is not None and (args.incident is not None or args.note):
-            parser.error("--file takes no INCIDENT, GRADE or --note")
+        if args.file is not None and (args.incident is not None or args.comment or args.group):
+            parser.error("--file takes no INCIDENT, GRADE, --comment or --group")
     if args.command == "config":
         if (args.setting is None) != (args.value is None):
             parser.error("config takes SETTING and VALUE, or nothing")
@@ -83,8 +84,10 @@ def _build_parser() -> argparse.ArgumentParser:
     review.add_argument("grade", nargs="?", choices=tuple(GRADE_CODES), metavar="GRADE",
                         help="tp (true positive), bp (benign positive) or "
                              "fp (false positive)")
-    review.add_argument("--note", default="", metavar="TEXT",
+    review.add_argument("--comment", default="", metavar="TEXT",
                         help="free text stored with the grade")
+    review.add_argument("--group", action="store_true",
+                        help="also grade the open incidents grouped with INCIDENT")
     review.add_argument("--file", type=Path, metavar="FILE",
                         help="CSV of grades with the columns IncidentId and IncidentGrade")
     _add_runs_dir(review)
@@ -111,8 +114,14 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_runs_dir(config)
     config.set_defaults(handler=_config)
 
+    report = sub.add_parser("budget", help="show what is below the budget and what the "
+                                           "sample says about it")
+    _add_json(report)
+    _add_runs_dir(report)
+    report.set_defaults(handler=_budget_report)
+
     serve = sub.add_parser("serve", help="open the queue as a web page on this machine")
-    serve.add_argument("--port", type=int, default=0, metavar="N",
+    serve.add_argument("--port", type=_port, default=0, metavar="N",
                        help="port to listen on (default: a free one)")
     _add_runs_dir(serve)
     serve.set_defaults(handler=_serve)
@@ -142,6 +151,16 @@ def _positive(text: str) -> int:
     return value
 
 
+def _port(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected a port from 0 to 65535") from None
+    if not 0 <= value <= 65535:
+        raise argparse.ArgumentTypeError("expected a port from 0 to 65535")
+    return value
+
+
 def _budget(text: str) -> int | None:
     return None if text == "none" else _positive(text)
 
@@ -159,8 +178,21 @@ def _share(text: str) -> float:
 SETTINGS = {"budget": _budget, "sample_share": _share}
 
 
+def _draw_sample(runs_dir: Path, run: str, settings: dict, scored) -> None:
+    from core import budget, groups, store
+
+    if settings["budget"] is None or store.has_sample(runs_dir, run):
+        return
+    opened = scored.loc[scored["IncidentGrade"] == "", "IncidentId"].tolist()
+    samples = store.read_samples(runs_dir)
+    lead = groups.leads(scored, budget.drawn_ids(samples))
+    sample = budget.draw(opened, settings["budget"], settings["sample_share"], samples, lead)
+    if sample["pool"]:
+        store.save_sample(runs_dir, run, sample)
+
+
 def _queue(args: argparse.Namespace) -> None:
-    from core import budget, store
+    from core import store
     from core.incidents import read_incidents
     from core.mapping import load_mapping
     from meerkat import records
@@ -181,12 +213,7 @@ def _queue(args: argparse.Namespace) -> None:
     limit = settings["budget"]
     if incoming is not None:
         run = store.save_run(args.runs_dir, incoming, args.file.name, mapping.name)["run"]
-        if limit is not None:
-            opened = scored.loc[scored["IncidentGrade"] == "", "IncidentId"].tolist()
-            sample = budget.draw(opened, limit, settings["sample_share"],
-                                 store.read_samples(args.runs_dir))
-            if sample["pool"]:
-                store.save_sample(args.runs_dir, run, sample)
+        _draw_sample(args.runs_dir, run, settings, scored)
     record = records.queue(args.runs_dir, scored, settings, run, run_ids)
 
     reading = record["queue"][:record["to_read"]]
@@ -197,51 +224,96 @@ def _queue(args: argparse.Namespace) -> None:
         _print_json({**record, "queue": shown})
         return
 
-    if not record["queue"]:
-        print("No open incidents." if run_ids is None
-              else f"No open incidents in run {run}.")
-        return
-    rows = [
-        (str(row["position"]), row["IncidentId"], f"{row['score']:.2f}", _mark(row),
-         row["DetectorId"], _rule_tp(row),
-         f"{row['linked_true_positive']}/{row['linked']}",
-         _delta(row["score"] - row["score_as_new_rule"]),
-         _delta(row["score"] - row["score_without_links"]),
-         row["MitreTechniques"], row["Timestamp"], row["AlertTitle"])
-        for row in shown]
-    _print_table(("#", "incident", "score", "status", "rule", "rule_tp", "linked_tp",
-                  "rule_delta", "link_delta", "mitre", "time", "title"), rows,
-                 sum(row["status"] != "below" for row in shown))
+    if record["queue"]:
+        rows = [
+            (str(row["position"]), row["IncidentId"], f"{row['score']:.2f}",
+             str(len(row["members"]) + 1) if row["members"] else "",
+             _rule_tp(row), f"{row['linked_true_positive']}/{row['linked']}", row["flag"],
+             row["Category"], row["Severity"], row["host"], row["user"],
+             _clock(row["latest"]), row["AlertTitle"])
+            for row in shown]
+        header = ("#", "incident", "score", "group", "rule_tp", "linked_tp", "flag",
+                  "category", "severity", "host", "user", "time", "title")
+        if not any(row["Severity"] for row in shown):
+            at = header.index("severity")
+            header = header[:at] + header[at + 1:]
+            rows = [row[:at] + row[at + 1:] for row in rows]
+        under = [row["placement"] == "below budget" for row in shown]
+        styles = ["dim" if low else "cyan" if row["flag"] == "sample" else ""
+                  for row, low in zip(shown, under, strict=True)]
+        _print_table(header, rows,
+                     {"#", "score", "group", "rule_tp", "linked_tp"}, styles,
+                     (len(shown) - sum(under), f"below budget {len(below)}"))
+        print()
+    rows_listed = f"{len(listed)} listed"
     if len(shown) < len(listed):
-        print(f"{len(shown)} of {len(listed)} shown")
-    total = f"Total: {record['open']}"
+        rows_listed = f"{len(shown)} of {rows_listed}"
+    lines = [("OPEN", f"{record['open']} incidents in {len(record['queue'])} rows, "
+                      f"{rows_listed}")]
     if limit is not None:
-        total += f" (to read: {len(reading)}, below the budget: {len(below)})"
-    total += f"  budget: {'none' if limit is None else limit}"
-    print(total if run_ids is None else f"{total}  run: {run}")
-    marks = [_mark(row) for row in below]
-    if "linked" in marks or "new rule" in marks:
-        print(f"Below the budget: {marks.count('linked')} linked to a true positive, "
-              f"{marks.count('new rule')} with a rule never graded")
-    if run_ids is None and limit is not None:
-        print(_sample_line(record))
+        marks = [row["flag"] for row in below]
+        lines.append(("BELOW BUDGET", f"{len(below)} rows, {marks.count('linked TP')} "
+                                      f"linked TP, {marks.count('ungraded rule')} "
+                                      "ungraded rule"))
+    if run_ids is not None:
+        lines.append(("RUN", run))
+    for label, value in lines:
+        print(f"{label:<12}   {value}")
 
 
-def _mark(row: dict) -> str:
-    if row["status"] != "below":
-        return "sample" if row["status"] == "sample" else ""
-    if row["linked_true_positive"] >= 1:
-        return "linked"
-    return "new rule" if row["rule_graded"] == 0 else ""
+def _budget_report(args: argparse.Namespace) -> None:
+    from meerkat import records
+
+    settings = records.settings(args.runs_dir)
+    record = records.queue(args.runs_dir, records.scored(args.runs_dir), settings)
+    if args.json:
+        _print_json({name: value for name, value in record.items()
+                     if name not in ("queue", "grades", "links")})
+        return
+    if settings["budget"] is None:
+        print("BUDGET   not set")
+        return
+
+    reading = record["queue"][:record["to_read"]]
+    below = record["queue"][record["to_read"]:]
+    unread = sum(1 + len(row["members"]) for row in below)
+    lines = [("BUDGET", f"{settings['budget']} rows"),
+             ("BELOW BUDGET", f"{len(below)} rows, {unread} incidents")]
+    if below:
+        marks = [row["flag"] for row in below]
+        lines += [("  linked TP", str(marks.count("linked TP"))),
+                  ("  ungraded rule", str(marks.count("ungraded rule"))),
+                  ("  oldest below", _clock(record["below_oldest"]))]
+    sample, interval = record["sample"], record["tp_below_budget"]
+    graded = f"{sample['drawn']} drawn, {sample['graded']} graded"
+    if sample["graded"]:
+        graded += f", {sample['true_positive']} TP"
+    lines.append(("SAMPLE", graded))
+    waiting = [_printable(row["IncidentId"]) for row in reading if row["flag"] == "sample"]
+    if waiting:
+        lines.append(("  to grade", ", ".join(waiting)))
+    if sample["not_sampled"]:
+        lines.append(("  not sampled",str(sample["not_sampled"])))
+    if interval is None:
+        estimated = "not estimated, 0 graded samples"
+    elif unread == 0:
+        estimated = "not estimated, 0 incidents below budget"
+    else:
+        estimated = (f"{interval['low']} to {interval['high']} of "
+                     f"{unread - sample['not_sampled']}, 95% interval, "
+                     f"from {sample['graded']} graded")
+    lines.append(("TP BELOW BUDGET", estimated))
+    width = max(len(label) for label, _ in lines)
+    for label, value in lines:
+        print(f"{label:<{width}}   {value}")
 
 
-def _sample_line(record: dict) -> str:
-    sample, unread = record["sample"], record["unread_true_positives"]
-    outside = f"{sample['not_sampled']} not sampled"
-    if unread is None:
-        return f"Sample: {sample['drawn']} drawn, 0 graded, {outside}"
-    return (f"Sample: {sample['graded']} graded, {sample['true_positive']} true positive, "
-            f"{outside}. Unread true positives: {unread['low']} to {unread['high']} (95%)")
+def _summary(label: str, values: dict) -> str:
+    return f"{label:<6}   " + "   ".join(f"{name} {value}" for name, value in values.items())
+
+
+def _clock(timestamp: str) -> str:
+    return f"{timestamp[5:10]} {timestamp[11:16]}"
 
 
 def _config(args: argparse.Namespace) -> None:
@@ -254,16 +326,22 @@ def _config(args: argparse.Namespace) -> None:
             print(_setting_line(name, value))
         return
 
-    previous = settings[args.setting]
     saved = store.read_settings(args.runs_dir)
     if args.value is None:
         saved.pop(args.setting, None)
     else:
         saved[args.setting] = args.value
     store.write_settings(args.runs_dir, saved)
+    runs = store.list_runs(args.runs_dir)
+    if runs:
+        newest = runs[-1]["run"]
+        scored = records.scored(args.runs_dir)
+        graded = set(scored.loc[scored["IncidentGrade"] != "", "IncidentId"])
+        if (store.has_sample(args.runs_dir, newest)
+                and not graded & set(store.read_samples(args.runs_dir)[-1]["drawn"])):
+            store.drop_sample(args.runs_dir, newest)
+        _draw_sample(args.runs_dir, newest, records.settings(args.runs_dir), scored)
     print(_setting_line(args.setting, args.value))
-    if args.setting == "budget" and previous is None and args.value is not None:
-        print("A sample is drawn from the next file given to meerkat queue.")
 
 
 def _setting_line(name: str, value: float | None) -> str:
@@ -275,25 +353,41 @@ def _review(args: argparse.Namespace) -> None:
     from core.incidents import read_grades
     from meerkat import records
 
-    if args.file is None:
-        grades = [(args.incident, GRADE_CODES[args.grade])]
-    else:
-        grades = read_grades(args.file)
     scored = records.scored(args.runs_dir)
-    true_positives = records.grade(args.runs_dir, scored, grades, args.note)
+    kept = {}
+    if args.file is not None:
+        grades = read_grades(args.file)
+    elif args.group:
+        together = records.with_group(args.runs_dir, scored, args.incident)
+        grades = [(incident, GRADE_CODES[args.grade]) for incident in together]
+        kept = {incident: grade for incident, grade
+                in records.reviewed_with(args.runs_dir, scored, args.incident).items()
+                if grade != GRADE_CODES[args.grade]}
+    else:
+        grades = [(args.incident, GRADE_CODES[args.grade])]
+    true_positives = records.grade(args.runs_dir, scored, grades, args.comment)
     if args.file is None:
-        print(f"{_printable(args.incident)} graded {grades[0][1]}")
+        counts = {"incident": _printable(args.incident), "grade": grades[0][1],
+                  "incidents": len(grades)}
+        before = dict(zip(scored["IncidentId"], scored["IncidentGrade"], strict=True))
+        if before[args.incident] not in ("", grades[0][1]):
+            counts["replaced"] = before[args.incident]
+        print(_summary("GRADED", counts))
+        if args.group:
+            print("  graded   " + " ".join(_printable(incident) for incident, _ in grades))
+        if kept:
+            print("  kept     " + ", ".join(f"{_printable(incident)} {grade}"
+                                            for incident, grade in kept.items()))
         return
-    print(f"{len(grades)} incidents graded from {args.file}")
-    line = f"True positives: {len(true_positives)}"
+    counts = {"incidents": len(grades), "tp": len(true_positives)}
     if records.settings(args.runs_dir)["budget"] is not None:
-        ranked, sample, below = (true_positives.count(name) for name in budget.STATUSES)
-        line += f" (to read: {ranked}, sample: {sample}, below the budget: {below})"
-    print(line)
+        to_read, sample, below = (true_positives.count(name) for name in budget.PLACEMENTS)
+        counts.update(tp_to_read=to_read, tp_sample=sample, tp_below=below)
+    print(_summary("GRADED", counts))
 
 
 def _inspect(args: argparse.Namespace) -> None:
-    from core.incidents import DESCRIPTIVE, LINKS
+    from core.incidents import GRADES
     from meerkat import records
 
     scored = records.scored(args.runs_dir)
@@ -302,28 +396,58 @@ def _inspect(args: argparse.Namespace) -> None:
         _print_json(record)
         return
 
-    lines = [
-        ("incident", record["IncidentId"]),
-        ("time", record["Timestamp"]),
-        ("rule", record["DetectorId"]),
-        *((name, record[name]) for name in DESCRIPTIVE),
-        ("MitreTechniques", ", ".join(record["MitreTechniques"])),
-        ("grade", record["IncidentGrade"] or "open"),
-        ("score", f"{record['score']:.2f}"),
-        ("without links", f"{record['score_without_links']:.2f}"),
-        ("as a new rule", f"{record['score_as_new_rule']:.2f}"),
-        ("status", record["status"]),
-        ("rule_tp", _rule_tp(record)),
-        ("linked", _linked(record)),
-        *((name, ", ".join(record[name])) for name in LINKS),
-    ]
-    for name, value in lines:
-        if value:
-            print(f"{name:<16} {_printable(value)}")
+    sections = {
+        "INCIDENT": [
+            ("incident", record["IncidentId"]),
+            ("time", record["Timestamp"]),
+            ("rule", record["DetectorId"]),
+            ("title", record["AlertTitle"]),
+            ("category", record["Category"]),
+            ("severity", record["Severity"]),
+            ("techniques", ", ".join(record["MitreTechniques"])),
+            ("grade", record["IncidentGrade"] or "open"),
+            ("placement", record["placement"]),
+        ],
+        "SCORE": [
+            ("score", f"{record['score']:.2f}"),
+            *zip(("rule", "linked"), _graded_before(
+                (record["rule_true_positives"], record["rule_benign_positives"],
+                 record["rule_graded"]),
+                (record["linked_true_positive"], record["linked_benign_positive"],
+                 record["linked"])), strict=True),
+            ("same rule", f"{record['linked_same_rule']} of {record['linked']}"
+             if record["linked"] else ""),
+        ],
+        "GROUP": [("incidents", ", ".join(record["members"]))],
+    }
+    width = max(len(name) for lines in sections.values() for name, _ in lines)
+    for title, lines in sections.items():
+        lines = [(name, value) for name, value in lines if value]
+        if lines:
+            print(title if title == "INCIDENT" else f"\n{title}")
+        for name, value in lines:
+            print(f"{name:<{width}}  {_printable(value)}")
+    red = {GRADES[0]: "red"}
+    if record["grade_history"]:
+        print("\nHISTORY")
+        _print_table(("graded", "grade", "comment"),
+                     [(past["time"], past["grade"], past["comment"])
+                      for past in record["grade_history"]], set(),
+                     [red.get(past["grade"], "") for past in record["grade_history"]])
+    if record["entities"]:
+        print("\nENTITIES")
+        short = ["".join(letter for letter in grade if letter.isupper()) for grade in GRADES]
+        _print_table(("entity", "value", "graded_before", *short),
+                     [(entity["field"], entity["value"], str(entity["graded_before"]),
+                       *(str(entity[grade]) for grade in GRADES))
+                      for entity in record["entities"]], {"graded_before", *short},
+                     [""] * len(record["entities"]))
     if record["linked_incidents"]:
-        print()
-        _print_table(("linked incident", "grade", "time", "rule", "title"),
+        print("\nLINKED")
+        _print_table(("incident", "grade", "time", "rule", "title"),
                      [tuple(linked[name] for name in records.LINKED_SHOWN)
+                      for linked in record["linked_incidents"]], set(),
+                     [red.get(linked["IncidentGrade"], "")
                       for linked in record["linked_incidents"]])
 
 
@@ -342,45 +466,48 @@ def _runs(args: argparse.Namespace) -> None:
         return
 
     if not runs:
-        print(f"No runs in {args.runs_dir}.")
+        print(_summary("RUNS", {"saved": 0}))
         return
-    rows = [(meta["run"], meta["created"], str(meta["incidents"]), meta["source"])
+    rows = [(meta["run"], meta["created"], str(meta["incidents_in_file"]), meta["file"])
             for meta in runs]
-    _print_table(("run", "created", "incidents", "source"), rows)
+    _print_table(("run", "created", "incidents_in_file", "file"), rows, {"incidents_in_file"},
+                 [""] * len(rows))
+
+
+def _graded_before(*counts: tuple[int, int, int]) -> list[str]:
+    cells = [(str(tp), str(bp), str(total - tp - bp), str(total)) for tp, bp, total in counts]
+    wide = [max(len(row[at]) for row in cells) for at in range(4)]
+    return [f"{tp:>{wide[0]}} TP  {bp:>{wide[1]}} BP  {fp:>{wide[2]}} FP  "
+            f"of {total:>{wide[3]}} graded before" for tp, bp, fp, total in cells]
 
 
 def _rule_tp(row: dict) -> str:
     return f"{row['rule_true_positives']}/{row['rule_graded']}"
 
 
-def _linked(row: dict) -> str:
-    return (f"{row['linked']} ({row['linked_true_positive']} TP, "
-            f"{row['linked_benign_positive']} BP, {row['linked_false_positive']} FP)")
-
-
-def _delta(value: float) -> str:
-    text = f"{value:+.2f}"
-    return "0.00" if text[1:] == "0.00" else text
-
-
 def _print_json(value) -> None:
     print(json.dumps(value, indent=2))
 
 
-def _print_table(header: tuple[str, ...], rows: list[tuple[str, ...]],
-                 first_below: int | None = None) -> None:
+def _print_table(header: tuple[str, ...], rows: list[tuple[str, ...]], right: set[str],
+                 styles: list[str], divider: tuple[int, str] | None = None) -> None:
     rows = [tuple(_printable(cell) for cell in row) for row in rows]
     widths = [max(len(cell) for cell in column) for column in zip(header, *rows, strict=True)]
     # on a terminal only the last column is cut to fit; a pipe gets every character
     fixed = sum(widths[:-1]) + 2 * (len(widths) - 1)
-    edge = shutil.get_terminal_size().columns if sys.stdout.isatty() else None
+    terminal = sys.stdout.isatty()
+    edge = shutil.get_terminal_size().columns if terminal else None
     if edge is not None and edge <= fixed:
         edge = None
-    for number, line in enumerate((header, *rows)):
-        if number - 1 == first_below:
-            print("Below the budget:")
-        cells = (cell.ljust(width) for cell, width in zip(line, widths, strict=True))
-        print("  ".join(cells).rstrip()[:edge])
+    coloured = terminal and "NO_COLOR" not in os.environ
+    upper = tuple(name.upper() for name in header)
+    for number, (line, style) in enumerate(zip((upper, *rows), ("", *styles), strict=True)):
+        if divider is not None and number - 1 == divider[0]:
+            print(f"-- {divider[1]} ".ljust(fixed + widths[-1], "-")[:edge])
+        cells = (cell.rjust(width) if name in right else cell.ljust(width)
+                 for cell, width, name in zip(line, widths, header, strict=True))
+        text = "  ".join(cells).rstrip()[:edge]
+        print(f"\x1b[{STYLES[style]}m{text}\x1b[0m" if style and coloured else text)
 
 
 # incident text is untrusted: control and escape characters never reach the terminal

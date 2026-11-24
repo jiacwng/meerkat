@@ -6,118 +6,102 @@
 <title>meerkat</title>
 <style nonce="__NONCE__">
 :root {
-  --bg: #fafaf8; --panel: #ffffff; --text: #1c1c1a; --soft: #5f5e5a; --line: #dedcd3;
-  --pick: #e6f1fb; --pick-text: #0c447c; --bad: #a32d2d; --tag: #f1efe8;
+  --bg: #f4f4f1; --panel: #ffffff; --text: #1c1c1a; --soft: #6b6a64; --line: #dedcd3;
+  --pick: #e6f1fb; --pick-text: #0c447c; --bad: #a32d2d; --cell: #f1efe8;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #161615; --panel: #1f1f1d; --text: #ecebe6; --soft: #a3a299; --line: #3a3a36;
-    --pick: #0c447c; --pick-text: #e6f1fb; --bad: #f09595; --tag: #2c2c2a;
+    --bg: #121211; --panel: #1c1c1a; --text: #ecebe6; --soft: #9d9c94; --line: #34342f;
+    --pick: #0c447c; --pick-text: #e6f1fb; --bad: #f09595; --cell: #262624;
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text);
-       font: 14px/1.45 system-ui, sans-serif; }
-header { padding: 14px 20px 10px; border-bottom: 1px solid var(--line); }
-h1 { font-size: 16px; font-weight: 600; margin: 0 12px 0 0; display: inline; }
-#counts, #sample, #notice { color: var(--soft); }
-#sample, #notice { margin: 2px 0 0; min-height: 20px; }
-#bar { display: flex; gap: 14px; align-items: center; padding: 10px 20px; flex-wrap: wrap; }
-input[type=search], input[type=text] {
-  padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px;
-  background: var(--panel); color: var(--text); font: inherit; }
-#search { flex: 1; min-width: 220px; }
-#keys { color: var(--soft); font-size: 12px; }
-kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 5px;
-      font: 12px ui-monospace, monospace; background: var(--panel); }
-main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); gap: 16px;
-       padding: 0 20px 20px; align-items: start; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); display: flex;
+       flex-direction: column; font: 13px/1.4 system-ui, sans-serif; }
+.mono, td, kbd, .stat b { font-family: ui-monospace, monospace; }
+header { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; padding: 10px 14px;
+         background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 15px; margin: 0 8px 0 0; align-self: center; }
+.stat { display: flex; flex-direction: column; justify-content: center; padding: 4px 10px;
+        background: var(--cell); border-radius: 4px; min-width: 64px; }
+.stat span { font-size: 11px; color: var(--soft); }
+.stat b { font-size: 15px; font-weight: 600; }
+#bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 14px; }
+input { font: inherit; color: var(--text); background: var(--panel);
+        border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; }
+#search { width: 280px; }
+#keys { margin-left: auto; color: var(--soft); }
+kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; background: var(--panel); }
+main { flex: 1; min-height: 0; display: grid; gap: 10px; padding: 0 14px 14px;
+       grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr); }
 @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
-table { width: 100%; border-collapse: collapse; background: var(--panel);
-        border: 1px solid var(--line); }
-th { text-align: left; font-weight: 500; color: var(--soft); font-size: 12px;
-     padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-#rows tr, #linked tr { cursor: pointer; }
-#rows tr:hover td, #linked tr:hover td { background: var(--tag); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+         overflow: auto; min-height: 0; }
+table { width: 100%; border-collapse: collapse; }
+th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 500;
+     color: var(--soft); font-size: 11px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+td { padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td.title { font-family: system-ui, sans-serif; max-width: 0; width: 40%;
+           overflow: hidden; text-overflow: ellipsis; }
+#rows tr[data-id], #linked tr, #members tr { cursor: pointer; }
+#rows tr[data-id]:hover td, #linked tr:hover td, #members tr:hover td { background: var(--cell); }
 #rows tr.picked td { background: var(--pick); color: var(--pick-text); }
 #rows tr.below td { color: var(--soft); }
-td.divider, td.empty { font-size: 12px; color: var(--soft); background: var(--bg);
-                       cursor: default; }
-.num { font: 13px ui-monospace, monospace; white-space: nowrap; }
-.tag { font-size: 11px; background: var(--tag); color: var(--soft); border-radius: 4px;
-       padding: 1px 6px; margin-left: 6px; white-space: nowrap; cursor: help; }
-main > * { min-width: 0; }
-#detail { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-          padding: 16px; position: sticky; top: 12px; max-height: calc(100vh - 24px);
-          overflow-y: auto; }
-#linked .num { white-space: normal; }
-#detail h2 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
-#detail .meta { color: var(--soft); font-size: 12px; margin: 0 0 12px; overflow-wrap: anywhere; }
-#detail .closed { background: var(--tag); border-radius: 6px; padding: 8px 10px; margin: 0 0 12px; }
-.scores { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 0 0 12px; }
-.scores div { background: var(--tag); border-radius: 6px; padding: 8px 10px; }
-.scores span { display: block; font-size: 11px; color: var(--soft); }
-.scores b { font-size: 18px; font-weight: 600; }
-#detail h3 { font-size: 12px; font-weight: 500; color: var(--soft); margin: 14px 0 4px; }
-#detail p { margin: 0 0 4px; overflow-wrap: anywhere; }
-#detail table { font-size: 13px; }
-.tp { color: var(--bad); font-weight: 500; }
-.soft { color: var(--soft); font-size: 12px; }
-#grade { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+#linked tr.none { cursor: default; }
+#linked tr.none td, #linked tr.other td { color: var(--soft); }
+#linked tr.other td:first-child { padding-left: 22px; }
+#linked tr.other td.tp { color: var(--bad); }
+td.divider { font-size: 11px; color: var(--soft); background: var(--bg); }
+#detail { padding: 12px 14px; }
+#nav { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; color: var(--soft); }
+#detail h2 { font-size: 15px; margin: 0 0 10px; overflow-wrap: anywhere; }
+#detail h3 { font-size: 11px; font-weight: 500; color: var(--soft); text-transform: uppercase;
+             letter-spacing: .04em; margin: 14px 0 6px; padding-top: 10px;
+             border-top: 1px solid var(--line); }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 0; }
+dt { color: var(--soft); }
+dd { margin: 0; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.stats { display: flex; flex-wrap: wrap; gap: 6px; }
+.tp { color: var(--bad); font-weight: 600; }
+#grade { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 #comment { width: 100%; }
-button { font: inherit; padding: 7px 12px; border: 1px solid var(--line); border-radius: 6px;
-         background: var(--panel); color: var(--text); cursor: pointer; }
-button:hover { background: var(--tag); }
-button.link { border: 0; padding: 0 0 0 6px; background: none; text-decoration: underline; }
+button { font: inherit; color: var(--text); background: var(--panel); cursor: pointer;
+         border: 1px solid var(--line); border-radius: 4px; padding: 5px 10px; }
+button:hover { background: var(--cell); }
+#notice { color: var(--soft); }
 </style>
 </head>
 <body>
-<header>
-  <h1>meerkat</h1><span id="counts"></span>
-  <p id="sample" title="A few incidents below the budget are drawn at random and shown in the list. Their grades give this estimate of the true positives that go unread."></p>
-  <p id="notice" aria-live="polite"></p>
-</header>
+<header><h1>meerkat</h1></header>
 <div id="bar">
-  <input id="search" type="search" aria-label="Filter the queue"
-         placeholder="Filter by title, host, user, rule, category, technique or incident">
-  <label title="The budget is how many incidents the team plans to read. The rest are listed here."><input id="all" type="checkbox"> <span id="all-label">Show below the budget</span></label>
-  <span id="keys"><kbd>j</kbd> <kbd>k</kbd> move &nbsp; <kbd>t</kbd> <kbd>b</kbd> <kbd>f</kbd>
-    grade &nbsp; <kbd>/</kbd> filter</span>
+  <input id="search" type="search" aria-label="filter" placeholder="filter">
+  <label><input id="all" type="checkbox"> <span id="all-label">below</span></label>
+  <span id="notice" aria-live="polite"></span>
+  <span id="keys"></span>
 </div>
 <main>
-  <table>
-    <thead><tr>
-      <th title="How likely the incident is a true positive, from 0 to 1">Score</th>
-      <th>Title</th><th>Host</th><th>User</th>
-      <th title="True positives over graded incidents of this rule at this site">Rule TP</th>
-      <th title="True positives over earlier incidents sharing a device, account, address, file or URL">Linked TP</th>
-      <th>Time (UTC)</th>
-    </tr></thead>
+  <div class="panel"><table>
+    <thead><tr id="head"></tr></thead>
     <tbody id="rows"></tbody>
-  </table>
-  <section id="detail"></section>
+  </table></div>
+  <section id="detail" class="panel"></section>
 </main>
 <script nonce="__NONCE__">
 "use strict";
 const TOKEN = "__TOKEN__";
-const GRADES = [["t", "TruePositive", "True positive"], ["b", "BenignPositive", "Benign positive"],
-                ["f", "FalsePositive", "False positive"]];
-const LABEL = Object.fromEntries(GRADES.map(([, grade, label]) => [grade, label]));
-const ENTITIES = ["DeviceName", "DeviceId", "AccountUpn", "AccountName", "AccountSid",
-                  "AccountObjectId", "IpAddress", "Sha256", "Url"];
-const LINKED_ROWS = 20;
-const TAGS = {
-  "sample": "Drawn at random from below the budget, to estimate what goes unread.",
-  "linked": "Below the budget, but an earlier incident sharing an entity was a true positive.",
-  "new rule": "Below the budget, and no incident of this rule has been graded yet.",
-};
-const CELLS = [
-  row => row.score.toFixed(2), row => row.AlertTitle, row => row.host, row => row.user,
-  row => `${row.rule_true_positives}/${row.rule_graded}`,
-  row => `${row.linked_true_positive}/${row.linked}`, row => clock(row.Timestamp),
+const COLUMNS = [
+  ["#", row => String(row.position)], ["incident", row => row.IncidentId],
+  ["score", row => row.score.toFixed(2)],
+  ["group", row => row.members.length ? String(row.members.length + 1) : ""],
+  ["rule_tp", row => `${row.rule_true_positives}/${row.rule_graded}`],
+  ["linked_tp", row => `${row.linked_true_positive}/${row.linked}`],
+  ["flag", row => row.flag], ["category", row => row.Category],
+  ["severity", row => row.Severity],
+  ["host", row => row.host], ["user", row => row.user],
+  ["time", row => clock(row.latest)], ["title", row => row.AlertTitle],
 ];
-const state = { queue: [], shown: [], picked: null, viewing: null, open: false };
+const state = { columns: COLUMNS, record: null, shown: [], picked: null, viewing: null, open: false, keys: {} };
 
 function el(tag, text, className) {
   const node = document.createElement(tag);
@@ -126,40 +110,26 @@ function el(tag, text, className) {
   return node;
 }
 
-function fullRow(text, className) {
-  const line = el("tr"), cell = el("td", text, className);
-  cell.colSpan = CELLS.length;
-  line.append(cell);
-  return line;
+function gradedBefore(tp, bp, total) {
+  return `${tp} TP  ${bp} BP  ${total - tp - bp} FP  of ${total}`;
+}
+
+function stat(label, value) {
+  const box = el("div", undefined, "stat");
+  box.append(el("span", label), el("b", String(value)));
+  return box;
+}
+
+function fields(pairs) {
+  const list = el("dl");
+  for (const [name, value] of pairs) {
+    if (value) list.append(el("dt", name), el("dd", value));
+  }
+  return list;
 }
 
 function clock(timestamp) {
-  return timestamp.replace("T", " ").replace("Z", "");
-}
-
-function firstValue(...lists) {
-  for (const list of lists) {
-    const values = list.split("|").filter(Boolean);
-    if (values.length) return values[0] + (values.length > 1 ? ` +${values.length - 1}` : "");
-  }
-  return "";
-}
-
-function tagOf(row) {
-  if (row.status === "sample") return "sample";
-  if (row.status !== "below") return "";
-  if (row.linked_true_positive >= 1) return "linked";
-  return row.rule_graded === 0 ? "new rule" : "";
-}
-
-function notice(text, incident) {
-  const line = document.getElementById("notice");
-  line.replaceChildren(text);
-  if (incident) {
-    const open = el("button", "Open it", "link");
-    open.addEventListener("click", () => show(incident));
-    line.append(open);
-  }
+  return `${timestamp.slice(5, 10)} ${timestamp.slice(11, 16)}`;
 }
 
 async function call(path, body) {
@@ -173,53 +143,56 @@ async function call(path, body) {
 
 async function load(keep) {
   const record = await call("/api/queue");
-  state.queue = record.queue.map(row => ({
-    ...row, host: firstValue(row.DeviceName, row.DeviceId),
-    user: firstValue(row.AccountUpn, row.AccountName, row.AccountSid),
-    text: [row.IncidentId, row.AlertTitle, row.DetectorId, row.Category, row.MitreTechniques,
-           ...ENTITIES.map(name => row[name])].join(" ").toLowerCase(),
-  }));
-  const counted = record.budget !== null;
-  document.getElementById("counts").textContent = counted
-    ? `${record.open} open, ${record.to_read} to read, ${record.below_budget} below the budget, budget ${record.budget}`
-    : `${record.open} open, no budget set`;
-  const sample = record.sample, unread = record.unread_true_positives;
-  document.getElementById("sample").textContent = !counted ? ""
-    : unread === null
-      ? `Sample: ${sample.drawn} drawn, 0 graded, ${sample.not_sampled} not sampled`
-      : `Sample: ${sample.graded} graded, ${sample.true_positive} true positive, ` +
-        `${sample.not_sampled} not sampled. Unread true positives: ${unread.low} to ${unread.high} (95%)`;
-  document.getElementById("all-label").textContent = `Show ${record.below_budget} below the budget`;
+  state.record = record;
+  state.columns = COLUMNS.filter(([name]) => name !== "severity" || record.queue.some(row => row.Severity));
+  document.getElementById("head").replaceChildren(...state.columns.map(([name]) => el("th", name)));
+  state.keys = Object.fromEntries(record.grades.map(grade => [grade[0].toLowerCase(), grade]));
+  for (const row of record.queue) {
+    row.text = [row.IncidentId, row.AlertTitle, row.DetectorId, row.Category, row.Severity,
+                row.MitreTechniques, ...row.members,
+                ...record.links.map(name => row[name])].join(" ").toLowerCase();
+  }
+  const header = document.querySelector("header");
+  const stats = [stat("open", record.open), stat("budget", record.budget ?? "none")];
+  if (record.budget !== null) {
+    stats.push(stat("to read", record.to_read), stat("below budget", record.below_budget));
+  }
+  header.replaceChildren(el("h1", "meerkat"), ...stats);
+  document.getElementById("all-label").textContent = `below budget ${record.below_budget}`;
+  const keys = document.getElementById("keys");
+  keys.replaceChildren();
+  for (const key of ["j", "k", ...Object.keys(state.keys), "/"]) keys.append(el("kbd", key), " ");
   draw(keep);
 }
 
 function draw(keep) {
   const words = document.getElementById("search").value.toLowerCase().split(/\s+/).filter(Boolean);
-  const matching = state.queue.filter(row => words.every(word => row.text.includes(word)));
+  const matching = state.record.queue.filter(row => words.every(word => row.text.includes(word)));
   const all = document.getElementById("all").checked;
-  state.shown = matching.filter(row => all || row.status !== "below");
+  state.shown = matching.filter(row => all || row.placement !== "below budget");
 
   const body = document.getElementById("rows");
   body.replaceChildren();
-  if (!state.shown.length) {
-    const hidden = matching.length ? ` ${matching.length} match below the budget.` : "";
-    body.append(fullRow(state.queue.length ? `Nothing to read matches the filter.${hidden}`
-                                           : "No open incidents.", "empty"));
-  }
+  const divider = text => {
+    const line = el("tr"), cell = el("td", text, "divider");
+    cell.colSpan = state.columns.length;
+    line.append(cell);
+    body.append(line);
+  };
+  if (!state.shown.length) divider(`0 match, ${matching.length} below budget`);
   let divided = false;
   for (const row of state.shown) {
-    if (row.status === "below" && !divided) {
-      body.append(fullRow("Below the budget", "divider"));
+    const under = row.placement === "below budget";
+    if (under && !divided) {
+      divider(`below budget ${state.record.below_budget}`);
       divided = true;
     }
-    const line = el("tr", undefined, row.status === "below" ? "below" : "");
+    const line = el("tr", undefined, under ? "below" : "");
     line.dataset.id = row.IncidentId;
-    CELLS.forEach((text, at) => line.append(el("td", text(row), at === 1 ? "" : "num")));
-    const tag = tagOf(row);
-    if (tag) {
-      const mark = el("span", tag, "tag");
-      mark.title = TAGS[tag];
-      line.children[1].append(mark);
+    for (const [name, cell] of state.columns) {
+      const td = el("td", cell(row), name === "title" ? "title" : "");
+      if (name === "title") td.title = row.AlertTitle;
+      line.append(td);
     }
     line.addEventListener("click", () => select(row.IncidentId));
     body.append(line);
@@ -230,89 +203,133 @@ function draw(keep) {
 
 function select(id) {
   state.picked = id;
-  for (const line of document.querySelectorAll("#rows tr")) {
+  for (const line of document.querySelectorAll("#rows tr[data-id]")) {
     line.classList.toggle("picked", line.dataset.id === id);
     if (line.dataset.id === id) line.scrollIntoView({ block: "nearest" });
   }
   if (state.viewing !== id || id === null) show(id);
 }
 
+function gradeCell(grade) {
+  return el("td", grade, grade === state.record.grades[0] ? "tp" : "");
+}
+
 async function show(id) {
   state.viewing = id;
   state.open = false;
   const pane = document.getElementById("detail");
-  if (id === null) { pane.replaceChildren(el("p", "Select an incident.", "soft")); return; }
+  if (id === null) { pane.replaceChildren(); return; }
   let row;
   try { row = await call(`/api/incident?id=${encodeURIComponent(id)}`); }
-  catch (error) { pane.replaceChildren(el("p", error.message, "soft")); return; }
+  catch (error) { pane.replaceChildren(el("p", error.message)); return; }
   if (state.viewing !== id) return;
   state.open = row.IncidentGrade === "";
 
-  const parts = [];
+  const nav = el("div");
+  nav.id = "nav";
+  const at = state.shown.findIndex(shown => shown.IncidentId === state.picked);
+  const up = el("button", "▲"), down = el("button", "▼");
+  up.addEventListener("click", () => step(-1));
+  down.addEventListener("click", () => step(1));
+  nav.append(up, down, el("span", `${at + 1} / ${state.shown.length}`, "mono"));
   if (id !== state.picked && state.picked !== null) {
-    const back = el("button", `Back to incident ${state.picked}`);
+    const back = el("button", `◀ ${state.picked}`);
     back.addEventListener("click", () => show(state.picked));
-    parts.push(back);
-  }
-  const meta = [`incident ${row.IncidentId}`, `rule ${row.DetectorId}`, row.Category,
-                row.MitreTechniques.join(", "), `${clock(row.Timestamp)} UTC`].filter(Boolean);
-  parts.push(el("h2", row.AlertTitle || `Incident ${row.IncidentId}`),
-             el("p", meta.join(" · "), "meta"));
-  if (!state.open) {
-    parts.push(el("p", `Graded ${LABEL[row.IncidentGrade]}. It is no longer in the queue.`, "closed"));
+    nav.append(back);
   }
 
-  const scores = el("div", undefined, "scores");
-  for (const [label, key] of [["Score", "score"], ["Without the linked incidents", "score_without_links"],
-                              ["If this rule had no history", "score_as_new_rule"]]) {
-    const box = el("div");
-    box.append(el("span", label), el("b", row[key].toFixed(2)));
-    scores.append(box);
-  }
-  parts.push(scores,
-    el("h3", "Rule history at this site"),
-    el("p", row.rule_graded ? `${row.rule_true_positives} true positive of ${row.rule_graded} graded`
-                            : "No incident of this rule has been graded yet."),
-    el("h3", "Earlier incidents sharing a device, account, address, file or URL"),
-    el("p", row.linked ? `${row.linked}: ${row.linked_true_positive} true positive, ` +
-      `${row.linked_benign_positive} benign positive, ${row.linked_false_positive} false positive`
-      : "None."));
+  const parts = [nav, el("h2", row.AlertTitle || row.IncidentId), fields([
+    ["incident", row.IncidentId], ["time", row.Timestamp], ["rule", row.DetectorId],
+    ["category", row.Category], ["severity", row.Severity],
+    ["techniques", row.MitreTechniques.join(", ")],
+    ["grade", row.IncidentGrade || "open"], ["placement", row.placement],
+  ])];
 
-  if (row.linked_incidents.length) {
-    const table = el("table"), body = el("tbody");
+  const scores = el("div", undefined, "stats");
+  scores.append(stat("score", row.score.toFixed(2)),
+                stat("rule", gradedBefore(row.rule_true_positives, row.rule_benign_positives,
+                                          row.rule_graded)),
+                stat("linked", gradedBefore(row.linked_true_positive, row.linked_benign_positive,
+                                            row.linked)));
+  if (row.linked) scores.append(stat("same rule", `${row.linked_same_rule} of ${row.linked}`));
+  parts.push(el("h3", "score"), scores);
+
+  if (row.entities.length) {
+    const short = state.record.grades.map(grade => grade.replace(/[a-z]/g, ""));
+    const table = el("table"), head = el("tr"), body = el("tbody");
+    for (const name of ["entity", "value", "graded_before", ...short]) head.append(el("th", name));
     body.id = "linked";
-    for (const linked of row.linked_incidents.slice(0, LINKED_ROWS)) {
+    for (const entity of row.entities) {
       const line = el("tr");
-      const what = el("td", linked.AlertTitle);
-      if (linked.shared.length) what.append(el("br"), el("span", `shares ${linked.shared.join(", ")}`, "soft"));
-      line.append(el("td", linked.IncidentId, "num"),
-                  el("td", LABEL[linked.IncidentGrade], linked.IncidentGrade === "TruePositive" ? "tp" : ""),
-                  el("td", clock(linked.Timestamp), "num"), what);
-      line.addEventListener("click", () => show(linked.IncidentId));
+      line.append(el("td", entity.field), el("td", entity.value),
+                  el("td", String(entity.graded_before)),
+                  ...state.record.grades.map((grade, at) =>
+                    el("td", String(entity[grade]), at === 0 && entity[grade] ? "tp" : "")));
+      body.append(line);
+      if (!entity.graded_before) { line.className = "none"; continue; }
+      const key = `${entity.field} ${entity.value}`;
+      const others = row.linked_incidents.filter(other => other.shared.includes(key)).map(other => {
+        const inner = el("tr", undefined, "other");
+        inner.hidden = true;
+        inner.title = other.AlertTitle;
+        inner.append(el("td", other.IncidentId), el("td", other.Timestamp),
+                     el("td", `rule ${other.DetectorId}`), gradeCell(other.IncidentGrade));
+        inner.lastChild.colSpan = state.record.grades.length;
+        inner.addEventListener("click", () => show(other.IncidentId));
+        return inner;
+      });
+      line.addEventListener("click", () => { for (const inner of others) inner.hidden = !inner.hidden; });
+      body.append(...others);
+    }
+    table.append(head, body);
+    parts.push(el("h3", "entities"), table);
+  }
+
+  if (row.members.length) {
+    const table = el("table"), body = el("tbody");
+    body.id = "members";
+    for (const member of row.members) {
+      const line = el("tr");
+      line.append(el("td", member));
+      line.addEventListener("click", () => show(member));
       body.append(line);
     }
     table.append(body);
-    parts.push(table);
-    const older = row.linked_incidents.length - LINKED_ROWS;
-    if (older > 0) parts.push(el("p", `The ${LINKED_ROWS} most recent are listed. ${older} older are not.`, "soft"));
+    parts.push(el("h3", `group ${row.members.length + 1}`), table);
   }
-  const entities = ENTITIES.filter(name => row[name].length).map(name => `${name}: ${row[name].join(", ")}`);
-  if (entities.length) parts.push(el("h3", "Entities"), ...entities.map(text => el("p", text)));
 
-  parts.push(el("h3", state.open ? "Grade" : "Change the grade"));
-  if (state.open) {
-    const comment = el("input");
-    comment.id = "comment";
-    comment.type = "text";
-    comment.placeholder = "Comment, stored with the grade (optional)";
-    parts.push(comment);
+  if (row.grade_history.length) {
+    const table = el("table"), head = el("tr"), body = el("tbody");
+    for (const name of ["graded", "grade", "comment"]) head.append(el("th", name));
+    for (const past of row.grade_history) {
+      const line = el("tr");
+      line.append(el("td", past.time), gradeCell(past.grade), el("td", past.comment));
+      body.append(line);
+    }
+    table.append(head, body);
+    parts.push(el("h3", "history"), table);
   }
+
+  parts.push(el("h3", "grade"));
+  const comment = el("input");
+  comment.id = "comment";
+  comment.type = "text";
+  comment.setAttribute("aria-label", "comment");
+  comment.placeholder = "comment";
   const buttons = el("div");
   buttons.id = "grade";
-  for (const [key, grade, label] of GRADES) {
-    const button = el("button", state.open ? `${label} (${key})` : label);
+  for (const [key, grade] of Object.entries(state.keys)) {
+    const button = el("button", state.open ? `${grade} ${key}` : grade);
     button.addEventListener("click", () => gradeIt(grade));
     buttons.append(button);
+  }
+  parts.push(comment);
+  if (state.open && row.members.length) {
+    const whole = el("input"), label = el("label");
+    whole.id = "whole";
+    whole.type = "checkbox";
+    label.append(whole, ` group ${row.members.length + 1}`);
+    parts.push(label);
   }
   parts.push(buttons);
   pane.replaceChildren(...parts);
@@ -324,14 +341,18 @@ async function gradeIt(grade) {
   if (id === null) return;
   const at = state.shown.findIndex(row => row.IncidentId === state.picked);
   const next = id === state.picked ? state.shown[at + 1] || state.shown[at - 1] : state.shown[at];
-  const comment = document.getElementById("comment");
+  const notice = document.getElementById("notice");
   try {
-    await call("/api/grade", { incident: id, grade, note: comment ? comment.value : "" });
-  } catch (error) { notice(error.message); return; }
-  notice(`${id} graded ${LABEL[grade]}.`, id);
+    const whole = document.getElementById("whole");
+    await call("/api/grade", { incident: id, grade, group: whole !== null && whole.checked,
+                               comment: document.getElementById("comment").value });
+  } catch (error) { notice.replaceChildren(error.message); return; }
+  const open = el("button", `${id} ${grade}`);
+  open.addEventListener("click", () => show(id));
+  notice.replaceChildren(open);
   state.viewing = null;
   try { await load(next ? next.IncidentId : null); }
-  catch (error) { notice(`${id} graded ${LABEL[grade]}, but the queue did not reload: ${error.message}`); }
+  catch (error) { notice.append(" ", error.message); }
 }
 
 function step(by) {
@@ -352,14 +373,13 @@ document.addEventListener("keydown", event => {
   if (event.key === "j" || event.key === "ArrowDown") { step(1); event.preventDefault(); }
   else if (event.key === "k" || event.key === "ArrowUp") { step(-1); event.preventDefault(); }
   else if (event.key === "/") { document.getElementById("search").focus(); event.preventDefault(); }
-  else if (state.open && state.viewing === state.picked) {
-    const found = GRADES.find(([key]) => key === event.key);
-    if (found) gradeIt(found[1]);
+  else if (state.open && state.viewing === state.picked && state.keys[event.key]) {
+    gradeIt(state.keys[event.key]);
   }
 });
 document.getElementById("search").addEventListener("input", () => draw(state.picked));
 document.getElementById("all").addEventListener("change", () => draw(state.picked));
-load(null).catch(error => notice(error.message));
+load(null).catch(error => { document.getElementById("notice").textContent = error.message; });
 </script>
 </body>
 </html>
