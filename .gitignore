@@ -5,6 +5,8 @@ local/
 paper/
 docs/*
 !docs/demo.gif
+!docs/queue.png
+!docs/page.png
 runs/
 
 # Python
