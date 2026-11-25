@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "meerkat"
 version = "2.0.0"
-description = "Rank a SOC's open incidents and learn from the grades analysts give"
+description = "Rank a SOC's open incidents from the classifications analysts gave to earlier ones"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
