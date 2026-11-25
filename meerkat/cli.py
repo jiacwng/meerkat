@@ -1,4 +1,4 @@
-# The meerkat command line: queue, pull, classify, details, runs, config, budget and serve.
+# The meerkat command line: queue, pull, query, classify, details, runs, config, budget and serve.
 
 import argparse
 import json
@@ -10,6 +10,7 @@ from pathlib import Path
 from meerkat import __version__
 
 EXIT_ERROR = 1
+QUERIES = Path(__file__).parent.parent / "core" / "data" / "queries"
 STYLES = {"dim": "2", "cyan": "36", "red": "31"}
 CLASSIFICATION_CODES = {
     "tp": "TruePositive",
@@ -83,6 +84,12 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="defender (Microsoft Defender XDR through Microsoft Graph)")
     _add_runs_dir(pull)
     pull.set_defaults(handler=_pull)
+
+    query = sub.add_parser("query", help="print the saved query that exports a SIEM's "
+                                         "incidents in the columns meerkat reads")
+    query.add_argument("source", choices=sorted(path.stem for path in QUERIES.iterdir()),
+                       metavar="SOURCE", help="sentinel (Microsoft Sentinel, KQL)")
+    query.set_defaults(handler=_query)
 
     classify = sub.add_parser("classify", help="record the classification of an incident, "
                                                "or a file of classifications")
@@ -197,6 +204,11 @@ def _share(text: str) -> float:
 
 
 SETTINGS = {"budget": _budget, "sample_share": _share}
+
+
+def _query(args: argparse.Namespace) -> None:
+    found = next(path for path in QUERIES.iterdir() if path.stem == args.source)
+    sys.stdout.write(found.read_text(encoding="utf-8"))
 
 
 def _pull(args: argparse.Namespace) -> None:

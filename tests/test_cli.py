@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from core import budget, store
+from core.incidents import COLUMNS
 from meerkat import __version__, cli
 from meerkat.cli import main
 from tests.fixtures import (
@@ -691,6 +692,19 @@ class CliTests(unittest.TestCase):
         code, out, err = self._run("serve", "--mapping", "sentinel")
         self.assertEqual((code, out), (2, ""))
         self.assertIn("--mapping needs FILE", err)
+
+    def test_query_prints_the_saved_query_and_its_columns_are_the_ones_read(self):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            main(["query", "sentinel"])
+        text = out.getvalue()
+        self.assertEqual(err.getvalue(), "")
+        self.assertIn("SecurityIncident", text)
+        project = text.split("| project\n")[-1]
+        named = [line.strip().split(" = ")[0].rstrip(",") for line in project.splitlines()]
+        self.assertLessEqual(set(named), set(COLUMNS))
+        self.assertLessEqual({"IncidentId", "Timestamp", "DetectorId", "IncidentGrade"}, set(named))
+        self.assertEqual(self._run("query", "elastic")[0], 2)
 
     def test_config_prints_the_defaults_on_an_empty_runs_folder(self):
         code, out, err = self._run("config")
