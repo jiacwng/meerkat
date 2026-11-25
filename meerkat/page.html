@@ -46,8 +46,8 @@ input, select { font: inherit; color: var(--text); background: var(--panel);
 .chip select { border: 0; background: none; padding: 3px 2px; font-size: 12px; }
 main { flex: 1; min-height: 0; display: grid; gap: 0 12px; padding: 0 20px 16px;
        grid-template-columns: minmax(0, 1fr); }
-main.split { grid-template-columns: minmax(0, 1fr) clamp(380px, 32%, 480px); }
-@media (max-width: 1200px) {
+main.split { grid-template-columns: minmax(0, 1fr) clamp(340px, 34%, 480px); }
+@media (max-width: 900px) {
   main.split { grid-template-columns: minmax(0, 1fr);
                grid-template-rows: minmax(0, 2fr) minmax(0, 3fr); gap: 12px 0; }
 }
@@ -62,7 +62,9 @@ td { padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap
 td.name { font-weight: 600; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 td.check, th.check { width: 28px; padding-right: 0; }
 #rows tr, #similar tr, #members tr { cursor: pointer; }
-#rows tr:hover td, #rows tr.picked td { background: var(--pick); }
+#rows tr:hover td { background: var(--pick); }
+#rows tr.picked td { background: var(--accent-bg); }
+#rows tr.picked td:first-child { box-shadow: inset 3px 0 var(--link); }
 #rows tr.below td { color: var(--soft); }
 .pill { border: 1px solid var(--soft); border-radius: 10px; padding: 0 7px; font-size: 12px; }
 .tag { display: inline-block; background: var(--tag); border-radius: 3px; padding: 0 6px;
@@ -132,7 +134,7 @@ const COLUMNS = [
   ["time", "Last activity", row => row.latest, row => clock(row.latest)],
 ];
 const state = { record: null, columns: COLUMNS, shown: [], picked: null, viewing: null,
-                open: false, closed: false, bulk: false, keys: {}, checked: new Set(),
+                open: false, closed: true, bulk: false, keys: {}, checked: new Set(),
                 sort: ["position", 1], filters: { budget: "within", tag: "", category: "" } };
 
 function el(tag, text, className) {
@@ -373,7 +375,7 @@ function draw(keep) {
   document.getElementById("bulk").disabled = state.checked.size === 0;
   if (state.bulk && state.checked.size === 0) state.bulk = false;
   const kept = state.shown.some(row => row.IncidentId === keep);
-  select(kept ? keep : state.shown.length ? state.shown[0].IncidentId : null);
+  select(kept ? keep : state.closed || !state.shown.length ? null : state.shown[0].IncidentId);
 }
 
 function select(id) {
@@ -498,8 +500,9 @@ async function show(id) {
     pair.append(el("dt", name), el("dd", value));
     details.append(pair);
   }
-  const parts = [nav, el("h2", row.AlertTitle || row.IncidentId),
-                 el("div", status.filter(Boolean).join(" · "), "soft"), buttons, comment, assessment,
+  const parts = [nav, el("h2", `Incident ${row.IncidentId}`),
+                 el("div", [row.AlertTitle, ...status].filter(Boolean).join(" · "), "soft"),
+                 buttons, comment, assessment,
                  factor(row.rule_true_positives, row.rule_classified,
                         `Earlier incidents of rule ${row.DetectorId}`, "Unclassified rule"),
                  factor(row.similar_true_positive, row.similar, similar, "No similar incident"),
