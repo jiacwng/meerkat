@@ -3,11 +3,11 @@
 Meerkat ranks a SOC's open incidents so that analysts read the likely true
 positives first. It scores each incident from the classifications given to
 earlier ones, folds duplicates into one row, and lists as many rows as the team
-has time to read. It runs in a terminal or as a local web page. It is a second
-opinion beside the SIEM's own queue, built on one signal: how the organisation
-classified earlier incidents.
+has time to read. Analysts work in a local web page, and every step is also a
+command for scripts. It is a second opinion beside the SIEM's own queue, built
+on one signal: how the organisation classified earlier incidents.
 
-![The queue of the example file in a terminal](docs/queue.png)
+![The queue as a web page, with one incident open](docs/page.png)
 
 ## Install
 
@@ -22,128 +22,37 @@ python -m pip install -e .
 
 ## Quick start
 
-The repository ships an example export: one organisation of Microsoft's GUIDE
-dataset, with 47 open incidents. Set how many rows you plan to read, then load
-the file:
-
 ```bash
-meerkat config budget 10
-meerkat queue examples/incidents.csv
+meerkat serve examples/incidents.csv
 ```
 
-This prints the queue in the picture above. It ends with a summary:
-
-```text
-OPEN           47 incidents in 46 rows, 10 listed
-BELOW BUDGET   36 rows, 1 similar TP, 7 unclassified rule
-```
-
-GUIDE replaces names with numbers, so hosts, users and titles are numbers here.
+This opens the queue in your browser. The example is one organisation of
+Microsoft's GUIDE dataset, with 47 open incidents. Type 10 in `Reading budget` to list
+the ten rows you plan to read. GUIDE replaces names with numbers, so hosts,
+users and titles are numbers here.
 
 | Column | Meaning |
 | --- | --- |
-| `SCORE` | Likelihood of a true positive, from 0 to 1. |
-| `GROUP` | Open incidents of the same rule with the same devices, accounts, addresses, files and URLs. They take one row. |
-| `RULE_TP` | True positives over classified incidents of the same rule. |
-| `SIMILAR_TP` | True positives over earlier incidents that share a device, account, address, file or URL. |
-| `FLAG` | `sample`: drawn at random from below the budget. `similar TP`: below the budget, with an earlier similar true positive. `unclassified rule`: below the budget, rule never classified. |
+| `Score` | Likelihood of a true positive, from 0 to 1. |
+| `Tags` | `Rule 71 of 199 TP` counts true positives among classified incidents of the same rule. `Similar 3 of 3 TP` counts them among earlier incidents sharing a device, account, address, file or URL. `Unclassified rule`: the rule was never classified. `Group of 2`: open incidents of one rule with the same entities, in one row. `Sample`: drawn at random from below the budget. |
 
 ## Working through the queue
 
-Look at one incident:
+Select a row to see the incident beside the queue. Classify it with the
+buttons or with the keys `t`, `b` and `f`. The keys `j` and `k` move between
+rows. `Group of N` classifies every open incident of its group. Tick several
+rows and press `Classify incidents` to classify them together. Each
+classification changes the queue at once.
 
-```bash
-meerkat details 138267
-```
+To load the next export, press `Load file` or drop the CSV on the page.
+Earlier classifications count for it.
 
-Classify it `tp`, `bp` or `fp`. `--group` classifies every open incident of its group:
+## Checking the budget
 
-```bash
-meerkat classify 138267 tp --comment "confirmed with the user"
-meerkat classify 138267 tp --group
-```
-
-![Classifying an incident and reading the next queue](docs/demo.gif)
-
-Each classification changes the next queue. Load the next export the same way,
-and earlier classifications count for it:
-
-```bash
-meerkat queue tomorrow.csv
-```
-
-To classify from a file, give a CSV with the columns `IncidentId` and
-`IncidentGrade`. `examples/classifications.csv` holds the real classifications
-of the 47 example incidents:
-
-```bash
-meerkat classify --file examples/classifications.csv
-```
-
-## Web page
-
-```bash
-meerkat serve
-```
-
-This prints an address on 127.0.0.1. The page shows the same queue, with one
-incident beside it and the classification buttons. It answers on this machine
-only.
-
-![The queue as a web page, with one incident open](docs/page.png)
-
-## Commands
-
-| Command | What it does |
-| --- | --- |
-| `meerkat queue [FILE]` | Scores an incident CSV and saves it as a run. Without FILE it lists the open incidents of every saved run. |
-| `meerkat details INCIDENT` | Shows one incident: score, entities, group, classification history and similar incidents. |
-| `meerkat classify INCIDENT CLASSIFICATION` | Records a classification: `tp`, `bp` or `fp`. |
-| `meerkat classify --file FILE` | Records every classification in a CSV. |
-| `meerkat budget` | Shows what is below the budget and what the sample says about it. |
-| `meerkat serve` | Opens the queue as a web page. |
-| `meerkat runs` | Lists the saved runs. |
-| `meerkat config [SETTING VALUE]` | Shows the settings, or changes one. |
-
-| Option | Where | What it does |
-| --- | --- | --- |
-| `--all` | `queue` | Also lists the rows below the budget. |
-| `--limit N` | `queue` | Prints the first N rows. |
-| `--run ID` | `queue`, `details` | Only the incidents of one run. |
-| `--mapping NAME_OR_PATH` | `queue FILE` | Column names of the file, see below. |
-| `--group` | `classify` | Classifies the whole group. |
-| `--comment TEXT` | `classify` | Text stored with the classification. |
-| `--json` | `queue`, `details`, `runs`, `budget` | Machine readable output. |
-| `--port N` | `serve` | Port to listen on. |
-| `--runs-dir PATH` | all | Where runs, classifications and settings are kept. Default `runs/`. |
-
-Colour is used on a terminal only. Set `NO_COLOR` to turn it off.
-
-## Settings
-
-| Setting | Meaning | Default |
-| --- | --- | --- |
-| `budget` | Number of rows the team plans to read. | none |
-| `sample_share` | Share of the budget drawn at random from below it. | 0.1 |
-
-```bash
-meerkat config
-meerkat config budget 10
-meerkat config sample_share 0.2
-```
-
-The sample exists to check the budget. Once sample rows are classified,
-`meerkat budget` gives a 95% interval for the true positives left below it:
-
-```text
-BUDGET                10 rows
-BELOW BUDGET          35 rows, 35 incidents
-  similar TP          1
-  unclassified rule   4
-  oldest below        06-12 21:10
-SAMPLE                1 drawn, 1 classified, 0 TP
-TP BELOW BUDGET       0 to 31 of 35, 95% interval, from 1 classified
-```
+Part of the budget is drawn at random from below it and tagged `Sample`.
+Once sample rows are classified, the page gives a 95% interval for the true
+positives left unread. In the example, one classified sample gives 0 to 31
+of 35.
 
 ## Your own data
 
@@ -195,6 +104,105 @@ reproduces both figures.
 - The `sentinel` and `splunk` presets were written from vendor documentation
   and have not read a real export. Sentinel's `SecurityIncident` table has no
   entity columns, so that preset gives rule and organisation history only.
+
+## Scripts
+
+Set how many rows you plan to read, then load the file:
+
+```bash
+meerkat config budget 10
+meerkat queue examples/incidents.csv
+```
+
+![The queue of the example file in a terminal](docs/queue.png)
+
+This prints the queue in the picture above. It ends with a summary:
+
+```text
+OPEN           47 incidents in 46 rows, 10 listed
+BELOW BUDGET   36 rows, 1 similar TP, 7 unclassified rule
+```
+
+Look at one incident:
+
+```bash
+meerkat details 138267
+```
+
+Classify it `tp`, `bp` or `fp`. `--group` classifies every open incident of its group:
+
+```bash
+meerkat classify 138267 tp --comment "confirmed with the user"
+meerkat classify 138267 tp --group
+```
+
+![Classifying an incident and reading the next queue](docs/demo.gif)
+
+Each classification changes the next queue. Load the next export the same way,
+and earlier classifications count for it:
+
+```bash
+meerkat queue tomorrow.csv
+```
+
+To classify from a file, give a CSV with the columns `IncidentId` and
+`IncidentGrade`. `examples/classifications.csv` holds the real classifications
+of the 47 example incidents:
+
+```bash
+meerkat classify --file examples/classifications.csv
+```
+
+| Command | What it does |
+| --- | --- |
+| `meerkat serve [FILE]` | Opens the queue as a web page on 127.0.0.1. With FILE it loads the file first. |
+| `meerkat queue [FILE]` | Scores an incident CSV and saves it as a run. Without FILE it lists the open incidents of every saved run. |
+| `meerkat details INCIDENT` | Shows one incident: score, entities, group, classification history and similar incidents. |
+| `meerkat classify INCIDENT CLASSIFICATION` | Records a classification: `tp`, `bp` or `fp`. |
+| `meerkat classify --file FILE` | Records every classification in a CSV. |
+| `meerkat budget` | Shows what is below the budget and what the sample says about it. |
+| `meerkat runs` | Lists the saved runs. |
+| `meerkat config [SETTING VALUE]` | Shows the settings, or changes one. |
+
+| Option | Where | What it does |
+| --- | --- | --- |
+| `--all` | `queue` | Also lists the rows below the budget. |
+| `--limit N` | `queue` | Prints the first N rows. |
+| `--run ID` | `queue`, `details` | Only the incidents of one run. |
+| `--mapping NAME_OR_PATH` | `queue FILE`, `serve FILE` | Column names of the file, see above. |
+| `--group` | `classify` | Classifies the whole group. |
+| `--comment TEXT` | `classify` | Text stored with the classification. |
+| `--json` | `queue`, `details`, `runs`, `budget` | Machine readable output. |
+| `--port N` | `serve` | Port to listen on. |
+| `--max-file-mb N` | `serve` | Largest file the page may load, in megabytes. Default 200. |
+| `--no-browser` | `serve` | Does not open the browser. |
+| `--runs-dir PATH` | all | Where runs, classifications and settings are kept. Default `runs/`. |
+
+Colour is used on a terminal only. Set `NO_COLOR` to turn it off.
+
+| Setting | Meaning | Default |
+| --- | --- | --- |
+| `budget` | Number of rows the team plans to read. | none |
+| `sample_share` | Share of the budget drawn at random from below it. | 0.1 |
+
+```bash
+meerkat config
+meerkat config budget 10
+meerkat config sample_share 0.2
+```
+
+Once sample rows are classified, `meerkat budget` gives the same interval as
+the page:
+
+```text
+BUDGET                10 rows
+BELOW BUDGET          35 rows, 35 incidents
+  similar TP          1
+  unclassified rule   4
+  oldest below        06-12 21:10
+SAMPLE                1 drawn, 1 classified, 0 TP
+TP BELOW BUDGET       0 to 31 of 35, 95% interval, from 1 classified
+```
 
 ## License
 
