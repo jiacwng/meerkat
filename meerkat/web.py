@@ -169,26 +169,31 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             body = json.loads(body)
-            incident, classification = body["incident"], body["classification"]
+            incidents, classification = body["incidents"], body["classification"]
             comment = body.get("comment", "")
             whole = body.get("group", False)
         except (ValueError, KeyError, TypeError, AttributeError):
-            self._json(HTTPStatus.BAD_REQUEST, {"error": "expected incident and classification"})
+            self._json(HTTPStatus.BAD_REQUEST, {"error": "expected incidents and classification"})
             return
-        if (not isinstance(incident, str) or not isinstance(comment, str)
+        if (not isinstance(incidents, list) or not incidents
+                or not all(isinstance(incident, str) for incident in incidents)
+                or not isinstance(comment, str)
                 or not isinstance(whole, bool) or classification not in CLASSIFICATIONS):
             self._json(HTTPStatus.BAD_REQUEST,
                        {"error": f"classification is one of {', '.join(CLASSIFICATIONS)}"})
             return
-        self._answer(lambda: self._record(incident, classification, comment, whole))
+        self._answer(lambda: self._record(incidents, classification, comment, whole))
 
-    def _record(self, incident: str, classification: str, comment: str, whole: bool) -> dict:
+    def _record(self, incidents: list[str], classification: str, comment: str,
+                whole: bool) -> dict:
         runs_dir, scores = self.server.runs_dir, self._scores()
-        classified = records.with_group(runs_dir, scores, incident) if whole else [incident]
+        classified = []
+        for incident in incidents:
+            classified += records.with_group(runs_dir, scores, incident) if whole else [incident]
+        classified = list(dict.fromkeys(classified))
         records.classify(runs_dir, scores, [(one, classification) for one in classified],
                          comment)
-        return {"incident": incident, "classification": classification,
-                "classified": len(classified)}
+        return {"classification": classification, "classified": len(classified)}
 
     def _answer(self, build) -> None:
         try:

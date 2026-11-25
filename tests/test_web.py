@@ -82,7 +82,7 @@ class WebTests(unittest.TestCase):
 
     def test_a_request_without_the_token_is_refused(self):
         self.assertEqual(self._request("GET", "/api/queue", token=False)[0], 403)
-        classification = {"incident": "201", "classification": "TruePositive"}
+        classification = {"incidents": ["201"], "classification": "TruePositive"}
         self.assertEqual(self._request("POST", "/api/classify", classification, token=False)[0], 403)
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
 
@@ -94,7 +94,7 @@ class WebTests(unittest.TestCase):
 
     def test_a_classification_from_the_page_closes_the_incident(self):
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
-        classification = {"incident": "201", "classification": "TruePositive", "comment": "checked with the user"}
+        classification = {"incidents": ["201"], "classification": "TruePositive", "comment": "checked with the user"}
         status, _, body = self._request("POST", "/api/classify", classification)
         self.assertEqual((status, json.loads(body)["classification"]), (200, "TruePositive"))
         self.assertEqual(self._queue_ids(), ["202", "200"])
@@ -110,6 +110,17 @@ class WebTests(unittest.TestCase):
             {"field": "IpAddress", "value": "10.0.0.1", "classified_before": 1,
              "TruePositive": 1, "BenignPositive": 0, "FalsePositive": 0}])
 
+    def test_several_incidents_are_classified_in_one_request(self):
+        several = {"incidents": ["201", "202", "201"], "classification": "BenignPositive"}
+        status, _, body = self._request("POST", "/api/classify", several)
+        self.assertEqual((status, json.loads(body)["classified"]), (200, 2))
+        self.assertEqual(self._queue_ids(), ["200"])
+        for wrong in ([], "201", ["201", 7], ["201", "999"]):
+            with self.subTest(wrong):
+                body = {"incidents": wrong, "classification": "TruePositive"}
+                self.assertIn(self._request("POST", "/api/classify", body)[0], (400, 404))
+        self.assertEqual(self._queue_ids(), ["200"])
+
     def test_a_classification_recorded_in_the_terminal_reaches_the_page(self):
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
         with contextlib.redirect_stdout(io.StringIO()):
@@ -117,11 +128,11 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self._queue_ids(), ["201", "200"])
 
     def test_a_wrong_classification_an_unknown_incident_and_a_long_body_are_refused(self):
-        wrong = {"incident": "201", "classification": "Malicious"}
+        wrong = {"incidents": ["201"], "classification": "Malicious"}
         self.assertEqual(self._request("POST", "/api/classify", wrong)[0], 400)
-        wrong = {"incident": "201", "classification": "TruePositive", "group": "yes"}
+        wrong = {"incidents": ["201"], "classification": "TruePositive", "group": "yes"}
         self.assertEqual(self._request("POST", "/api/classify", wrong)[0], 400)
-        unknown = {"incident": "999", "classification": "TruePositive"}
+        unknown = {"incidents": ["999"], "classification": "TruePositive"}
         self.assertEqual(self._request("POST", "/api/classify", unknown)[0], 404)
         self.assertEqual(self._request("POST", "/api/classify", "not json")[0], 400)
         long = "x" * (web.BODY_LIMIT + 1)
@@ -156,7 +167,7 @@ class WebTests(unittest.TestCase):
         self.assertIsNone(record["tp_below_budget"])
         sampled = next(row["IncidentId"] for row in record["queue"] if row["flag"] == "sample")
         self._request("POST", "/api/classify",
-                      {"incident": sampled, "classification": "FalsePositive"})
+                      {"incidents": [sampled], "classification": "FalsePositive"})
         record = json.loads(self._request("GET", "/api/queue")[2])
         self.assertEqual(record["sample"]["classified"], 1)
 

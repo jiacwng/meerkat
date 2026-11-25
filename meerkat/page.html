@@ -7,111 +7,133 @@
 <style nonce="__NONCE__">
 :root {
   color-scheme: light dark;
-  --bg: #f4f4f1; --panel: #ffffff; --text: #1c1c1a; --soft: #6b6a64; --line: #dedcd3;
-  --pick: #e6f1fb; --pick-text: #0c447c; --bad: #a32d2d; --cell: #f1efe8;
+  --bg: #faf9f8; --panel: #ffffff; --text: #201f1e; --soft: #605e5c; --line: #e1dfdd;
+  --pick: #f3f2f1; --link: #0f6cbd; --tag: #f3f2f1; --accent-bg: #e6f1fb; --bad: #a4262c;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #121211; --panel: #1c1c1a; --text: #ecebe6; --soft: #9d9c94; --line: #34342f;
-    --pick: #0c447c; --pick-text: #e6f1fb; --bad: #f09595; --cell: #262624;
+    --bg: #141414; --panel: #1f1f1f; --text: #f3f2f1; --soft: #a19f9d; --line: #3b3a39;
+    --pick: #2b2b2b; --link: #6cb8f6; --tag: #323130; --accent-bg: #0c3b5e; --bad: #f1707b;
   }
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--text); display: flex;
-       flex-direction: column; font: 13px/1.4 system-ui, sans-serif; }
-.mono, td, kbd, .stat b { font-family: ui-monospace, monospace; }
-header { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; padding: 10px 14px;
-         background: var(--panel); border-bottom: 1px solid var(--line); }
-header h1 { font-size: 15px; margin: 0 8px 0 0; align-self: center; }
-.stat { display: flex; flex-direction: column; justify-content: center; padding: 4px 10px;
-        background: var(--cell); border-radius: 4px; min-width: 64px; }
-.stat span { font-size: 11px; color: var(--soft); }
-.stat b { font-size: 15px; font-weight: 600; }
-.stat input { width: 72px; padding: 0 4px; font: 600 15px ui-monospace, monospace; }
-#loader { display: flex; align-items: center; gap: 6px; margin-left: auto; }
-#bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 14px; }
+       flex-direction: column; font: 13px/1.4 "Segoe UI", system-ui, sans-serif; }
+.mono, .pill { font-family: ui-monospace, Consolas, monospace; }
+.soft { color: var(--soft); }
+#title { display: flex; align-items: baseline; gap: 10px; padding: 14px 20px 4px; }
+#title h1 { font-size: 20px; font-weight: 600; margin: 0; }
+#counts { display: flex; flex-wrap: wrap; gap: 32px; padding: 8px 20px 12px; }
+.count b { display: block; font-size: 22px; font-weight: 600; line-height: 30px; }
+.count b small { font-size: 13px; font-weight: 400; color: var(--soft); }
+.count span { font-size: 12px; color: var(--soft); }
+.count input { width: 72px; height: 30px; font-size: 18px; font-weight: 600; padding: 0 6px; }
+#toolbar, #filters { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px;
+                     padding: 6px 20px; }
+#toolbar { border-top: 1px solid var(--line); }
+#toolbar .right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+button { font: inherit; color: var(--text); background: none; border: 0; padding: 4px 6px;
+         border-radius: 4px; cursor: pointer; }
+button:hover:enabled { background: var(--pick); }
+button:disabled { color: var(--soft); cursor: default; opacity: .6; }
+button.link { color: var(--link); }
 input, select { font: inherit; color: var(--text); background: var(--panel);
-                border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; }
-#search { width: 280px; }
-#keys { margin-left: auto; color: var(--soft); }
-#keys span { margin-left: 12px; }
-kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; background: var(--panel); }
-main { flex: 1; min-height: 0; display: grid; gap: 10px; padding: 0 14px 14px;
-       grid-template-columns: minmax(0, 1fr) clamp(440px, 34%, 520px); }
-@media (max-width: 1200px) { main { grid-template-columns: minmax(0, 1fr);
-                                    grid-template-rows: minmax(0, 2fr) minmax(0, 3fr); } }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+                border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; }
+#search { width: 220px; }
+.chip { display: flex; align-items: center; gap: 4px; background: var(--tag);
+        border-radius: 14px; padding: 0 4px 0 10px; font-size: 12px; }
+.chip select { border: 0; background: none; padding: 3px 2px; font-size: 12px; }
+main { flex: 1; min-height: 0; display: grid; gap: 0 12px; padding: 0 20px 16px;
+       grid-template-columns: minmax(0, 1fr); }
+main.split { grid-template-columns: minmax(0, 1fr) clamp(380px, 32%, 480px); }
+@media (max-width: 1200px) {
+  main.split { grid-template-columns: minmax(0, 1fr);
+               grid-template-rows: minmax(0, 2fr) minmax(0, 3fr); gap: 12px 0; }
+}
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
          overflow: auto; min-height: 0; }
 table { width: 100%; border-collapse: collapse; }
-th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 500;
-     color: var(--soft); font-size: 11px; padding: 6px; border-bottom: 1px solid var(--line); }
-td { padding: 5px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-#detail td { white-space: normal; overflow-wrap: break-word; }
-td.title { font-family: system-ui, sans-serif; max-width: 0; width: 40%;
-           overflow: hidden; text-overflow: ellipsis; }
-#rows tr[data-id], #similar tr, #members tr { cursor: pointer; }
-#rows tr[data-id]:hover td, #similar tr:hover td, #members tr:hover td { background: var(--cell); }
-#rows tr.picked td { background: var(--pick); color: var(--pick-text); }
+th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 400;
+     color: var(--soft); font-size: 12px; padding: 8px; border-bottom: 1px solid var(--line);
+     white-space: nowrap; }
+th.sorts { cursor: pointer; }
+td { padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td.name { font-weight: 600; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+td.check, th.check { width: 28px; padding-right: 0; }
+#rows tr, #similar tr, #members tr { cursor: pointer; }
+#rows tr:hover td, #rows tr.picked td { background: var(--pick); }
 #rows tr.below td { color: var(--soft); }
+.pill { border: 1px solid var(--soft); border-radius: 10px; padding: 0 7px; font-size: 12px; }
+.tag { display: inline-block; background: var(--tag); border-radius: 3px; padding: 0 6px;
+       margin-right: 4px; font-size: 12px; }
+.tag.sample { background: var(--accent-bg); }
+#detail { display: flex; flex-direction: column; padding: 12px 16px; }
+#detail[hidden] { display: none; }
+#nav { display: flex; align-items: center; gap: 2px; }
+#nav .at { margin-right: auto; color: var(--soft); font-size: 12px; }
+#detail h2 { font-size: 16px; font-weight: 600; margin: 4px 0 2px; overflow-wrap: anywhere; }
+#actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; margin: 10px 0 6px;
+           margin-left: -6px; }
+#comment { width: 100%; margin-bottom: 12px; }
+kbd { font: 11px ui-monospace, Consolas, monospace; border: 1px solid var(--line);
+      border-radius: 3px; padding: 0 4px; margin-left: 4px; color: var(--soft); }
+#detail h3 { font-size: 13px; font-weight: 600; margin: 0 0 8px; padding-top: 12px;
+             border-top: 1px solid var(--line); }
+.factor { margin-bottom: 8px; }
+.factor b { display: block; font-weight: 600; }
+.factor span, dt { font-size: 12px; color: var(--soft); }
+dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin: 0 0 12px; }
+dd { margin: 0; overflow-wrap: anywhere; }
+#detail table { margin-bottom: 12px; }
+#detail td { white-space: normal; overflow-wrap: anywhere; }
 #similar tr.none { cursor: default; }
 #similar tr.none td, #similar tr.other td { color: var(--soft); }
 #similar tr.other td:first-child { padding-left: 22px; }
-#similar tr.other td.tp { color: var(--bad); }
-td.divider { font-size: 11px; color: var(--soft); background: var(--bg); }
-#detail { padding: 12px 14px; }
-#top { position: sticky; top: -12px; z-index: 1; background: var(--panel); margin: -12px -14px 0;
-       padding: 12px 14px 10px; border-bottom: 1px solid var(--line); }
-#top + dl { padding-top: 10px; }
-#nav { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; color: var(--soft); }
-#detail h2 { font-size: 15px; margin: 0 0 10px; overflow-wrap: anywhere; }
-#detail h3 { font-size: 11px; font-weight: 500; color: var(--soft); text-transform: uppercase;
-             letter-spacing: .04em; margin: 14px 0 6px; padding-top: 10px;
-             border-top: 1px solid var(--line); }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 0; }
-dt { color: var(--soft); }
-dd { margin: 0; font-family: ui-monospace, monospace; overflow-wrap: anywhere;
-     white-space: pre-wrap; }
 .tp { color: var(--bad); font-weight: 600; }
-#classification { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
-#comment { width: 100%; }
-button { font: inherit; color: var(--text); background: var(--panel); cursor: pointer;
-         border: 1px solid var(--line); border-radius: 4px; padding: 5px 10px; }
-button:hover { background: var(--cell); }
 #notice { color: var(--soft); }
 </style>
 </head>
 <body>
-<header><h1>meerkat</h1></header>
-<input id="file" type="file" accept=".csv,text/csv" hidden>
-<div id="bar">
-  <input id="search" type="search" aria-label="filter" placeholder="filter">
-  <label><input id="all" type="checkbox"> <span id="all-label">show below budget</span></label>
+<div id="title"><h1>Incidents</h1><span id="filename" class="soft"></span></div>
+<div id="counts"></div>
+<div id="toolbar">
+  <button id="pick">Load file</button>
+  <button id="refresh">Refresh</button>
+  <button id="bulk" disabled>Classify incidents</button>
   <span id="notice" aria-live="polite"></span>
-  <span id="keys"></span>
+  <span class="right">
+    <span id="listed" class="soft"></span>
+    <label class="soft">Source <select id="mapping"></select></label>
+    <input id="search" type="search" aria-label="Search" placeholder="Search">
+  </span>
 </div>
+<div id="filters"></div>
+<input id="file" type="file" accept=".csv,text/csv" hidden>
 <main>
   <div class="panel"><table>
     <thead><tr id="head"></tr></thead>
     <tbody id="rows"></tbody>
   </table></div>
-  <section id="detail" class="panel"></section>
+  <section id="detail" class="panel" hidden></section>
 </main>
 <script nonce="__NONCE__">
 "use strict";
 const TOKEN = "__TOKEN__";
 const COLUMNS = [
-  ["#", row => String(row.position)], ["incident", row => row.IncidentId],
-  ["score", row => row.score.toFixed(2)],
-  ["group", row => row.members.length ? String(row.members.length + 1) : ""],
-  ["rule_tp", row => `${row.rule_true_positives}/${row.rule_classified}`],
-  ["similar_tp", row => `${row.similar_true_positive}/${row.similar}`],
-  ["flag", row => row.flag], ["category", row => row.Category],
-  ["severity", row => row.Severity],
-  ["host", row => row.host], ["user", row => row.user],
-  ["time", row => clock(row.latest)], ["title", row => row.AlertTitle],
+  ["name", "Incident name", row => row.AlertTitle, row => row.AlertTitle],
+  ["id", "Incident Id", row => row.IncidentId, row => row.IncidentId],
+  ["score", "Score", row => row.score, row => el("span", row.score.toFixed(2), "pill")],
+  ["tags", "Tags", null, row => tags(row).map(([kind, text]) =>
+    el("span", text, kind === "Sample" ? "tag sample" : "tag"))],
+  ["category", "Categories", row => row.Category, row => row.Category],
+  ["severity", "Severity", row => row.Severity, row => row.Severity],
+  ["assets", "Impacted assets", null, row => [row.host, row.user].filter(Boolean).join(", ")],
+  ["time", "Last activity", row => row.latest, row => clock(row.latest)],
 ];
-const state = { columns: COLUMNS, record: null, shown: [], picked: null, viewing: null, open: false, keys: {} };
+const state = { record: null, columns: COLUMNS, shown: [], picked: null, viewing: null,
+                open: false, closed: false, bulk: false, keys: {}, checked: new Set(),
+                sort: ["position", 1], filters: { budget: "within", tag: "", category: "" } };
 
 function el(tag, text, className) {
   const node = document.createElement(tag);
@@ -120,31 +142,40 @@ function el(tag, text, className) {
   return node;
 }
 
-function classifiedBefore(...counts) {
-  const cells = counts.map(([tp, bp, total]) => [tp, bp, total - tp - bp, total].map(String));
-  const wide = [0, 1, 2, 3].map(at => Math.max(...cells.map(cell => cell[at].length)));
-  return cells.map(cell => {
-    const [tp, bp, fp, total] = cell.map((text, at) => text.padStart(wide[at]));
-    return `${tp} TP  ${bp} BP  ${fp} FP  of ${total} classified before`;
-  });
+function words(name) {
+  const spaced = name.replace(/([a-z])([A-Z])/g, "$1 $2");
+  return spaced[0].toUpperCase() + spaced.slice(1).toLowerCase();
 }
 
-function stat(label, value) {
-  const box = el("div", undefined, "stat");
-  box.append(el("span", label), el("b", String(value)));
-  return box;
-}
-
-function fields(pairs) {
-  const list = el("dl");
-  for (const [name, value] of pairs) {
-    if (value) list.append(el("dt", name), el("dd", value));
-  }
-  return list;
+function short(name) {
+  return name.replace(/[a-z]/g, "");
 }
 
 function clock(timestamp) {
   return `${timestamp.slice(5, 10)} ${timestamp.slice(11, 16)}`;
+}
+
+function tags(row) {
+  const positive = short(state.record.classifications[0]);
+  const found = [];
+  if (row.flag === "sample") found.push(["Sample", "Sample"]);
+  if (row.rule_classified) {
+    found.push(["Rule history", `Rule ${row.rule_true_positives} of ${row.rule_classified} ${positive}`]);
+  } else {
+    found.push(["Unclassified rule", "Unclassified rule"]);
+  }
+  if (row.similar) {
+    found.push(["Similar incidents", `Similar ${row.similar_true_positive} of ${row.similar} ${positive}`]);
+  }
+  if (row.members.length) found.push(["Group", `Group of ${row.members.length + 1}`]);
+  return found;
+}
+
+function remembered(name, value) {
+  try {
+    if (value !== undefined) localStorage.setItem(name, value);
+    return localStorage.getItem(name);
+  } catch { return null; }
 }
 
 async function call(path, body) {
@@ -156,135 +187,191 @@ async function call(path, body) {
   return value;
 }
 
-function remembered(name, value) {
-  try {
-    if (value !== undefined) localStorage.setItem(name, value);
-    return localStorage.getItem(name);
-  } catch { return null; }
+function say(...parts) {
+  document.getElementById("notice").replaceChildren(...parts);
 }
 
-function loader(record) {
-  const box = el("div"), pick = el("button", "load file"), mapping = el("select");
-  box.id = "loader";
-  mapping.id = "mapping";
-  mapping.setAttribute("aria-label", "mapping");
-  for (const name of record.mappings) mapping.append(el("option", name));
-  if (record.mappings.includes(remembered("mapping"))) mapping.value = remembered("mapping");
-  mapping.addEventListener("change", () => remembered("mapping", mapping.value));
-  pick.addEventListener("click", () => document.getElementById("file").click());
-  box.append(pick, mapping);
+function count(value, label, small) {
+  const box = el("div", undefined, "count"), number = el("b", String(value));
+  if (small) number.append(" ", el("small", small));
+  box.append(number, el("span", label));
   return box;
 }
 
-function budgetStat(record) {
-  const box = el("div", undefined, "stat"), field = el("input");
+function budgetCount(record) {
+  const box = el("div", undefined, "count"), field = el("input");
   field.id = "budget";
   field.type = "number";
   field.min = "1";
-  field.setAttribute("aria-label", "budget");
+  field.setAttribute("aria-label", "Reading budget");
   field.value = record.budget ?? "";
   field.addEventListener("change", async () => {
-    const notice = document.getElementById("notice");
-    notice.replaceChildren();
+    say();
     try { await call("/api/budget", { budget: field.value.trim() === "" ? null : Number(field.value) }); }
-    catch (error) { notice.replaceChildren(error.message); }
-    load(state.picked).catch(error => notice.replaceChildren(error.message));
+    catch (error) { say(error.message); }
+    load(state.picked).catch(error => say(error.message));
   });
-  box.append(el("span", "budget"), field);
+  box.append(el("b"), el("span", "Reading budget, rows"));
+  box.firstChild.append(field);
+  return box;
+}
+
+function chip(label, name, options) {
+  const box = el("label", `${label}:`, "chip"), choice = el("select");
+  for (const [value, text] of options) {
+    const option = el("option", text);
+    option.value = value;
+    choice.append(option);
+  }
+  if (!options.some(([value]) => value === state.filters[name])) state.filters[name] = options[0][0];
+  choice.value = state.filters[name];
+  choice.addEventListener("change", () => { state.filters[name] = choice.value; draw(state.picked); });
+  box.append(choice);
   return box;
 }
 
 async function upload(file) {
-  const notice = document.getElementById("notice");
   if (!file || !state.record) return;
   if (file.size > state.record.max_file_bytes) {
-    notice.replaceChildren(`${file.name}: larger than ${state.record.max_file_bytes / 1048576} MB`);
+    say(`${file.name}: larger than ${state.record.max_file_bytes / 1048576} MB`);
     return;
   }
-  notice.replaceChildren(`loading ${file.name}`);
+  say(`Loading ${file.name}`);
   try {
     const answer = await fetch("/api/load", { method: "POST", body: file, headers: {
       "X-Meerkat-Token": TOKEN, "X-Meerkat-File": encodeURIComponent(file.name),
       "X-Meerkat-Mapping": document.getElementById("mapping").value } });
     const value = await answer.json();
     if (!answer.ok) throw new Error(value.error);
-    notice.replaceChildren();
+    say();
     state.viewing = null;
     await load(null);
-  } catch (error) { notice.replaceChildren(error.message); }
+  } catch (error) { say(error.message); }
 }
 
 async function load(keep) {
   const record = await call("/api/queue");
   state.record = record;
-  document.getElementById("search").hidden = record.queue === null;
-  document.getElementById("all").parentElement.hidden = record.queue === null;
-  if (record.queue === null) {
-    document.querySelector("header").replaceChildren(el("h1", "meerkat"), loader(record));
-    for (const id of ["head", "rows", "detail", "keys"]) document.getElementById(id).replaceChildren();
+  const mapping = document.getElementById("mapping");
+  mapping.replaceChildren(...record.mappings.map(name => el("option", name)));
+  if (record.mappings.includes(remembered("mapping"))) mapping.value = remembered("mapping");
+  const empty = record.queue === null;
+  for (const id of ["counts", "filters", "refresh", "bulk", "search", "listed"]) {
+    document.getElementById(id).hidden = empty;
+  }
+  document.getElementById("filename").textContent = empty ? "No file loaded" : record.file;
+  if (empty) {
+    for (const id of ["head", "rows"]) document.getElementById(id).replaceChildren();
+    select(null);
     return;
   }
-  state.columns = COLUMNS.filter(([name]) => name !== "severity" || record.queue.some(row => row.Severity));
-  document.getElementById("head").replaceChildren(...state.columns.map(([name]) => el("th", name)));
   state.keys = Object.fromEntries(record.classifications.map(name => [name[0].toLowerCase(), name]));
+  const present = new Set(record.queue.map(row => row.IncidentId));
+  state.checked = new Set([...state.checked].filter(id => present.has(id)));
   for (const row of record.queue) {
+    row.kinds = tags(row).map(([kind]) => kind);
     row.text = [row.IncidentId, row.AlertTitle, row.DetectorId, row.Category, row.Severity,
                 row.MitreTechniques, ...row.members,
                 ...record.links.map(name => row[name])].join(" ").toLowerCase();
   }
-  const header = document.querySelector("header");
-  const stats = [stat("file", record.file), stat("open", record.open), budgetStat(record)];
+  state.columns = COLUMNS.filter(([name]) => name !== "severity" || record.queue.some(row => row.Severity));
+
+  const counts = [count(record.open, "Open incidents"), budgetCount(record)];
   if (record.budget !== null) {
-    const interval = record.tp_below_budget;
-    stats.push(stat("to read", record.to_read), stat("below budget", record.below_budget),
-               stat("sample", `${record.sample.classified} of ${record.sample.drawn} classified`),
-               stat("TP below budget, 95% interval",
-                    interval ? `${interval.low} to ${interval.high} of ${interval.of}` : "not estimated"));
+    const interval = record.tp_below_budget, sample = record.sample;
+    counts.push(count(record.below_budget, "Below budget"),
+                count(interval ? `${interval.low} to ${interval.high}` : "Not estimated",
+                      `${words(record.classifications[0])}s below budget · 95% interval · ` +
+                      `samples classified ${sample.classified} of ${sample.drawn}`,
+                      interval ? `of ${interval.of}` : ""));
   }
-  header.replaceChildren(el("h1", "meerkat"), ...stats, loader(record));
-  document.getElementById("all-label").textContent = `show below budget ${record.below_budget}`;
-  const keys = document.getElementById("keys");
-  keys.replaceChildren();
-  const hints = [["j", "next"], ["k", "previous"],
-                 ...Object.entries(state.keys).map(([key, name]) => [key, name.replace(/[a-z]/g, "")]),
-                 ["/", "filter"]];
-  for (const [key, label] of hints) keys.append(el("span", undefined), el("kbd", key), ` ${label}`);
+  document.getElementById("counts").replaceChildren(...counts);
+
+  const kinds = [...new Set(record.queue.flatMap(row => row.kinds))];
+  const categories = [...new Set(record.queue.map(row => row.Category).filter(Boolean))].sort();
+  const any = [["", "Any"]];
+  const budget = record.budget === null ? any
+    : [["within", "Within"], ["below", "Below"], ...any];
+  document.getElementById("filters").replaceChildren(
+    chip("Budget", "budget", budget),
+    chip("Tags", "tag", [...any, ...kinds.map(kind => [kind, kind])]),
+    chip("Categories", "category", [...any, ...categories.map(name => [name, name])]));
   draw(keep);
+}
+
+function order(first, second) {
+  const [name, way] = state.sort;
+  const value = name === "position" ? row => row.position
+    : state.columns.find(([column]) => column === name)[2];
+  const [one, other] = [value(first), value(second)];
+  const by = typeof one === "number" ? one - other
+    : String(one).localeCompare(String(other), undefined, { numeric: true });
+  return way * by || first.position - second.position;
 }
 
 function draw(keep) {
   if (!state.record || state.record.queue === null) return;
-  const words = document.getElementById("search").value.toLowerCase().split(/\s+/).filter(Boolean);
-  const matching = state.record.queue.filter(row => words.every(word => row.text.includes(word)));
-  const all = document.getElementById("all").checked;
-  state.shown = matching.filter(row => all || row.placement !== "below budget");
+  const { budget, tag, category } = state.filters;
+  const terms = document.getElementById("search").value.toLowerCase().split(/\s+/).filter(Boolean);
+  state.shown = state.record.queue.filter(row =>
+    terms.every(term => row.text.includes(term))
+    && (budget === "" || (row.placement === "below budget") === (budget === "below"))
+    && (tag === "" || row.kinds.includes(tag))
+    && (category === "" || row.Category === category)).sort(order);
+  document.getElementById("listed").textContent = `${state.shown.length} incidents`;
+
+  const all = el("input"), first = el("th", undefined, "check");
+  all.type = "checkbox";
+  all.setAttribute("aria-label", "Select all");
+  all.checked = state.shown.length > 0 && state.shown.every(row => state.checked.has(row.IncidentId));
+  all.addEventListener("change", () => {
+    for (const row of state.shown) {
+      if (all.checked) state.checked.add(row.IncidentId); else state.checked.delete(row.IncidentId);
+    }
+    draw(state.picked);
+  });
+  first.append(all);
+  const heads = state.columns.map(([name, label, value]) => {
+    const sorted = state.sort[0] === name;
+    const head = el("th", sorted ? `${label} ${state.sort[1] > 0 ? "↑" : "↓"}` : label, value ? "sorts" : "");
+    if (sorted) head.setAttribute("aria-sort", state.sort[1] > 0 ? "ascending" : "descending");
+    if (value) {
+      head.addEventListener("click", () => {
+        state.sort = [name, sorted ? -state.sort[1] : name === "score" || name === "time" ? -1 : 1];
+        draw(state.picked);
+      });
+    }
+    return head;
+  });
+  document.getElementById("head").replaceChildren(first, ...heads);
 
   const body = document.getElementById("rows");
   body.replaceChildren();
-  const divider = text => {
-    const line = el("tr"), cell = el("td", text, "divider");
-    cell.colSpan = state.columns.length;
-    line.append(cell);
-    body.append(line);
-  };
-  if (!state.shown.length) divider(`0 match, ${matching.length} below budget`);
-  let divided = false;
   for (const row of state.shown) {
-    const under = row.placement === "below budget";
-    if (under && !divided) {
-      divider(`below budget ${state.record.below_budget}`);
-      divided = true;
-    }
-    const line = el("tr", undefined, under ? "below" : "");
+    const line = el("tr", undefined, row.placement === "below budget" ? "below" : "");
     line.dataset.id = row.IncidentId;
-    for (const [name, cell] of state.columns) {
-      const td = el("td", cell(row), name === "title" ? "title" : "");
-      if (name === "title") td.title = row.AlertTitle;
+    const tick = el("input"), box = el("td", undefined, "check");
+    tick.type = "checkbox";
+    tick.setAttribute("aria-label", `Select ${row.IncidentId}`);
+    tick.checked = state.checked.has(row.IncidentId);
+    tick.addEventListener("click", event => event.stopPropagation());
+    tick.addEventListener("change", () => {
+      if (tick.checked) state.checked.add(row.IncidentId); else state.checked.delete(row.IncidentId);
+      draw(state.picked);
+    });
+    box.append(tick);
+    line.append(box);
+    for (const [name, , , cell] of state.columns) {
+      const shown = cell(row), td = el("td", undefined, name === "name" ? "name" : name === "id" ? "mono" : "");
+      td.append(...(Array.isArray(shown) ? shown : [shown]));
+      if (name === "name") td.title = row.AlertTitle;
       line.append(td);
     }
-    line.addEventListener("click", () => select(row.IncidentId));
+    line.addEventListener("click", () => { state.closed = false; state.bulk = false; select(row.IncidentId); });
     body.append(line);
   }
+  document.getElementById("bulk").disabled = state.checked.size === 0;
+  if (state.bulk && state.checked.size === 0) state.bulk = false;
   const kept = state.shown.some(row => row.IncidentId === keep);
   select(kept ? keep : state.shown.length ? state.shown[0].IncidentId : null);
 }
@@ -295,7 +382,70 @@ function select(id) {
     line.classList.toggle("picked", line.dataset.id === id);
     if (line.dataset.id === id) line.scrollIntoView({ block: "nearest" });
   }
-  if (state.viewing !== id || id === null) show(id);
+  if (state.bulk) showChecked();
+  else if (state.viewing !== id || id === null) show(id);
+  else reveal(true);
+}
+
+function reveal(visible) {
+  const shown = visible && !state.closed;
+  document.getElementById("detail").hidden = !shown;
+  document.querySelector("main").classList.toggle("split", shown);
+}
+
+function icon(text, label, action) {
+  const button = el("button", text);
+  button.setAttribute("aria-label", label);
+  button.addEventListener("click", action);
+  return button;
+}
+
+function close() {
+  state.closed = true;
+  state.bulk = false;
+  reveal(false);
+}
+
+function actions(labelled) {
+  const row = el("div"), comment = el("input");
+  row.id = "actions";
+  for (const [key, classification] of Object.entries(state.keys)) {
+    const button = el("button", words(classification), "link");
+    if (labelled) button.append(el("kbd", key));
+    button.addEventListener("click", () => classify(classification));
+    row.append(button);
+  }
+  comment.id = "comment";
+  comment.type = "text";
+  comment.setAttribute("aria-label", "Comment");
+  comment.placeholder = "Comment";
+  return [row, comment];
+}
+
+function showChecked() {
+  state.viewing = null;
+  state.open = false;
+  const nav = el("div");
+  nav.id = "nav";
+  nav.append(el("span", "", "at"), icon("✕", "Close", close));
+  const [row, comment] = actions(true);
+  const list = el("table"), body = el("tbody");
+  for (const id of state.checked) {
+    const line = el("tr");
+    line.append(el("td", id, "mono"));
+    body.append(line);
+  }
+  list.append(body);
+  document.getElementById("detail").replaceChildren(
+    nav, el("h2", `${state.checked.size} incidents selected`), row, comment, list);
+  reveal(true);
+}
+
+function factor(positives, total, source, none) {
+  const box = el("div", undefined, "factor");
+  const positive = words(state.record.classifications[0]).toLowerCase();
+  box.append(el("b", total ? `${positives} of ${total} ${positive}` : none), el("span", source));
+  return box;
 }
 
 function classificationCell(classification) {
@@ -306,73 +456,66 @@ async function show(id) {
   state.viewing = id;
   state.open = false;
   const pane = document.getElementById("detail");
-  if (id === null) { pane.replaceChildren(); return; }
+  if (id === null) { pane.replaceChildren(); reveal(false); return; }
   let row;
   try { row = await call(`/api/incident?id=${encodeURIComponent(id)}`); }
-  catch (error) { pane.replaceChildren(el("p", error.message)); return; }
+  catch (error) { pane.replaceChildren(el("p", error.message)); reveal(true); return; }
   if (state.viewing !== id) return;
   state.open = row.IncidentGrade === "";
 
   const nav = el("div");
   nav.id = "nav";
   const at = state.shown.findIndex(shown => shown.IncidentId === state.picked);
-  const up = el("button", "▲"), down = el("button", "▼");
-  up.addEventListener("click", () => step(-1));
-  down.addEventListener("click", () => step(1));
-  nav.append(up, down, el("span", `${at + 1} / ${state.shown.length}`, "mono"));
+  nav.append(el("span", `${at + 1} of ${state.shown.length}`, "at"));
   if (id !== state.picked && state.picked !== null) {
-    const back = el("button", `◀ ${state.picked}`);
-    back.addEventListener("click", () => show(state.picked));
-    nav.append(back);
+    nav.append(icon(`← ${state.picked}`, "Back", () => show(state.picked)));
   }
+  nav.append(icon("↑", "Previous", () => step(-1)), icon("↓", "Next", () => step(1)),
+             icon("✕", "Close", close));
 
-  const comment = el("input");
-  comment.id = "comment";
-  comment.type = "text";
-  comment.setAttribute("aria-label", "comment");
-  comment.placeholder = "comment";
-  const buttons = el("div");
-  buttons.id = "classification";
-  for (const [key, classification] of Object.entries(state.keys)) {
-    const button = el("button", state.open ? `${classification} ${key}` : classification);
-    button.addEventListener("click", () => classify(classification));
-    buttons.append(button);
-  }
+  const [buttons, comment] = actions(state.open);
   if (state.open && row.members.length) {
     const whole = el("input"), label = el("label");
     whole.id = "whole";
     whole.type = "checkbox";
-    label.append(whole, ` group ${row.members.length + 1}`);
+    label.append(whole, ` Group of ${row.members.length + 1}`);
     buttons.append(label);
   }
-  const top = el("div");
-  top.id = "top";
-  top.append(nav, el("h2", row.AlertTitle || row.IncidentId), buttons, comment);
-
-  const [rule, similar] = classifiedBefore(
-    [row.rule_true_positives, row.rule_benign_positives, row.rule_classified],
-    [row.similar_true_positive, row.similar_benign_positive, row.similar]);
-  const parts = [top, fields([
-    ["incident", row.IncidentId], ["time", row.Timestamp], ["rule", row.DetectorId],
-    ["category", row.Category], ["severity", row.Severity],
-    ["techniques", row.MitreTechniques.join(", ")],
-    ["classification", row.IncidentGrade || "open"], ["placement", row.placement],
-  ]), el("h3", "score"), fields([
-    ["score", row.score.toFixed(2)], ["rule", rule], ["similar", similar],
-    ["same rule", row.similar ? `${row.similar_same_rule} of ${row.similar}` : ""],
-  ])];
+  const status = [row.Category, row.Severity, row.IncidentGrade ? words(row.IncidentGrade) : "Open"];
+  const assessment = el("h3", "Score assessment ");
+  assessment.append(el("span", row.score.toFixed(2), "pill"));
+  const similar = `Earlier incidents sharing an entity` +
+    (row.similar ? `, ${row.similar_same_rule} of rule ${row.DetectorId}` : "");
+  const details = el("dl");
+  for (const [name, value] of [
+    ["Incident ID", row.IncidentId], ["Classification", row.IncidentGrade ? words(row.IncidentGrade) : "Not set"],
+    ["Rule", row.DetectorId], ["Categories", row.Category], ["Severity", row.Severity],
+    ["Techniques", row.MitreTechniques.join(", ")], ["First activity", row.Timestamp],
+    ["Placement", row.placement && words(row.placement)],
+  ]) {
+    if (!value) continue;
+    const pair = el("div");
+    pair.append(el("dt", name), el("dd", value));
+    details.append(pair);
+  }
+  const parts = [nav, el("h2", row.AlertTitle || row.IncidentId),
+                 el("div", status.filter(Boolean).join(" · "), "soft"), buttons, comment, assessment,
+                 factor(row.rule_true_positives, row.rule_classified,
+                        `Earlier incidents of rule ${row.DetectorId}`, "Unclassified rule"),
+                 factor(row.similar_true_positive, row.similar, similar, "No similar incident"),
+                 el("h3", "Incident details"), details];
 
   if (row.entities.length) {
-    const short = state.record.classifications.map(name => name.replace(/[a-z]/g, ""));
+    const names = state.record.classifications;
     const table = el("table"), head = el("tr"), body = el("tbody");
-    for (const name of ["entity", "value", "classified_before", ...short]) head.append(el("th", name));
+    for (const name of ["Entity", "Value", "Earlier", ...names.map(short)]) head.append(el("th", name));
     body.id = "similar";
     for (const entity of row.entities) {
       const line = el("tr");
-      line.append(el("td", entity.field), el("td", entity.value),
+      line.append(el("td", entity.field), el("td", entity.value, "mono"),
                   el("td", String(entity.classified_before)),
-                  ...state.record.classifications.map((name, at) =>
-                    el("td", String(entity[name]), at === 0 && entity[name] ? "tp" : "")));
+                  ...names.map((name, position) =>
+                    el("td", String(entity[name]), position === 0 && entity[name] ? "tp" : "")));
       body.append(line);
       if (!entity.classified_before) { line.className = "none"; continue; }
       const key = `${entity.field} ${entity.value}`;
@@ -380,9 +523,10 @@ async function show(id) {
         const inner = el("tr", undefined, "other");
         inner.hidden = true;
         inner.title = other.AlertTitle;
-        inner.append(el("td", other.IncidentId), el("td", other.Timestamp),
-                     el("td", `rule ${other.DetectorId}`), classificationCell(other.IncidentGrade));
-        inner.lastChild.colSpan = state.record.classifications.length;
+        inner.append(el("td", other.IncidentId, "mono"), el("td", clock(other.Timestamp)),
+                     el("td", `Rule ${other.DetectorId}`), classificationCell(words(other.IncidentGrade)));
+        inner.lastChild.colSpan = names.length;
+        if (other.IncidentGrade === names[0]) inner.lastChild.className = "tp";
         inner.addEventListener("click", () => show(other.IncidentId));
         return inner;
       });
@@ -390,7 +534,7 @@ async function show(id) {
       body.append(...others);
     }
     table.append(head, body);
-    parts.push(el("h3", "entities"), table);
+    parts.push(el("h3", "Entities"), table);
   }
 
   if (row.members.length) {
@@ -398,54 +542,65 @@ async function show(id) {
     body.id = "members";
     for (const member of row.members) {
       const line = el("tr");
-      line.append(el("td", member));
+      line.append(el("td", member, "mono"));
       line.addEventListener("click", () => show(member));
       body.append(line);
     }
     table.append(body);
-    parts.push(el("h3", `group ${row.members.length + 1}`), table);
+    parts.push(el("h3", `Group of ${row.members.length + 1}`), table);
   }
 
   if (row.classification_history.length) {
     const table = el("table"), head = el("tr"), body = el("tbody");
-    for (const name of ["classified", "classification", "comment"]) head.append(el("th", name));
+    for (const name of ["Classified", "Classification", "Comment"]) head.append(el("th", name));
     for (const past of row.classification_history) {
       const line = el("tr");
-      line.append(el("td", past.time), classificationCell(past.classification), el("td", past.comment));
+      line.append(el("td", clock(past.time)), el("td", words(past.classification)), el("td", past.comment));
+      if (past.classification === state.record.classifications[0]) line.children[1].className = "tp";
       body.append(line);
     }
     table.append(head, body);
-    parts.push(el("h3", "history"), table);
+    parts.push(el("h3", "Classification history"), table);
   }
 
   pane.replaceChildren(...parts);
   pane.scrollTop = 0;
+  reveal(true);
 }
 
 async function classify(classification) {
+  const several = state.bulk && state.checked.size > 0;
   const id = state.viewing;
-  if (id === null) return;
+  if (!several && id === null) return;
   const at = state.shown.findIndex(row => row.IncidentId === state.picked);
-  const next = id === state.picked ? state.shown[at + 1] || state.shown[at - 1] : state.shown[at];
-  const notice = document.getElementById("notice");
+  const next = several ? null
+    : id === state.picked ? state.shown[at + 1] || state.shown[at - 1] : state.shown[at];
   try {
     const whole = document.getElementById("whole");
-    await call("/api/classify", { incident: id, classification,
-                                  group: whole !== null && whole.checked,
+    await call("/api/classify", { incidents: several ? [...state.checked] : [id], classification,
+                                  group: !several && whole !== null && whole.checked,
                                   comment: document.getElementById("comment").value });
-  } catch (error) { notice.replaceChildren(error.message); return; }
-  const open = el("button", `${id} ${classification}`);
-  open.addEventListener("click", () => show(id));
-  notice.replaceChildren(open);
+  } catch (error) { say(error.message); return; }
+  if (several) {
+    say(`${state.checked.size} incidents: ${words(classification)}`);
+    state.checked.clear();
+    state.bulk = false;
+  } else {
+    const reopen = el("button", `${id}: ${words(classification)}`, "link");
+    reopen.addEventListener("click", () => { state.closed = false; show(id); });
+    say(reopen);
+  }
   state.viewing = null;
   try { await load(next ? next.IncidentId : null); }
-  catch (error) { notice.append(" ", error.message); }
+  catch (error) { say(error.message); }
 }
 
 function step(by) {
   if (!state.shown.length) return;
   const at = state.shown.findIndex(row => row.IncidentId === state.picked);
   const to = Math.min(state.shown.length - 1, Math.max(0, at + by));
+  state.closed = false;
+  state.bulk = false;
   select(state.shown[to].IncidentId);
 }
 
@@ -458,14 +613,23 @@ document.addEventListener("keydown", event => {
     return;
   }
   if (event.ctrlKey || event.metaKey || event.altKey) return;
+  const ready = state.bulk ? state.checked.size > 0
+    : state.open && !state.closed && state.viewing === state.picked;
   if (event.key === "j" || event.key === "ArrowDown") { step(1); event.preventDefault(); }
   else if (event.key === "k" || event.key === "ArrowUp") { step(-1); event.preventDefault(); }
   else if (event.key === "/") { document.getElementById("search").focus(); event.preventDefault(); }
-  else if (state.open && state.viewing === state.picked && state.keys[event.key]) {
-    classify(state.keys[event.key]);
-  }
+  else if (event.key === "Escape") close();
+  else if (ready && state.keys[event.key]) classify(state.keys[event.key]);
 });
 document.getElementById("search").addEventListener("input", () => draw(state.picked));
+document.getElementById("pick").addEventListener("click", () => document.getElementById("file").click());
+document.getElementById("refresh").addEventListener("click", () => load(state.picked).catch(error => say(error.message)));
+document.getElementById("bulk").addEventListener("click", () => {
+  state.bulk = true;
+  state.closed = false;
+  showChecked();
+});
+document.getElementById("mapping").addEventListener("change", event => remembered("mapping", event.target.value));
 document.getElementById("file").addEventListener("change", event => {
   upload(event.target.files[0]);
   event.target.value = "";
@@ -475,8 +639,7 @@ document.addEventListener("drop", event => {
   event.preventDefault();
   upload(event.dataTransfer.files[0]);
 });
-document.getElementById("all").addEventListener("change", () => draw(state.picked));
-load(null).catch(error => { document.getElementById("notice").textContent = error.message; });
+load(null).catch(error => say(error.message));
 </script>
 </body>
 </html>
