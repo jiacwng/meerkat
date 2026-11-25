@@ -14,6 +14,7 @@ from core.incidents import COLUMNS, collapse
 CLASSIFICATIONS_FILE = "classifications.csv"
 SETTINGS_FILE = "settings.json"
 SAMPLE_FILE = "sample.json"
+CURSOR_FILE = "pull.json"
 CLASSIFICATION_COLUMNS = ("time", "IncidentId", "classification", "comment", "score",
                           "placement")
 
@@ -126,6 +127,21 @@ def read_settings(runs_dir: Path) -> dict:
 def write_settings(runs_dir: Path, settings: dict) -> None:
     runs_dir.mkdir(parents=True, exist_ok=True)
     (runs_dir / SETTINGS_FILE).write_text(json.dumps(settings, indent=2) + "\n")
+
+
+def read_cursor(runs_dir: Path) -> str | None:
+    cursor_file = runs_dir / CURSOR_FILE
+    if not cursor_file.exists():
+        return None
+    try:
+        return json.loads(cursor_file.read_text())["updated"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise StoreError(f"{cursor_file}: unreadable ({error})") from None
+
+
+def write_cursor(runs_dir: Path, updated: str) -> None:
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    (runs_dir / CURSOR_FILE).write_text(json.dumps({"updated": updated}) + "\n")
 
 
 def save_sample(runs_dir: Path, run_id: str, sample: dict) -> None:

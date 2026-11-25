@@ -1,4 +1,4 @@
-# The meerkat command line: queue, classify, details, runs, config, budget and serve.
+# The meerkat command line: queue, pull, classify, details, runs, config, budget and serve.
 
 import argparse
 import json
@@ -43,6 +43,7 @@ def main(argv: list[str] | None = None) -> None:
     from core.incidents import IncidentError
     from core.mapping import MappingError
     from core.store import StoreError
+    from meerkat.defender import PullError
 
     try:
         args.handler(args)
@@ -50,7 +51,7 @@ def main(argv: list[str] | None = None) -> None:
     except BrokenPipeError:
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         raise SystemExit(EXIT_ERROR) from None
-    except (IncidentError, MappingError, StoreError, OSError) as error:
+    except (IncidentError, MappingError, StoreError, PullError, OSError) as error:
         print(f"meerkat: error: {_printable(str(error))}", file=sys.stderr)
         raise SystemExit(EXIT_ERROR) from None
 
@@ -75,6 +76,13 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_json(queue)
     _add_runs_dir(queue)
     queue.set_defaults(handler=_queue)
+
+    pull = sub.add_parser("pull", help="read incidents and their classification from the "
+                                       "SIEM and save them as a new run")
+    pull.add_argument("source", choices=("defender",), metavar="SOURCE",
+                      help="defender (Microsoft Defender XDR through Microsoft Graph)")
+    _add_runs_dir(pull)
+    pull.set_defaults(handler=_pull)
 
     classify = sub.add_parser("classify", help="record the classification of an incident, "
                                                "or a file of classifications")
@@ -189,6 +197,24 @@ def _share(text: str) -> float:
 
 
 SETTINGS = {"budget": _budget, "sample_share": _share}
+
+
+def _pull(args: argparse.Namespace) -> None:
+    from core import store
+    from meerkat import defender, records
+
+    found = defender.fetch(store.read_cursor(args.runs_dir))
+    incoming = defender.incidents(found)
+    if incoming.empty:
+        print(_summary("PULLED", {"incidents": 0}))
+    else:
+        _, run = records.keep(args.runs_dir, incoming, args.source, args.source)
+        classified = int((incoming["IncidentGrade"] != "").sum())
+        print(_summary("PULLED", {"incidents": len(incoming),
+                                  "open": len(incoming) - classified,
+                                  "classified": classified, "run": run}))
+    if found:
+        store.write_cursor(args.runs_dir, defender.latest(found))
 
 
 def _queue(args: argparse.Namespace) -> None:
@@ -387,6 +413,7 @@ def _details(args: argparse.Namespace) -> None:
             ("title", record["AlertTitle"]),
             ("category", record["Category"]),
             ("severity", record["Severity"]),
+            ("link", record["IncidentUrl"]),
             ("techniques", ", ".join(record["MitreTechniques"])),
             ("classification", record["IncidentGrade"] or "open"),
             ("placement", record["placement"]),

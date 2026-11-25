@@ -75,6 +75,7 @@ td.check, th.check { width: 28px; padding-right: 0; }
 #nav { display: flex; align-items: center; gap: 2px; }
 #nav .at { margin-right: auto; color: var(--soft); font-size: 12px; }
 #detail h2 { font-size: 16px; font-weight: 600; margin: 4px 0 2px; overflow-wrap: anywhere; }
+#detail h2 a { font-size: 13px; font-weight: 400; color: var(--link); margin-left: 8px; }
 #actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; margin: 10px 0 6px;
            margin-left: -6px; }
 #comment { width: 100%; margin-bottom: 12px; }
@@ -500,7 +501,15 @@ async function show(id) {
     pair.append(el("dt", name), el("dd", value));
     details.append(pair);
   }
-  const parts = [nav, el("h2", `Incident ${row.IncidentId}`),
+  const heading = el("h2", `Incident ${row.IncidentId}`);
+  if (row.IncidentUrl.startsWith("https://")) {
+    const link = el("a", `Open in ${new URL(row.IncidentUrl).host}`);
+    link.href = row.IncidentUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    heading.append(" ", link);
+  }
+  const parts = [nav, heading,
                  el("div", [row.AlertTitle, ...status].filter(Boolean).join(" · "), "soft"),
                  buttons, comment, assessment,
                  factor(row.rule_true_positives, row.rule_classified,

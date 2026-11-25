@@ -24,9 +24,13 @@ def scored(runs_dir: Path, incoming: pd.DataFrame | None = None) -> pd.DataFrame
 
 def load(runs_dir: Path, path: Path, file: str, mapping_name: str) -> tuple[pd.DataFrame, str]:
     mapping = load_mapping(mapping_name)
-    incoming = read_incidents(path, mapping)
+    return keep(runs_dir, read_incidents(path, mapping), file, mapping.name)
+
+
+def keep(runs_dir: Path, incoming: pd.DataFrame, file: str,
+         mapping_name: str) -> tuple[pd.DataFrame, str]:
     scores = scored(runs_dir, incoming)
-    run = store.save_run(runs_dir, incoming, file, mapping.name)["run"]
+    run = store.save_run(runs_dir, incoming, file, mapping_name)["run"]
     draw_sample(runs_dir, run, settings(runs_dir), scores)
     return scores, run
 
