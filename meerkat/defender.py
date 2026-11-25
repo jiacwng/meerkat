@@ -1,19 +1,11 @@
-# Reads incidents and their classification from Microsoft Defender XDR through Microsoft Graph, read only.
+# Reads a file of Microsoft Defender XDR incidents as Microsoft Graph returns them, with their alerts.
 
 import json
-import os
-from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
 
 import pandas as pd
 
-from core.incidents import CLASSIFICATIONS, COLUMNS, SEPARATOR, collapse
+from core.incidents import CLASSIFICATIONS, COLUMNS, SEPARATOR, IncidentError, collapse
 
-LOGIN = "https://login.microsoftonline.com"
-GRAPH = "https://graph.microsoft.com/v1.0"
-SCOPE = "https://graph.microsoft.com/.default"
-VARIABLES = ("MEERKAT_TENANT_ID", "MEERKAT_CLIENT_ID", "MEERKAT_CLIENT_SECRET")
-TIMEOUT = 60
 CLASSIFICATION = {
     "truePositive": CLASSIFICATIONS[0],
     "informationalExpectedActivity": CLASSIFICATIONS[1],
@@ -33,46 +25,25 @@ EVIDENCE = {
 }
 
 
-class PullError(ValueError):
-    pass
-
-
-def fetch(since: str | None) -> list[dict]:
-    missing = [name for name in VARIABLES if not os.environ.get(name)]
-    if missing:
-        raise PullError(f"set the environment variable {', '.join(missing)}")
-    tenant, client, secret = (os.environ[name] for name in VARIABLES)
-    form = urlencode({"client_id": client, "scope": SCOPE, "client_secret": secret,
-                      "grant_type": "client_credentials"}).encode()
-    address = f"{LOGIN}/{quote(tenant, safe='')}/oauth2/v2.0/token"
-    token = _read(Request(address, data=form)).get("access_token")
-    if not isinstance(token, str):
-        raise PullError(f"{address}: the answer holds no access_token")
-
-    query = {"$expand": "alerts"}
-    if since is not None:
-        query["$filter"] = f"lastUpdateDateTime ge {since}"
-    link = f"{GRAPH}/security/incidents?{urlencode(query, quote_via=quote)}"
-    found = []
-    while link:
-        # the token goes to Graph only, wherever a next page link points
-        if not link.startswith(GRAPH):
-            raise PullError(f"{link}: a next page outside {GRAPH}")
-        page = _read(Request(link, headers={"Authorization": f"Bearer {token}"}))
-        if not isinstance(page.get("value"), list):
-            raise PullError(f"{link}: the answer holds no list of incidents")
-        found += page["value"]
-        link = page.get("@odata.nextLink")
-    return found
-
-
-def incidents(found: list[dict]) -> tuple[pd.DataFrame, str | None]:
+def read_incidents(path) -> pd.DataFrame:
     try:
-        updated = max((incident["lastUpdateDateTime"] for incident in found), default=None)
-        return _table(found), updated
+        with open(path, "rb") as handle:
+            answer = json.loads(handle.read())
+    except FileNotFoundError:
+        raise IncidentError(f"{path}: no such file") from None
+    except (OSError, ValueError, RecursionError) as error:
+        raise IncidentError(f"{path}: not a readable JSON file ({error})") from None
+    if not isinstance(answer, dict) or not isinstance(answer.get("value"), list):
+        raise IncidentError(f"{path}: expected a JSON object with the list of incidents "
+                            "under value")
+    try:
+        incidents = _table(answer["value"])
     except (KeyError, TypeError, AttributeError, ValueError) as error:
-        raise PullError(f"{GRAPH}: an incident is not as Microsoft Graph documents it "
-                        f"({error!r})") from None
+        raise IncidentError(f"{path}: an incident is not as Microsoft Graph documents it "
+                            f"({error!r})") from None
+    if incidents.empty:
+        raise IncidentError(f"{path}: no incident with an alert")
+    return incidents
 
 
 def _table(found: list[dict]) -> pd.DataFrame:
@@ -110,15 +81,3 @@ def _value(evidence: dict, path: tuple[str, ...]) -> str:
     for key in path:
         value = (value or {}).get(key)
     return str(value or "").strip().replace(SEPARATOR, "%7C")
-
-
-def _read(request: Request) -> dict:
-    with urlopen(request, timeout=TIMEOUT) as answer:
-        body = answer.read()
-    try:
-        found = json.loads(body)
-    except ValueError:
-        raise PullError(f"{request.full_url}: the answer is not JSON") from None
-    if not isinstance(found, dict):
-        raise PullError(f"{request.full_url}: the answer is not a JSON object")
-    return found

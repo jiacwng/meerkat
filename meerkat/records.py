@@ -7,6 +7,7 @@ import pandas as pd
 from core import budget, features, groups, rank, store
 from core.incidents import CLASSIFICATIONS, LINKS, SEPARATOR, read_incidents
 from core.mapping import load_mapping
+from meerkat import defender
 
 SIMILAR_SHOWN = ("IncidentId", "IncidentGrade", "Timestamp", "DetectorId", "AlertTitle")
 HOST = ("DeviceName", "DeviceId")
@@ -23,6 +24,8 @@ def scored(runs_dir: Path, incoming: pd.DataFrame | None = None) -> pd.DataFrame
 
 
 def load(runs_dir: Path, path: Path, file: str, mapping_name: str) -> tuple[pd.DataFrame, str]:
+    if file.lower().endswith(".json"):
+        return keep(runs_dir, defender.read_incidents(path), file, "defender")
     mapping = load_mapping(mapping_name)
     return keep(runs_dir, read_incidents(path, mapping), file, mapping.name)
 

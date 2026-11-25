@@ -49,7 +49,7 @@ def make_server(runs_dir: Path, port: int, max_file_mb: int) -> ThreadingHTTPSer
 
 def _version(runs_dir: Path) -> tuple:
     files = (path for path in runs_dir.rglob("*") if path.is_file()
-             and path.name not in (store.SETTINGS_FILE, store.SAMPLE_FILE, store.CURSOR_FILE))
+             and path.name not in (store.SETTINGS_FILE, store.SAMPLE_FILE))
     return tuple(sorted((str(path), path.stat().st_mtime_ns, path.stat().st_size)
                         for path in files))
 

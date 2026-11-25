@@ -1,4 +1,4 @@
-# The meerkat command line: queue, pull, query, classify, details, runs, config, budget and serve.
+# The meerkat command line: queue, query, classify, details, runs, config, budget and serve.
 
 import argparse
 import json
@@ -44,7 +44,6 @@ def main(argv: list[str] | None = None) -> None:
     from core.incidents import IncidentError
     from core.mapping import MappingError
     from core.store import StoreError
-    from meerkat.defender import PullError
 
     try:
         args.handler(args)
@@ -52,7 +51,7 @@ def main(argv: list[str] | None = None) -> None:
     except BrokenPipeError:
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         raise SystemExit(EXIT_ERROR) from None
-    except (IncidentError, MappingError, StoreError, PullError, OSError) as error:
+    except (IncidentError, MappingError, StoreError, OSError) as error:
         print(f"meerkat: error: {_printable(str(error))}", file=sys.stderr)
         raise SystemExit(EXIT_ERROR) from None
 
@@ -77,13 +76,6 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_json(queue)
     _add_runs_dir(queue)
     queue.set_defaults(handler=_queue)
-
-    pull = sub.add_parser("pull", help="read incidents and their classification from the "
-                                       "SIEM and save them as a new run")
-    pull.add_argument("source", choices=("defender",), metavar="SOURCE",
-                      help="defender (Microsoft Defender XDR through Microsoft Graph)")
-    _add_runs_dir(pull)
-    pull.set_defaults(handler=_pull)
 
     query = sub.add_parser("query", help="print the saved query that exports a SIEM's "
                                          "incidents in the columns meerkat reads")
@@ -209,23 +201,6 @@ SETTINGS = {"budget": _budget, "sample_share": _share}
 def _query(args: argparse.Namespace) -> None:
     found = next(path for path in QUERIES.iterdir() if path.stem == args.source)
     sys.stdout.write(found.read_text(encoding="utf-8"))
-
-
-def _pull(args: argparse.Namespace) -> None:
-    from core import store
-    from meerkat import defender, records
-
-    incoming, updated = defender.incidents(defender.fetch(store.read_cursor(args.runs_dir)))
-    if incoming.empty:
-        print(_summary("PULLED", {"incidents": 0}))
-    else:
-        _, run = records.keep(args.runs_dir, incoming, args.source, args.source)
-        classified = int((incoming["IncidentGrade"] != "").sum())
-        print(_summary("PULLED", {"incidents": len(incoming),
-                                  "open": len(incoming) - classified,
-                                  "classified": classified, "run": run}))
-    if updated is not None:
-        store.write_cursor(args.runs_dir, updated)
 
 
 def _queue(args: argparse.Namespace) -> None:
