@@ -20,10 +20,11 @@ def main() -> None:
     args = parser.parse_args()
 
     blank = markers(read_guide(args.guide))
-    chunks = pd.read_csv(args.guide, usecols=["OrgId", *COLUMNS], dtype=str,
+    wanted = ("OrgId", *COLUMNS)
+    chunks = pd.read_csv(args.guide, usecols=lambda name: name in wanted, dtype=str,
                          keep_default_na=False, chunksize=1_000_000)
     rows = pd.concat(chunk[chunk["OrgId"] == args.org] for chunk in chunks)
-    rows = rows[["OrgId", *COLUMNS]]
+    rows = rows[[name for name in wanted if name in rows.columns]]
 
     classified = (rows["IncidentGrade"] != "").groupby(rows["IncidentId"]).transform("any")
     rows = rows[classified].copy()

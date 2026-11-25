@@ -3,7 +3,9 @@
 Meerkat ranks a SOC's open incidents so that analysts read the likely true
 positives first. It scores each incident from the classifications given to
 earlier ones, folds duplicates into one row, and lists as many rows as the team
-has time to read. It runs in a terminal or as a local web page.
+has time to read. It runs in a terminal or as a local web page. It is a second
+opinion beside the SIEM's own queue, built on one signal: how the organisation
+classified earlier incidents.
 
 ![The queue of the example file in a terminal](docs/queue.png)
 
@@ -21,7 +23,7 @@ python -m pip install -e .
 ## Quick start
 
 The repository ships an example export: one organisation of Microsoft's GUIDE
-dataset, with 42 open incidents. Set how many rows you plan to read, then load
+dataset, with 47 open incidents. Set how many rows you plan to read, then load
 the file:
 
 ```bash
@@ -32,8 +34,8 @@ meerkat queue examples/incidents.csv
 This prints the queue in the picture above. It ends with a summary:
 
 ```text
-OPEN           42 incidents in 42 rows, 10 listed
-BELOW BUDGET   32 rows, 15 similar TP, 2 unclassified rule
+OPEN           47 incidents in 46 rows, 10 listed
+BELOW BUDGET   36 rows, 1 similar TP, 7 unclassified rule
 ```
 
 GUIDE replaces names with numbers, so hosts, users and titles are numbers here.
@@ -51,14 +53,14 @@ GUIDE replaces names with numbers, so hosts, users and titles are numbers here.
 Look at one incident:
 
 ```bash
-meerkat details 44394
+meerkat details 138267
 ```
 
 Classify it `tp`, `bp` or `fp`. `--group` classifies every open incident of its group:
 
 ```bash
-meerkat classify 44394 tp --comment "confirmed with the user"
-meerkat classify 44394 tp --group
+meerkat classify 138267 tp --comment "confirmed with the user"
+meerkat classify 138267 tp --group
 ```
 
 ![Classifying an incident and reading the next queue](docs/demo.gif)
@@ -72,7 +74,7 @@ meerkat queue tomorrow.csv
 
 To classify from a file, give a CSV with the columns `IncidentId` and
 `IncidentGrade`. `examples/classifications.csv` holds the real classifications
-of the 42 example incidents:
+of the 47 example incidents:
 
 ```bash
 meerkat classify --file examples/classifications.csv
@@ -135,20 +137,22 @@ The sample exists to check the budget. Once sample rows are classified,
 
 ```text
 BUDGET                10 rows
-BELOW BUDGET          31 rows, 31 incidents
-  similar TP          14
-  unclassified rule   2
-  oldest below        06-15 00:16
+BELOW BUDGET          35 rows, 35 incidents
+  similar TP          1
+  unclassified rule   4
+  oldest below        06-12 21:10
 SAMPLE                1 drawn, 1 classified, 0 TP
-TP BELOW BUDGET       0 to 27 of 31, 95% interval, from 1 classified
+TP BELOW BUDGET       0 to 31 of 35, 95% interval, from 1 classified
 ```
 
 ## Your own data
 
 Meerkat reads a CSV with one row per alert, for one organisation, with
 ISO 8601 times. It needs three columns: an incident id, a time and a rule id.
-A classification column gives it history. The default column names are those
-of Microsoft Defender XDR.
+A classification column gives it history. Columns for devices, accounts,
+addresses, files and URLs feed the similar incident inputs; without them the
+score uses rule and organisation history only. The default column names are
+those of the GUIDE dataset.
 
 `--mapping` names the columns and classification words of another source. The
 presets are `defender`, `sentinel` and `splunk`, or give a TOML file:
@@ -178,8 +182,9 @@ The score is a logistic regression on eight inputs, all taken from incidents
 earlier in time: how often the rule and the organisation were classified true
 positive, and how often the incidents sharing an entity were. The weights ship
 with the package and were fitted on Microsoft's GUIDE dataset. On the later
-40% of GUIDE, the mean average precision over 718 organisations is 0.72.
-`bench/train.py` reproduces the fit.
+40% of GUIDE, the mean average precision over 718 organisations is 0.72,
+against 0.65 for rule and organisation history alone. `bench/train.py`
+reproduces both figures.
 
 ## Limits
 
@@ -188,7 +193,8 @@ with the package and were fitted on Microsoft's GUIDE dataset. On the later
 - It was measured on GUIDE, one vendor's data from 2024, and not in a live SOC.
 - The sample is small at a small budget, so the interval is wide.
 - The `sentinel` and `splunk` presets were written from vendor documentation
-  and have not read a real export.
+  and have not read a real export. Sentinel's `SecurityIncident` table has no
+  entity columns, so that preset gives rule and organisation history only.
 
 ## License
 
