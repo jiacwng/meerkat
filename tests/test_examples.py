@@ -64,7 +64,7 @@ class ExampleTests(unittest.TestCase):
     def test_readme_quotes_the_footer_the_quick_start_prints(self):
         runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
         footer = self._quick_start(runs_dir).split("\n\n")[-1].splitlines()
-        self.assertEqual(footer[0], "OPEN           42 incidents in 42 rows, 10 listed")
+        self.assertEqual(footer[0], "OPEN           47 incidents in 46 rows, 10 listed")
         readme = (EXAMPLES.parent / "README.md").read_text(encoding="utf-8")
         for line in footer:
             self.assertIn(line, readme)
@@ -89,9 +89,9 @@ class ExampleTests(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             main(["classify", "--file", str(EXAMPLES / "classifications.csv"), "--runs-dir", str(runs_dir)])
         self.assertEqual(out.getvalue().splitlines()[-1],
-                         "CLASSIFIED   incidents 42   tp 20   tp_to_read 9   tp_sample 0   tp_below 11")
+                         "CLASSIFIED   incidents 47   tp 35   tp_to_read 9   tp_sample 0   tp_below 26")
         sample = store.read_samples(runs_dir)[0]
-        self.assertEqual((len(sample["pool"]), len(sample["drawn"])), (33, 1))
+        self.assertEqual((len(sample["pool"]), len(sample["drawn"])), (38, 1))
 
 
 if __name__ == "__main__":

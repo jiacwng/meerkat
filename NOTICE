@@ -9,7 +9,7 @@ GUIDE
 -----
 
 `examples/incidents.csv` and `examples/classifications.csv` are organisation
-225 of `GUIDE_Train.csv` from GUIDE, the Microsoft Security Incident
+479 of `GUIDE_Train.csv` from GUIDE, the Microsoft Security Incident
 Prediction dataset (Microsoft, 2024), cut by `bench/slice.py`. The
 classifications of the last three days are moved from the first file to the
 second, and GUIDE's placeholder ids for missing values are left blank.
