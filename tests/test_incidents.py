@@ -155,39 +155,35 @@ class ReadIncidentsTests(unittest.TestCase):
         self.assertEqual(list(read_incidents(renamed, load_mapping(str(mapping)))["Severity"]),
                          ["High"])
 
-    def test_sentinel_export_collapses_rows_per_incident(self):
-        header = ("IncidentNumber", "CreatedTime", "RelatedAnalyticRuleIds", "Title",
-                  "Classification")
-        rows = (("7", "2024-06-01T09:00:00Z", "rule-b", "Later", "Undetermined"),
-                ("7", "2024-06-01T08:00:00Z", "rule-a", "Earlier", "TruePositive"),
-                ("8", "2024-06-02T08:00:00Z", "rule-a", "Other", "Undetermined"))
-        incidents = read_incidents(write_csv(self.path, rows, header),
-                                   load_mapping("sentinel")).set_index("IncidentId")
-        self.assertEqual(list(incidents.index), ["7"])
-        self.assertEqual(incidents.loc["7", "DetectorId"], "rule-a")
-        self.assertEqual(incidents.loc["7", "AlertTitle"], "Earlier")
-        self.assertEqual(incidents.loc["7", "IncidentGrade"], "TruePositive")
+    def test_the_result_of_the_sentinel_query_reads_as_incidents(self):
+        # these rows are what Microsoft's query engine returned for core/data/queries/sentinel.kql
+        result = (
+            'IncidentId,Timestamp,DetectorId,IncidentGrade,AlertTitle,Category,Severity,IncidentUrl,MitreTechniques,DeviceName,DeviceId,AccountName,AccountUpn,AccountSid,IpAddress,Sha256,Url',
+            '1,2026-11-20T07:58:12Z,rule-a,TruePositive,Sign in from an unfamiliar place,"InitialAccess, Persistence",High,https://portal.azure.com/#incident/1,T1078;T1110,,,,,,10.0.0.1,,',
+            '1,2026-11-20T07:58:12Z,rule-a,TruePositive,Sign in from an unfamiliar place,"InitialAccess, Persistence",High,https://portal.azure.com/#incident/1,T1078;T1110,,,alice,alice@contoso.com,S-1-5-21-1,,,',
+            '1,2026-11-20T07:59:40Z,MDATP_Malware,TruePositive,Malware on a device,Execution,High,https://portal.azure.com/#incident/1,,,,,,,,,',
+            '2,2026-11-22T09:55:00Z,rule-b,,Suspicious download,CommandAndControl,Medium,https://portal.azure.com/#incident/2,T1105,,,,,,,,',
+            '2,2026-11-22T09:55:00Z,rule-b,,Suspicious download,CommandAndControl,Medium,https://portal.azure.com/#incident/2,T1105,,,,,,,,http://bad.example/x',
+            '2,2026-11-22T09:55:00Z,rule-b,,Suspicious download,CommandAndControl,Medium,https://portal.azure.com/#incident/2,T1105,,,,,,,abc123,',
+            '2,2026-11-22T09:55:00Z,rule-b,,Suspicious download,CommandAndControl,Medium,https://portal.azure.com/#incident/2,T1105,pc-7,/subscriptions/x/vm/pc-7,,,,,,',
+            '3,2026-11-23T10:50:00Z,rule-d,Undetermined,Port scan,Discovery,Low,https://portal.azure.com/#incident/3,T1046,,,,,,10.9.9.9,,',
+        )
+        self.path.write_text("\n".join(result) + "\n", encoding="utf-8")
+        incidents = read_incidents(self.path, load_mapping("sentinel")).set_index("IncidentId")
+        self.assertEqual(incidents["IncidentGrade"].to_dict(), {"1": "TruePositive", "2": ""})
+        self.assertEqual(incidents["DetectorId"].to_dict(), {"1": "rule-a", "2": "rule-b"})
+        first = incidents.loc["1"]
+        self.assertEqual((first["Timestamp"], first["Severity"], first["MitreTechniques"]),
+                         ("2026-11-20T07:58:12Z", "High", "T1078|T1110"))
+        self.assertEqual((first["AccountUpn"], first["IpAddress"], first["IncidentUrl"]),
+                         ("alice@contoso.com", "10.0.0.1", "https://portal.azure.com/#incident/1"))
+        second = incidents.loc["2"]
+        self.assertEqual((second["DeviceName"], second["Sha256"], second["Url"]),
+                         ("pc-7", "abc123", "http://bad.example/x"))
 
-    def test_sentinel_rows_per_change_rule_lists_and_undetermined(self):
-        header = ("IncidentNumber", "CreatedTime", "RelatedAnalyticRuleIds", "Title",
-                  "Classification")
-        created = "2024-06-01T08:00:00.000Z"
-        rows = (("1", created, '["rule-a"]', "Sign in", ""),
-                ("1", created, '["rule-a"]', "Sign in", "TruePositive"),
-                ("2", created, '["rule-b", "rule-a"]', "Two rules", ""),
-                ("3", created, '["rule-a"]', "Closed, no verdict", ""),
-                ("3", created, '["rule-a"]', "Closed, no verdict", "Undetermined"),
-                ("4", created, "[broken", "Not a list", "BenignPositive"))
-        incidents = read_incidents(write_csv(self.path, rows, header),
-                                   load_mapping("sentinel")).set_index("IncidentId")
-        self.assertEqual(incidents["DetectorId"].to_dict(),
-                         {"1": "rule-a", "2": "rule-b", "4": "[broken"})
-        self.assertEqual(incidents["IncidentGrade"].to_dict(),
-                         {"1": "TruePositive", "2": "", "4": "BenignPositive"})
-        write_csv(self.path, (("5", created, "[]", "No rule", ""),), header)
-        self.assertEqual(self._refusal(load_mapping("sentinel")),
-                         f"{self.path}: 1 rows have no RelatedAnalyticRuleIds")
-        write_csv(self.path, (("6", created, '["rule-a"]', "Only one", "Undetermined"),), header)
+    def test_every_incident_closed_without_a_classification_is_refused(self):
+        header = ("IncidentId", "Timestamp", "DetectorId", "IncidentGrade")
+        write_csv(self.path, (("6", "2024-06-01T08:00:00Z", "rule-a", "Undetermined"),), header)
         self.assertEqual(self._refusal(load_mapping("sentinel")),
                          f"{self.path}: every incident was closed without a classification")
 
