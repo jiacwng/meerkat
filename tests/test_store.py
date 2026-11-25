@@ -160,6 +160,18 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self._classification_of("200"), "")
         self.assertEqual(self._classification_of("201"), "TruePositive")
 
+    def test_the_newer_of_a_classification_and_a_file_wins_within_one_second(self):
+        times = [datetime(2026, 1, 1, 9, 0, 0, tick, tzinfo=UTC) for tick in (1, 2, 3, 4)]
+        only = self.incidents[self.incidents["IncidentId"].isin(["200", "201"])]
+        with mock.patch.object(store, "datetime") as clock:
+            clock.now.side_effect = times
+            store.save_run(self.runs_dir, self.incidents, "monday.csv", "defender")
+            store.append_classification(self.runs_dir, "200", "TruePositive", "", 0.5, "to read")
+            store.save_run(self.runs_dir, only, "tuesday.csv", "defender")
+            store.append_classification(self.runs_dir, "201", "TruePositive", "", 0.5, "to read")
+        self.assertEqual(self._classification_of("200"), "")
+        self.assertEqual(self._classification_of("201"), "TruePositive")
+
     def test_an_incident_in_one_run_comes_out_unchanged(self):
         history = self._merged(ROWS)
         expected = self.incidents.set_index("IncidentId")

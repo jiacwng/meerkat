@@ -16,6 +16,7 @@ SETTINGS_FILE = "settings.json"
 SAMPLE_FILE = "sample.json"
 CLASSIFICATION_COLUMNS = ("time", "IncidentId", "classification", "comment", "score",
                           "placement")
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
 class StoreError(ValueError):
@@ -42,7 +43,7 @@ def save_run(runs_dir: Path, incidents: pd.DataFrame, file: str,
             run_id = f"{stamp}-{attempt}"
     meta = {
         "run": run_id,
-        "created": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "created": now.strftime(TIME_FORMAT),
         "file": file,
         "source": source,
         "incidents_in_file": len(incidents),
@@ -216,4 +217,4 @@ def _apply_classifications(runs_dir: Path, incidents: pd.DataFrame,
 
 
 def _now() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime(TIME_FORMAT)
