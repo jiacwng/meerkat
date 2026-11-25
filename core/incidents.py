@@ -1,6 +1,7 @@
 # Reads an incident CSV through a column mapping into one row per incident.
 
 import csv
+import json
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -17,6 +18,7 @@ LINKS = (
 CLASSIFICATIONS = ("TruePositive", "BenignPositive", "FalsePositive")
 COLUMNS = (*REQUIRED, "IncidentGrade", *DESCRIPTIVE, "MitreTechniques", *LINKS)
 SEPARATOR = "|"
+CLOSED = "closed"
 
 
 class IncidentError(ValueError):
@@ -24,7 +26,11 @@ class IncidentError(ValueError):
 
 
 def read_incidents(path, mapping: "Mapping") -> pd.DataFrame:
-    return collapse(_read_rows(path, mapping))
+    incidents = collapse(_read_rows(path, mapping))
+    incidents = incidents[incidents["IncidentGrade"] != CLOSED].reset_index(drop=True)
+    if incidents.empty:
+        raise IncidentError(f"{path}: every incident was closed without a classification")
+    return incidents
 
 
 def read_classifications(path) -> list[tuple[str, str]]:
@@ -111,6 +117,8 @@ def _read_rows(path, mapping: "Mapping") -> pd.DataFrame:
     for name in LINKS:
         rows[name] = rows[name].str.replace(SEPARATOR, "%7C", regex=False)
     rows["MitreTechniques"] = rows["MitreTechniques"].str.replace(";", SEPARATOR, regex=False)
+    listed = rows["DetectorId"].str.startswith("[")
+    rows.loc[listed, "DetectorId"] = rows.loc[listed, "DetectorId"].map(_first_listed)
     for name in REQUIRED:
         blank = int((rows[name] == "").sum())
         if blank:
@@ -132,6 +140,17 @@ def _read_rows(path, mapping: "Mapping") -> pd.DataFrame:
     text = pd.Series(seconds.astype(str), index=rows.index) + "Z"
     rows["Timestamp"] = text
     return rows
+
+
+def _first_listed(text: str) -> str:
+    # a rule column exported as a JSON list gives the incident its first listed rule
+    try:
+        listed = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(listed, list):
+        return text
+    return str(listed[0]).strip() if listed else ""
 
 
 def _header_separator(path, mapping: "Mapping") -> str | None:

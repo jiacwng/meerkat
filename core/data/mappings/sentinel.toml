@@ -8,4 +8,4 @@ AlertTitle = "Title"
 IncidentGrade = "Classification"
 
 [classifications]
-open = ["Undetermined"]
+closed = ["Undetermined"]

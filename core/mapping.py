@@ -4,7 +4,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.incidents import CLASSIFICATIONS, COLUMNS
+from core.incidents import CLASSIFICATIONS, CLOSED, COLUMNS
 
 PRESET_DIR = Path(__file__).parent / "data" / "mappings"
 PRESETS = tuple(sorted(path.stem for path in PRESET_DIR.glob("*.toml")))
@@ -62,11 +62,11 @@ def _columns(path: Path, given: dict) -> dict[str, str]:
 
 def _classifications(path: Path, given: dict) -> dict[str, str]:
     for key in given:
-        if key not in (*CLASSIFICATIONS, OPEN):
+        if key not in (*CLASSIFICATIONS, OPEN, CLOSED):
             raise MappingError(f"{path}: [classifications] has unknown key {key!r}")
     owner: dict[str, str] = {}
-    for key in (*CLASSIFICATIONS, OPEN):
-        listed = given.get(key, [] if key == OPEN else [key])
+    for key in (*CLASSIFICATIONS, OPEN, CLOSED):
+        listed = given.get(key, [key] if key in CLASSIFICATIONS else [])
         if not isinstance(listed, list) or not all(
                 isinstance(word, str) and word for word in listed):
             raise MappingError(f"{path}: [classifications] {key} must be a list of non empty "

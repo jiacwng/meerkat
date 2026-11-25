@@ -163,11 +163,33 @@ class ReadIncidentsTests(unittest.TestCase):
                 ("8", "2024-06-02T08:00:00Z", "rule-a", "Other", "Undetermined"))
         incidents = read_incidents(write_csv(self.path, rows, header),
                                    load_mapping("sentinel")).set_index("IncidentId")
-        self.assertEqual(len(incidents), 2)
+        self.assertEqual(list(incidents.index), ["7"])
         self.assertEqual(incidents.loc["7", "DetectorId"], "rule-a")
         self.assertEqual(incidents.loc["7", "AlertTitle"], "Earlier")
         self.assertEqual(incidents.loc["7", "IncidentGrade"], "TruePositive")
-        self.assertEqual(incidents.loc["8", "IncidentGrade"], "")
+
+    def test_sentinel_rows_per_change_rule_lists_and_undetermined(self):
+        header = ("IncidentNumber", "CreatedTime", "RelatedAnalyticRuleIds", "Title",
+                  "Classification")
+        created = "2024-06-01T08:00:00.000Z"
+        rows = (("1", created, '["rule-a"]', "Sign in", ""),
+                ("1", created, '["rule-a"]', "Sign in", "TruePositive"),
+                ("2", created, '["rule-b", "rule-a"]', "Two rules", ""),
+                ("3", created, '["rule-a"]', "Closed, no verdict", ""),
+                ("3", created, '["rule-a"]', "Closed, no verdict", "Undetermined"),
+                ("4", created, "[broken", "Not a list", "BenignPositive"))
+        incidents = read_incidents(write_csv(self.path, rows, header),
+                                   load_mapping("sentinel")).set_index("IncidentId")
+        self.assertEqual(incidents["DetectorId"].to_dict(),
+                         {"1": "rule-a", "2": "rule-b", "4": "[broken"})
+        self.assertEqual(incidents["IncidentGrade"].to_dict(),
+                         {"1": "TruePositive", "2": "", "4": "BenignPositive"})
+        write_csv(self.path, (("5", created, "[]", "No rule", ""),), header)
+        self.assertEqual(self._refusal(load_mapping("sentinel")),
+                         f"{self.path}: 1 rows have no RelatedAnalyticRuleIds")
+        write_csv(self.path, (("6", created, '["rule-a"]', "Only one", "Undetermined"),), header)
+        self.assertEqual(self._refusal(load_mapping("sentinel")),
+                         f"{self.path}: every incident was closed without a classification")
 
     def test_a_site_file_can_rename_one_column_only(self):
         site = self.tmp / "site.toml"
