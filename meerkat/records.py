@@ -4,10 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from core import budget, features, groups, rank, store
-from core.incidents import CLASSIFICATIONS, LINKS, SEPARATOR, read_incidents
-from core.mapping import load_mapping
-from meerkat import defender
+from core import budget, exports, features, groups, rank, store
+from core.incidents import CLASSIFICATIONS, LINKS, SEPARATOR
 
 SIMILAR_SHOWN = ("IncidentId", "IncidentGrade", "Timestamp", "DetectorId", "AlertTitle")
 HOST = ("DeviceName", "DeviceId")
@@ -23,16 +21,14 @@ def scored(runs_dir: Path) -> pd.DataFrame:
     return rank.score(store.load_history(runs_dir))
 
 
-def load(runs_dir: Path, path: Path, file: str, mapping_name: str) -> tuple[pd.DataFrame, str]:
-    if file.lower().endswith(".json"):
-        return keep(runs_dir, defender.read_incidents(path), file, "defender")
-    mapping = load_mapping(mapping_name)
-    return keep(runs_dir, read_incidents(path, mapping), file, mapping.name)
+def load(runs_dir: Path, path: Path, file: str) -> tuple[pd.DataFrame, str]:
+    incidents, source = exports.read(path)
+    return keep(runs_dir, incidents, file, source)
 
 
 def keep(runs_dir: Path, incoming: pd.DataFrame, file: str,
-         mapping_name: str) -> tuple[pd.DataFrame, str]:
-    run = store.save_run(runs_dir, incoming, file, mapping_name)["run"]
+         source: str) -> tuple[pd.DataFrame, str]:
+    run = store.save_run(runs_dir, incoming, file, source)["run"]
     scores = scored(runs_dir)
     draw_sample(runs_dir, run, settings(runs_dir), scores)
     return scores, run

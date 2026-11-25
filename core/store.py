@@ -23,7 +23,7 @@ class StoreError(ValueError):
 
 
 def save_run(runs_dir: Path, incidents: pd.DataFrame, file: str,
-             mapping: str) -> dict:
+             source: str) -> dict:
     text = incidents.to_csv(index=False, lineterminator="\n")
     for meta in list_runs(runs_dir):
         saved = runs_dir / meta["run"] / "incidents.csv"
@@ -44,7 +44,7 @@ def save_run(runs_dir: Path, incidents: pd.DataFrame, file: str,
         "run": run_id,
         "created": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "file": file,
-        "mapping": mapping,
+        "source": source,
         "incidents_in_file": len(incidents),
     }
     (runs_dir / run_id / "incidents.csv").write_text(text, encoding="utf-8", newline="\n")

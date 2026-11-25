@@ -13,7 +13,6 @@ from pathlib import Path
 from unittest import mock
 
 from core import budget, store
-from core.incidents import COLUMNS
 from meerkat import __version__, cli
 from meerkat.cli import main
 from tests.fixtures import (
@@ -689,27 +688,6 @@ class CliTests(unittest.TestCase):
         self.assertEqual([meta["file"] for meta in store.list_runs(self.runs_dir)],
                          [self.csv.name])
         served.assert_called_once_with(self.runs_dir, 0, 200, False)
-        code, out, err = self._run("serve", "--mapping", "sentinel")
-        self.assertEqual((code, out), (2, ""))
-        self.assertIn("--mapping needs FILE", err)
-
-    def test_query_prints_the_saved_query_and_its_columns_are_the_ones_read(self):
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            main(["query", "sentinel"])
-        text = out.getvalue()
-        self.assertEqual(err.getvalue(), "")
-        self.assertIn("SecurityIncident", text)
-        project = text.split("| project\n")[-1]
-        named = [line.strip().split(" = ")[0].rstrip(",") for line in project.splitlines()]
-        self.assertLessEqual(set(named), set(COLUMNS))
-        self.assertLessEqual({"IncidentId", "Timestamp", "DetectorId", "IncidentGrade"}, set(named))
-        self.assertEqual(self._run("query", "elastic")[0], 2)
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            main(["query", "defender"])
-        self.assertIn("security/incidents?$expand=alerts", out.getvalue())
-        self.assertIn("SecurityIncident.Read.All", out.getvalue())
 
     def test_config_prints_the_defaults_on_an_empty_runs_folder(self):
         code, out, err = self._run("config")
@@ -769,28 +747,16 @@ class CliTests(unittest.TestCase):
                 self.assertIn("settings.json", err)
                 self.assertEqual(err.count("\n"), 1)
 
-    def test_queue_reads_a_file_through_a_preset_mapping(self):
+    def test_queue_picks_the_reader_from_the_header_and_saves_its_name(self):
         header = ("rule_id", "_time", "rule_name", "disposition_label")
         rows = (("n1", "2024-06-01T00:00:00Z", "r1", "True Positive - Suspicious Activity"),
                 ("n2", "2024-06-02T00:00:00Z", "r1", "Undetermined"))
         path = write_csv(self.tmp / "notables.csv", rows, header)
-        code, out, err = self._run("queue", str(path), "--mapping", "splunk")
+        code, out, err = self._run("queue", str(path))
         self.assertEqual((code, err), (0, ""))
         self.assertIn("\nOPEN           1 incidents in 1 rows, 1 listed\n", out)
         meta = json.loads(next(self.runs_dir.glob("*/meta.json")).read_text())
-        self.assertEqual(meta["mapping"], "splunk")
-
-    def test_mapping_without_a_file_is_a_usage_error(self):
-        code, out, err = self._run("queue", "--mapping", "splunk")
-        self.assertEqual((code, out), (2, ""))
-        self.assertIn("--mapping needs FILE", err)
-
-    def test_a_bad_mapping_is_one_line_and_not_a_traceback(self):
-        code, out, err = self._run("queue", str(self.csv), "--mapping", "nowhere.toml")
-        self.assertEqual((code, out), (1, ""))
-        self.assertIn("nowhere.toml: no such mapping", err)
-        self.assertEqual(err.count("\n"), 1)
-        self.assertFalse(self.runs_dir.exists())
+        self.assertEqual(meta["source"], "splunk")
 
     def _assert_one_line_error(self, argv, needle: str) -> None:
         code, out, err = self._run(*argv)

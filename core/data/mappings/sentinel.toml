@@ -1,4 +1,0 @@
-# The result of `meerkat query sentinel`, run in a Microsoft Sentinel workspace.
-
-[classifications]
-closed = ["Undetermined"]

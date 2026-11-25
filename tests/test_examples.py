@@ -9,9 +9,9 @@ from pathlib import Path
 import pandas as pd
 
 from core import features, store
-from core.incidents import CLASSIFICATIONS, LINKS, SEPARATOR, read_incidents
+from core.incidents import CLASSIFICATIONS, LINKS, SEPARATOR
 from meerkat.cli import main
-from tests.fixtures import DEFENDER
+from tests.fixtures import read_file
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
 
@@ -19,9 +19,9 @@ EXAMPLES = Path(__file__).parent.parent / "examples"
 class ExampleTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.incidents = read_incidents(EXAMPLES / "incidents.csv", DEFENDER)
+        cls.incidents = read_file(EXAMPLES / "incidents.csv")
 
-    def test_defender_mapping_reads_one_organisation(self):
+    def test_the_example_holds_one_organisation(self):
         self.assertGreater(len(self.incidents), 0)
         rows = pd.read_csv(EXAMPLES / "incidents.csv", dtype=str, usecols=["OrgId"])
         self.assertEqual(rows["OrgId"].nunique(), 1)
@@ -48,7 +48,7 @@ class ExampleTests(unittest.TestCase):
         for day, part in rows.groupby(days):
             path = folder / f"{day}.csv"
             part.to_csv(path, index=False)
-            store.save_run(runs_dir, read_incidents(path, DEFENDER), path.name, "defender")
+            store.save_run(runs_dir, read_file(path), path.name, "defender")
         merged = store.load_history(runs_dir).sort_values("IncidentId")
         single = self.incidents.sort_values("IncidentId")
         pd.testing.assert_frame_equal(merged.reset_index(drop=True),

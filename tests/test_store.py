@@ -9,15 +9,15 @@ from unittest import mock
 import pandas as pd
 
 from core import store
-from core.incidents import CLOSED, read_incidents
-from tests.fixtures import DEFENDER, ROWS, write_csv
+from core.incidents import CLOSED
+from tests.fixtures import ROWS, read_file, write_csv
 
 
 class StoreTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.runs_dir = self.tmp / "runs"
-        self.incidents = read_incidents(write_csv(self.tmp / "incidents.csv"), DEFENDER)
+        self.incidents = read_file(write_csv(self.tmp / "incidents.csv"))
 
     def _classification_of(self, incident_id: str) -> str:
         incidents = store.load_history(self.runs_dir)
@@ -26,7 +26,7 @@ class StoreTests(unittest.TestCase):
     def test_run_round_trip(self):
         meta = store.save_run(self.runs_dir, self.incidents, "incidents.csv", "defender")
         loaded_meta, loaded = store.load_run(self.runs_dir, meta["run"])
-        self.assertEqual(loaded_meta, {k: v for k, v in meta.items() if k != "mapping"})
+        self.assertEqual(loaded_meta, {k: v for k, v in meta.items() if k != "source"})
         self.assertEqual(meta["incidents_in_file"], 7)
         self.assertTrue(loaded.equals(self.incidents))
 
@@ -86,7 +86,7 @@ class StoreTests(unittest.TestCase):
             ("1", "200", "a6", "2024-06-05T12:00:00Z", "7", "Retitled", "", "", "", "", ""),
             ("1", "300", "b1", "2024-06-06T00:00:00Z", "5", "New rule", "", "", "", "", ""),
         )
-        second = read_incidents(write_csv(self.tmp / "later.csv", later), DEFENDER)
+        second = read_file(write_csv(self.tmp / "later.csv", later))
         store.save_run(self.runs_dir, second, "later.csv", "defender")
         history = store.load_history(self.runs_dir).set_index("IncidentId")
         self.assertEqual(len(history), 8)
@@ -96,7 +96,7 @@ class StoreTests(unittest.TestCase):
     def _merged(self, *parts: tuple) -> pd.DataFrame:
         for number, rows in enumerate(parts):
             path = write_csv(self.tmp / f"part{number}.csv", rows)
-            store.save_run(self.runs_dir, read_incidents(path, DEFENDER), path.name, "defender")
+            store.save_run(self.runs_dir, read_file(path), path.name, "defender")
         return store.load_history(self.runs_dir).set_index("IncidentId")
 
     def test_incident_in_two_runs_takes_rule_from_earlier_time(self):

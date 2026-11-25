@@ -175,9 +175,8 @@ class WebTests(unittest.TestCase):
     def test_a_page_with_no_run_loads_a_file_and_lists_its_queue(self):
         self.server = self._serve(self.empty_dir)
         record = json.loads(self._request("GET", "/api/queue")[2])
-        self.assertEqual((record["queue"], record["mappings"], record["max_file_bytes"]),
-                         (None, ["defender", "sentinel", "splunk"], 1024 * 1024))
-        sent = {web.FILE_HEADER: "C%3A%5Cexports%5Ctoday.csv", web.MAPPING_HEADER: "defender"}
+        self.assertEqual((record["queue"], record["max_file_bytes"]), (None, 1024 * 1024))
+        sent = {web.FILE_HEADER: "C%3A%5Cexports%5Ctoday.csv"}
         status, _, body = self._request("POST", "/api/load", self.source.read_bytes(),
                                         headers=sent)
         self.assertEqual(status, 200, body)
@@ -190,17 +189,12 @@ class WebTests(unittest.TestCase):
 
     def test_a_file_that_cannot_be_read_is_refused_under_its_own_name(self):
         self.server = self._serve(self.empty_dir)
-        sent = {web.FILE_HEADER: "notes.csv", web.MAPPING_HEADER: "defender"}
+        sent = {web.FILE_HEADER: "notes.csv"}
         for body in (b"", b"a,b\n1,2\n", b"\xff\xfe\x00", b'"open quote'):
             with self.subTest(body):
                 status, _, answer = self._request("POST", "/api/load", body, headers=sent)
                 self.assertEqual(status, 400, answer)
                 self.assertIn("notes.csv", json.loads(answer)["error"])
-        for mapping in ("", "../defender", str(self.source)):
-            with self.subTest(mapping):
-                sent = {web.FILE_HEADER: "notes.csv", web.MAPPING_HEADER: mapping}
-                self.assertEqual(self._request("POST", "/api/load", self.source.read_bytes(),
-                                               headers=sent)[0], 400)
         self.assertEqual(self._request("POST", "/api/load", self.source.read_bytes(),
                                        headers=sent, token=False)[0], 403)
         self.assertFalse(self.empty_dir.exists())
@@ -210,7 +204,6 @@ class WebTests(unittest.TestCase):
         with socket.create_connection(("127.0.0.1", port), timeout=60) as raw:
             raw.sendall((f"POST /api/load HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
                          f"{web.TOKEN_HEADER}: {self.server.token}\r\n"
-                         f"{web.MAPPING_HEADER}: defender\r\n"
                          f"Content-Length: {1024 * 1024 + 1}\r\n\r\n").encode())
             answer = b"".join(iter(lambda: raw.recv(65536), b"")).decode()
         self.assertIn("413", answer.splitlines()[0])

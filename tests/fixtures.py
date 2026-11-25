@@ -7,11 +7,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from core import rank
+from core import exports, rank
 from core.features import INPUTS
-from core.mapping import load_mapping
-
-DEFENDER = load_mapping("defender")
 
 HEADER = (
     "OrgId", "IncidentId", "AlertId", "Timestamp", "DetectorId", "AlertTitle",
@@ -72,6 +69,10 @@ def budget_rows() -> tuple:
     rows += [plain_row(f"h{i}", "3", time=f"2024-06-10T00:{i:02d}:00Z") for i in range(3)]
     rows += [plain_row(f"l{i}", "9", time=f"2024-06-10T01:{i:02d}:00Z") for i in range(8)]
     return tuple(rows)
+
+
+def read_file(path: Path):
+    return exports.read(path)[0]
 
 
 def write_csv(path: Path, rows=ROWS, header=HEADER) -> Path:

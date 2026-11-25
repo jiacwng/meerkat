@@ -12,7 +12,6 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from core import store
 from core.incidents import CLASSIFICATIONS, IncidentError
-from core.mapping import PRESETS, MappingError
 from core.store import StoreError
 from meerkat import records
 
@@ -20,7 +19,6 @@ PAGE = Path(__file__).parent / "page.html"
 HOST = "127.0.0.1"
 TOKEN_HEADER = "X-Meerkat-Token"
 FILE_HEADER = "X-Meerkat-File"
-MAPPING_HEADER = "X-Meerkat-Mapping"
 
 
 def serve(runs_dir: Path, port: int, max_file_mb: int, browser: bool) -> None:
@@ -101,7 +99,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _queue(self) -> dict:
         runs_dir = self.server.runs_dir
-        page = {"mappings": list(PRESETS), "max_file_bytes": self.server.max_file_bytes}
+        page = {"max_file_bytes": self.server.max_file_bytes}
         if not store.list_runs(runs_dir):
             return {**page, "queue": None}
         return {**page, **records.queue(runs_dir, self._scores(), records.settings(runs_dir))}
@@ -117,11 +115,6 @@ class _Handler(BaseHTTPRequestHandler):
         return self.rfile.read(size)
 
     def _load(self) -> None:
-        mapping = self.headers.get(MAPPING_HEADER, "")
-        if mapping not in PRESETS:
-            self.close_connection = True
-            self._json(HTTPStatus.BAD_REQUEST, {"error": f"mapping is one of {', '.join(PRESETS)}"})
-            return
         body = self._read()
         if body is None:
             megabytes = self.server.max_file_bytes // (1024 * 1024)
@@ -130,14 +123,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
         name = Path(unquote(self.headers.get(FILE_HEADER, "")).replace("\\", "/")).name
         name = "".join(ch for ch in name if ch.isprintable()) or "incidents.csv"
-        self._answer(lambda: self._keep(body, name, mapping))
+        self._answer(lambda: self._keep(body, name))
 
-    def _keep(self, body: bytes, name: str, mapping: str) -> dict:
+    def _keep(self, body: bytes, name: str) -> dict:
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "incidents.csv"
             path.write_bytes(body)
             try:
-                _, run = records.load(self.server.runs_dir, path, name, mapping)
+                _, run = records.load(self.server.runs_dir, path, name)
             except IncidentError as error:
                 raise IncidentError(str(error).replace(str(path), name)) from None
         return {"run": run}
@@ -201,7 +194,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK, built)
         except StoreError as error:
             self._json(HTTPStatus.NOT_FOUND, {"error": str(error)})
-        except (IncidentError, MappingError) as error:
+        except IncidentError as error:
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
 
     def _page(self) -> None:
