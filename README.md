@@ -1,9 +1,9 @@
 # meerkat
 
 Meerkat ranks a SOC's open incidents so that analysts read the likely true
-positives first. It scores each incident from the grades given to earlier
-ones, folds duplicates into one row, and lists as many rows as the team has
-time to read. It runs in a terminal or as a local web page.
+positives first. It scores each incident from the classifications given to
+earlier ones, folds duplicates into one row, and lists as many rows as the team
+has time to read. It runs in a terminal or as a local web page.
 
 ![The queue of the example file in a terminal](docs/queue.png)
 
@@ -33,7 +33,7 @@ This prints the queue in the picture above. It ends with a summary:
 
 ```text
 OPEN           42 incidents in 42 rows, 10 listed
-BELOW BUDGET   32 rows, 15 linked TP, 2 ungraded rule
+BELOW BUDGET   32 rows, 15 similar TP, 2 unclassified rule
 ```
 
 GUIDE replaces names with numbers, so hosts, users and titles are numbers here.
@@ -42,40 +42,40 @@ GUIDE replaces names with numbers, so hosts, users and titles are numbers here.
 | --- | --- |
 | `SCORE` | Likelihood of a true positive, from 0 to 1. |
 | `GROUP` | Open incidents of the same rule with the same devices, accounts, addresses, files and URLs. They take one row. |
-| `RULE_TP` | True positives over graded incidents of the same rule. |
-| `LINKED_TP` | True positives over earlier incidents that share a device, account, address, file or URL. |
-| `FLAG` | `sample`: drawn at random from below the budget. `linked TP`: below the budget, with an earlier linked true positive. `ungraded rule`: below the budget, rule never graded. |
+| `RULE_TP` | True positives over classified incidents of the same rule. |
+| `SIMILAR_TP` | True positives over earlier incidents that share a device, account, address, file or URL. |
+| `FLAG` | `sample`: drawn at random from below the budget. `similar TP`: below the budget, with an earlier similar true positive. `unclassified rule`: below the budget, rule never classified. |
 
 ## Working through the queue
 
 Look at one incident:
 
 ```bash
-meerkat inspect 44394
+meerkat details 44394
 ```
 
-Grade it `tp`, `bp` or `fp`. `--group` grades every open incident of its group:
+Classify it `tp`, `bp` or `fp`. `--group` classifies every open incident of its group:
 
 ```bash
-meerkat review 44394 tp --comment "confirmed with the user"
-meerkat review 44394 tp --group
+meerkat classify 44394 tp --comment "confirmed with the user"
+meerkat classify 44394 tp --group
 ```
 
-![Grading an incident and reading the next queue](docs/demo.gif)
+![Classifying an incident and reading the next queue](docs/demo.gif)
 
-Each grade changes the next queue. Load the next export the same way, and
-earlier grades count for it:
+Each classification changes the next queue. Load the next export the same way,
+and earlier classifications count for it:
 
 ```bash
 meerkat queue tomorrow.csv
 ```
 
-To grade from a file, give a CSV with the columns `IncidentId` and
-`IncidentGrade`. `examples/grades.csv` holds the real grades of the 42 example
-incidents:
+To classify from a file, give a CSV with the columns `IncidentId` and
+`IncidentGrade`. `examples/classifications.csv` holds the real classifications
+of the 42 example incidents:
 
 ```bash
-meerkat review --file examples/grades.csv
+meerkat classify --file examples/classifications.csv
 ```
 
 ## Web page
@@ -85,7 +85,8 @@ meerkat serve
 ```
 
 This prints an address on 127.0.0.1. The page shows the same queue, with one
-incident beside it and the grade buttons. It answers on this machine only.
+incident beside it and the classification buttons. It answers on this machine
+only.
 
 ![The queue as a web page, with one incident open](docs/page.png)
 
@@ -94,9 +95,9 @@ incident beside it and the grade buttons. It answers on this machine only.
 | Command | What it does |
 | --- | --- |
 | `meerkat queue [FILE]` | Scores an incident CSV and saves it as a run. Without FILE it lists the open incidents of every saved run. |
-| `meerkat inspect INCIDENT` | Shows one incident: score, entities, group, grade history and linked incidents. |
-| `meerkat review INCIDENT GRADE` | Records a grade: `tp`, `bp` or `fp`. |
-| `meerkat review --file FILE` | Records every grade in a CSV. |
+| `meerkat details INCIDENT` | Shows one incident: score, entities, group, classification history and similar incidents. |
+| `meerkat classify INCIDENT CLASSIFICATION` | Records a classification: `tp`, `bp` or `fp`. |
+| `meerkat classify --file FILE` | Records every classification in a CSV. |
 | `meerkat budget` | Shows what is below the budget and what the sample says about it. |
 | `meerkat serve` | Opens the queue as a web page. |
 | `meerkat runs` | Lists the saved runs. |
@@ -106,13 +107,13 @@ incident beside it and the grade buttons. It answers on this machine only.
 | --- | --- | --- |
 | `--all` | `queue` | Also lists the rows below the budget. |
 | `--limit N` | `queue` | Prints the first N rows. |
-| `--run ID` | `queue`, `inspect` | Only the incidents of one run. |
+| `--run ID` | `queue`, `details` | Only the incidents of one run. |
 | `--mapping NAME_OR_PATH` | `queue FILE` | Column names of the file, see below. |
-| `--group` | `review` | Grades the whole group. |
-| `--comment TEXT` | `review` | Text stored with the grade. |
-| `--json` | `queue`, `inspect`, `runs`, `budget` | Machine readable output. |
+| `--group` | `classify` | Classifies the whole group. |
+| `--comment TEXT` | `classify` | Text stored with the classification. |
+| `--json` | `queue`, `details`, `runs`, `budget` | Machine readable output. |
 | `--port N` | `serve` | Port to listen on. |
-| `--runs-dir PATH` | all | Where runs, grades and settings are kept. Default `runs/`. |
+| `--runs-dir PATH` | all | Where runs, classifications and settings are kept. Default `runs/`. |
 
 Colour is used on a terminal only. Set `NO_COLOR` to turn it off.
 
@@ -129,28 +130,28 @@ meerkat config budget 10
 meerkat config sample_share 0.2
 ```
 
-The sample exists to check the budget. Once sample rows are graded,
+The sample exists to check the budget. Once sample rows are classified,
 `meerkat budget` gives a 95% interval for the true positives left below it:
 
 ```text
-BUDGET            10 rows
-BELOW BUDGET      31 rows, 31 incidents
-  linked TP       14
-  ungraded rule   2
-  oldest below    06-15 00:16
-SAMPLE            1 drawn, 1 graded, 0 TP
-TP BELOW BUDGET   0 to 27 of 31, 95% interval, from 1 graded
+BUDGET                10 rows
+BELOW BUDGET          31 rows, 31 incidents
+  similar TP          14
+  unclassified rule   2
+  oldest below        06-15 00:16
+SAMPLE                1 drawn, 1 classified, 0 TP
+TP BELOW BUDGET       0 to 27 of 31, 95% interval, from 1 classified
 ```
 
 ## Your own data
 
 Meerkat reads a CSV with one row per alert, for one organisation, with
 ISO 8601 times. It needs three columns: an incident id, a time and a rule id.
-A grade column gives it history. The default column names are those of
-Microsoft Defender XDR.
+A classification column gives it history. The default column names are those
+of Microsoft Defender XDR.
 
-`--mapping` names the columns and grade words of another source. The presets
-are `defender`, `sentinel` and `splunk`, or give a TOML file:
+`--mapping` names the columns and classification words of another source. The
+presets are `defender`, `sentinel` and `splunk`, or give a TOML file:
 
 ```bash
 meerkat queue export.csv --mapping sentinel
@@ -164,17 +165,17 @@ Timestamp = "opened_at"
 DetectorId = "rule"
 IncidentGrade = "outcome"
 
-[grades]
+[classifications]
 TruePositive = ["confirmed"]
 open = ["new", "in progress"]
 ```
 
-A column or grade left out keeps its default name.
+A column or classification left out keeps its default name.
 
 ## How it works
 
 The score is a logistic regression on eight inputs, all taken from incidents
-earlier in time: how often the rule and the organisation were graded true
+earlier in time: how often the rule and the organisation were classified true
 positive, and how often the incidents sharing an entity were. The weights ship
 with the package and were fitted on Microsoft's GUIDE dataset. On the later
 40% of GUIDE, the mean average precision over 718 organisations is 0.72.
@@ -182,7 +183,7 @@ with the package and were fitted on Microsoft's GUIDE dataset. On the later
 
 ## Limits
 
-- The score uses grade history only. It has no severity and no asset
+- The score uses classification history only. It has no severity and no asset
   criticality.
 - It was measured on GUIDE, one vendor's data from 2024, and not in a live SOC.
 - The sample is small at a small budget, so the interval is wide.

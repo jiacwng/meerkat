@@ -11,7 +11,7 @@ IpAddress = "src"
 DeviceName = "dest"
 AccountName = "user"
 
-[grades]
+[classifications]
 TruePositive = ["True Positive - Suspicious Activity"]
 BenignPositive = ["Benign Positive - Suspicious But Expected"]
 FalsePositive = ["False Positive - Incorrect Analytic Logic", "False Positive - Inaccurate Data"]

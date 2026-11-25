@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from core.incidents import GRADES
+from core.incidents import CLASSIFICATIONS
 from core.store import StoreError
 from meerkat import records
 
@@ -64,10 +64,10 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._local() or not self._trusted():
             self._json(HTTPStatus.FORBIDDEN, {"error": "missing or wrong token"})
-        elif urlsplit(self.path).path != "/api/grade":
+        elif urlsplit(self.path).path != "/api/classify":
             self._json(HTTPStatus.NOT_FOUND, {"error": "no such page"})
         else:
-            self._grade()
+            self._classify()
 
     # a page on another site can reach this port, but it cannot send this host name or read the token
     def _local(self) -> bool:
@@ -89,7 +89,7 @@ class _Handler(BaseHTTPRequestHandler):
         runs_dir = self.server.runs_dir
         return records.queue(runs_dir, self._scores(), records.settings(runs_dir))
 
-    def _grade(self) -> None:
+    def _classify(self) -> None:
         try:
             size = int(self.headers.get("Content-Length", ""))
         except ValueError:
@@ -99,24 +99,26 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             body = json.loads(self.rfile.read(size))
-            incident, grade = body["incident"], body["grade"]
+            incident, classification = body["incident"], body["classification"]
             comment = body.get("comment", "")
             whole = body.get("group", False)
         except (ValueError, KeyError, TypeError, AttributeError):
-            self._json(HTTPStatus.BAD_REQUEST, {"error": "expected incident and grade"})
+            self._json(HTTPStatus.BAD_REQUEST, {"error": "expected incident and classification"})
             return
         if (not isinstance(incident, str) or not isinstance(comment, str)
-                or not isinstance(whole, bool) or grade not in GRADES):
+                or not isinstance(whole, bool) or classification not in CLASSIFICATIONS):
             self._json(HTTPStatus.BAD_REQUEST,
-                       {"error": f"grade is one of {', '.join(GRADES)}"})
+                       {"error": f"classification is one of {', '.join(CLASSIFICATIONS)}"})
             return
-        self._answer(lambda: self._record(incident, grade, comment, whole))
+        self._answer(lambda: self._record(incident, classification, comment, whole))
 
-    def _record(self, incident: str, grade: str, comment: str, whole: bool) -> dict:
+    def _record(self, incident: str, classification: str, comment: str, whole: bool) -> dict:
         runs_dir, scores = self.server.runs_dir, self._scores()
-        graded = records.with_group(runs_dir, scores, incident) if whole else [incident]
-        records.grade(runs_dir, scores, [(one, grade) for one in graded], comment)
-        return {"incident": incident, "grade": grade, "graded": len(graded)}
+        classified = records.with_group(runs_dir, scores, incident) if whole else [incident]
+        records.classify(runs_dir, scores, [(one, classification) for one in classified],
+                         comment)
+        return {"incident": incident, "classification": classification,
+                "classified": len(classified)}
 
     def _answer(self, build) -> None:
         try:

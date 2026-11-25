@@ -31,7 +31,7 @@ class ScoreTests(unittest.TestCase):
 
     def test_score_is_the_logistic_of_the_weighted_inputs(self):
         scored = score(self.incidents).set_index("IncidentId")
-        # rule 7 has two earlier true positives, rule 9 two earlier other grades
+        # rule 7 has two earlier true positives, rule 9 two earlier other classifications
         self.assertAlmostEqual(scored.loc["201", "score"], _logistic(4 * 4.5 / 7 - 2))
         self.assertAlmostEqual(scored.loc["200", "score"], _logistic(4 * 2.5 / 7 - 2))
         self.assertAlmostEqual(scored.loc["202", "score"], 0.5)
@@ -51,12 +51,12 @@ class ScoreTests(unittest.TestCase):
 
     def test_counts_behind_the_score(self):
         scored = score(self.incidents).set_index("IncidentId")
-        self.assertEqual(scored.loc["201", "rule_graded"], 2)
+        self.assertEqual(scored.loc["201", "rule_classified"], 2)
         self.assertEqual(scored.loc["201", "rule_true_positives"], 2)
-        self.assertEqual(scored.loc["202", "rule_graded"], 0)
-        linked = scored.loc["201", list(features.LINKED)].tolist()
-        self.assertEqual(linked, [1, 1, 0, 0])
-        self.assertEqual(scored.loc["200", "linked"], 0)
+        self.assertEqual(scored.loc["202", "rule_classified"], 0)
+        similar = scored.loc["201", list(features.SIMILAR)].tolist()
+        self.assertEqual(similar, [1, 1, 0, 0])
+        self.assertEqual(scored.loc["200", "similar"], 0)
 
     def test_open_incidents_are_ordered_by_score(self):
         scored = score(self.incidents)
@@ -71,13 +71,13 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(set(scored["score"]), {0.5})
         self.assertEqual(list(scored["IncidentId"]), ["150", "202", "201", "200"])
 
-    def test_linked_true_positives_raise_the_score(self):
+    def test_similar_true_positives_raise_the_score(self):
         use_weights(self, dict(WEIGHTS, coefficients=[0, 0, 0, 0, 0, 1, 1, 0],
                                intercept=0.0))
         scored = score(self.incidents).set_index("IncidentId")["score"]
         self.assertGreater(scored["201"], scored["202"])
 
-    def test_a_rule_history_moves_the_score_from_that_of_an_ungraded_rule(self):
+    def test_a_rule_history_moves_the_score_from_that_of_an_unclassified_rule(self):
         use_weights(self, dict(WEIGHTS, coefficients=[0, 4, 0, 0, 0, 0, 0, 0]))
         scored = score(self.incidents).set_index("IncidentId")["score"]
         self.assertLess(scored["200"], scored["202"])
@@ -108,12 +108,12 @@ class ShippedWeightsTests(unittest.TestCase):
     def test_links_to_open_incidents_change_nothing(self):
         rows = [_open_row(f"u{i}", i, "x") for i in range(3)]
         rows += [_open_row(f"f{i}", 10 + i, "") for i in range(4)]
-        linked = score(pd.DataFrame([*rows, _open_row("new", 20, "x")]))
-        unlinked = score(pd.DataFrame([*rows, _open_row("new", 20, "y")]))
-        linked, unlinked = (frame.set_index("IncidentId").loc["new"]
-                            for frame in (linked, unlinked))
-        self.assertEqual(linked["linked"], 0)
-        self.assertEqual(linked["score"], unlinked["score"])
+        with_link = score(pd.DataFrame([*rows, _open_row("new", 20, "x")]))
+        without_link = score(pd.DataFrame([*rows, _open_row("new", 20, "y")]))
+        with_link, without_link = (frame.set_index("IncidentId").loc["new"]
+                                   for frame in (with_link, without_link))
+        self.assertEqual(with_link["similar"], 0)
+        self.assertEqual(with_link["score"], without_link["score"])
 
 
 if __name__ == "__main__":

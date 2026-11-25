@@ -48,14 +48,14 @@ td { padding: 5px 6px; border-bottom: 1px solid var(--line); white-space: nowrap
 #detail td { white-space: normal; overflow-wrap: break-word; }
 td.title { font-family: system-ui, sans-serif; max-width: 0; width: 40%;
            overflow: hidden; text-overflow: ellipsis; }
-#rows tr[data-id], #linked tr, #members tr { cursor: pointer; }
-#rows tr[data-id]:hover td, #linked tr:hover td, #members tr:hover td { background: var(--cell); }
+#rows tr[data-id], #similar tr, #members tr { cursor: pointer; }
+#rows tr[data-id]:hover td, #similar tr:hover td, #members tr:hover td { background: var(--cell); }
 #rows tr.picked td { background: var(--pick); color: var(--pick-text); }
 #rows tr.below td { color: var(--soft); }
-#linked tr.none { cursor: default; }
-#linked tr.none td, #linked tr.other td { color: var(--soft); }
-#linked tr.other td:first-child { padding-left: 22px; }
-#linked tr.other td.tp { color: var(--bad); }
+#similar tr.none { cursor: default; }
+#similar tr.none td, #similar tr.other td { color: var(--soft); }
+#similar tr.other td:first-child { padding-left: 22px; }
+#similar tr.other td.tp { color: var(--bad); }
 td.divider { font-size: 11px; color: var(--soft); background: var(--bg); }
 #detail { padding: 12px 14px; }
 #top { position: sticky; top: -12px; z-index: 1; background: var(--panel); margin: -12px -14px 0;
@@ -71,7 +71,7 @@ dt { color: var(--soft); }
 dd { margin: 0; font-family: ui-monospace, monospace; overflow-wrap: anywhere;
      white-space: pre-wrap; }
 .tp { color: var(--bad); font-weight: 600; }
-#grade { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+#classification { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
 #comment { width: 100%; }
 button { font: inherit; color: var(--text); background: var(--panel); cursor: pointer;
          border: 1px solid var(--line); border-radius: 4px; padding: 5px 10px; }
@@ -101,8 +101,8 @@ const COLUMNS = [
   ["#", row => String(row.position)], ["incident", row => row.IncidentId],
   ["score", row => row.score.toFixed(2)],
   ["group", row => row.members.length ? String(row.members.length + 1) : ""],
-  ["rule_tp", row => `${row.rule_true_positives}/${row.rule_graded}`],
-  ["linked_tp", row => `${row.linked_true_positive}/${row.linked}`],
+  ["rule_tp", row => `${row.rule_true_positives}/${row.rule_classified}`],
+  ["similar_tp", row => `${row.similar_true_positive}/${row.similar}`],
   ["flag", row => row.flag], ["category", row => row.Category],
   ["severity", row => row.Severity],
   ["host", row => row.host], ["user", row => row.user],
@@ -117,12 +117,12 @@ function el(tag, text, className) {
   return node;
 }
 
-function gradedBefore(...counts) {
+function classifiedBefore(...counts) {
   const cells = counts.map(([tp, bp, total]) => [tp, bp, total - tp - bp, total].map(String));
   const wide = [0, 1, 2, 3].map(at => Math.max(...cells.map(cell => cell[at].length)));
   return cells.map(cell => {
     const [tp, bp, fp, total] = cell.map((text, at) => text.padStart(wide[at]));
-    return `${tp} TP  ${bp} BP  ${fp} FP  of ${total} graded before`;
+    return `${tp} TP  ${bp} BP  ${fp} FP  of ${total} classified before`;
   });
 }
 
@@ -158,7 +158,7 @@ async function load(keep) {
   state.record = record;
   state.columns = COLUMNS.filter(([name]) => name !== "severity" || record.queue.some(row => row.Severity));
   document.getElementById("head").replaceChildren(...state.columns.map(([name]) => el("th", name)));
-  state.keys = Object.fromEntries(record.grades.map(grade => [grade[0].toLowerCase(), grade]));
+  state.keys = Object.fromEntries(record.classifications.map(name => [name[0].toLowerCase(), name]));
   for (const row of record.queue) {
     row.text = [row.IncidentId, row.AlertTitle, row.DetectorId, row.Category, row.Severity,
                 row.MitreTechniques, ...row.members,
@@ -174,7 +174,7 @@ async function load(keep) {
   const keys = document.getElementById("keys");
   keys.replaceChildren();
   const hints = [["j", "next"], ["k", "previous"],
-                 ...Object.entries(state.keys).map(([key, grade]) => [key, grade.replace(/[a-z]/g, "")]),
+                 ...Object.entries(state.keys).map(([key, name]) => [key, name.replace(/[a-z]/g, "")]),
                  ["/", "filter"]];
   for (const [key, label] of hints) keys.append(el("span", undefined), el("kbd", key), ` ${label}`);
   draw(keep);
@@ -225,8 +225,8 @@ function select(id) {
   if (state.viewing !== id || id === null) show(id);
 }
 
-function gradeCell(grade) {
-  return el("td", grade, grade === state.record.grades[0] ? "tp" : "");
+function classificationCell(classification) {
+  return el("td", classification, classification === state.record.classifications[0] ? "tp" : "");
 }
 
 async function show(id) {
@@ -259,10 +259,10 @@ async function show(id) {
   comment.setAttribute("aria-label", "comment");
   comment.placeholder = "comment";
   const buttons = el("div");
-  buttons.id = "grade";
-  for (const [key, grade] of Object.entries(state.keys)) {
-    const button = el("button", state.open ? `${grade} ${key}` : grade);
-    button.addEventListener("click", () => gradeIt(grade));
+  buttons.id = "classification";
+  for (const [key, classification] of Object.entries(state.keys)) {
+    const button = el("button", state.open ? `${classification} ${key}` : classification);
+    button.addEventListener("click", () => classify(classification));
     buttons.append(button);
   }
   if (state.open && row.members.length) {
@@ -276,40 +276,40 @@ async function show(id) {
   top.id = "top";
   top.append(nav, el("h2", row.AlertTitle || row.IncidentId), buttons, comment);
 
-  const [rule, linked] = gradedBefore(
-    [row.rule_true_positives, row.rule_benign_positives, row.rule_graded],
-    [row.linked_true_positive, row.linked_benign_positive, row.linked]);
+  const [rule, similar] = classifiedBefore(
+    [row.rule_true_positives, row.rule_benign_positives, row.rule_classified],
+    [row.similar_true_positive, row.similar_benign_positive, row.similar]);
   const parts = [top, fields([
     ["incident", row.IncidentId], ["time", row.Timestamp], ["rule", row.DetectorId],
     ["category", row.Category], ["severity", row.Severity],
     ["techniques", row.MitreTechniques.join(", ")],
-    ["grade", row.IncidentGrade || "open"], ["placement", row.placement],
+    ["classification", row.IncidentGrade || "open"], ["placement", row.placement],
   ]), el("h3", "score"), fields([
-    ["score", row.score.toFixed(2)], ["rule", rule], ["linked", linked],
-    ["same rule", row.linked ? `${row.linked_same_rule} of ${row.linked}` : ""],
+    ["score", row.score.toFixed(2)], ["rule", rule], ["similar", similar],
+    ["same rule", row.similar ? `${row.similar_same_rule} of ${row.similar}` : ""],
   ])];
 
   if (row.entities.length) {
-    const short = state.record.grades.map(grade => grade.replace(/[a-z]/g, ""));
+    const short = state.record.classifications.map(name => name.replace(/[a-z]/g, ""));
     const table = el("table"), head = el("tr"), body = el("tbody");
-    for (const name of ["entity", "value", "graded_before", ...short]) head.append(el("th", name));
-    body.id = "linked";
+    for (const name of ["entity", "value", "classified_before", ...short]) head.append(el("th", name));
+    body.id = "similar";
     for (const entity of row.entities) {
       const line = el("tr");
       line.append(el("td", entity.field), el("td", entity.value),
-                  el("td", String(entity.graded_before)),
-                  ...state.record.grades.map((grade, at) =>
-                    el("td", String(entity[grade]), at === 0 && entity[grade] ? "tp" : "")));
+                  el("td", String(entity.classified_before)),
+                  ...state.record.classifications.map((name, at) =>
+                    el("td", String(entity[name]), at === 0 && entity[name] ? "tp" : "")));
       body.append(line);
-      if (!entity.graded_before) { line.className = "none"; continue; }
+      if (!entity.classified_before) { line.className = "none"; continue; }
       const key = `${entity.field} ${entity.value}`;
-      const others = row.linked_incidents.filter(other => other.shared.includes(key)).map(other => {
+      const others = row.similar_incidents.filter(other => other.shared.includes(key)).map(other => {
         const inner = el("tr", undefined, "other");
         inner.hidden = true;
         inner.title = other.AlertTitle;
         inner.append(el("td", other.IncidentId), el("td", other.Timestamp),
-                     el("td", `rule ${other.DetectorId}`), gradeCell(other.IncidentGrade));
-        inner.lastChild.colSpan = state.record.grades.length;
+                     el("td", `rule ${other.DetectorId}`), classificationCell(other.IncidentGrade));
+        inner.lastChild.colSpan = state.record.classifications.length;
         inner.addEventListener("click", () => show(other.IncidentId));
         return inner;
       });
@@ -333,12 +333,12 @@ async function show(id) {
     parts.push(el("h3", `group ${row.members.length + 1}`), table);
   }
 
-  if (row.grade_history.length) {
+  if (row.classification_history.length) {
     const table = el("table"), head = el("tr"), body = el("tbody");
-    for (const name of ["graded", "grade", "comment"]) head.append(el("th", name));
-    for (const past of row.grade_history) {
+    for (const name of ["classified", "classification", "comment"]) head.append(el("th", name));
+    for (const past of row.classification_history) {
       const line = el("tr");
-      line.append(el("td", past.time), gradeCell(past.grade), el("td", past.comment));
+      line.append(el("td", past.time), classificationCell(past.classification), el("td", past.comment));
       body.append(line);
     }
     table.append(head, body);
@@ -349,7 +349,7 @@ async function show(id) {
   pane.scrollTop = 0;
 }
 
-async function gradeIt(grade) {
+async function classify(classification) {
   const id = state.viewing;
   if (id === null) return;
   const at = state.shown.findIndex(row => row.IncidentId === state.picked);
@@ -357,10 +357,11 @@ async function gradeIt(grade) {
   const notice = document.getElementById("notice");
   try {
     const whole = document.getElementById("whole");
-    await call("/api/grade", { incident: id, grade, group: whole !== null && whole.checked,
-                               comment: document.getElementById("comment").value });
+    await call("/api/classify", { incident: id, classification,
+                                  group: whole !== null && whole.checked,
+                                  comment: document.getElementById("comment").value });
   } catch (error) { notice.replaceChildren(error.message); return; }
-  const open = el("button", `${id} ${grade}`);
+  const open = el("button", `${id} ${classification}`);
   open.addEventListener("click", () => show(id));
   notice.replaceChildren(open);
   state.viewing = null;
@@ -387,7 +388,7 @@ document.addEventListener("keydown", event => {
   else if (event.key === "k" || event.key === "ArrowUp") { step(-1); event.preventDefault(); }
   else if (event.key === "/") { document.getElementById("search").focus(); event.preventDefault(); }
   else if (state.open && state.viewing === state.picked && state.keys[event.key]) {
-    gradeIt(state.keys[event.key]);
+    classify(state.keys[event.key]);
   }
 });
 document.getElementById("search").addEventListener("input", () => draw(state.picked));

@@ -7,5 +7,5 @@ DetectorId = "RelatedAnalyticRuleIds"
 AlertTitle = "Title"
 IncidentGrade = "Classification"
 
-[grades]
+[classifications]
 open = ["Undetermined"]

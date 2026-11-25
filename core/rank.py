@@ -23,7 +23,7 @@ def score(incidents: pd.DataFrame) -> pd.DataFrame:
     logit = standard @ np.array(weights["coefficients"]) + weights["intercept"]
 
     scored = incidents.copy()
-    for column in (*features.LINKED, *features.RULE):
+    for column in (*features.SIMILAR, *features.RULE):
         scored[column] = found[column].to_numpy()
     scored["score"] = _logistic(logit)
     return scored.sort_values(

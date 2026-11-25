@@ -18,7 +18,7 @@ HEADER = (
     "Category", "MitreTechniques", "IncidentGrade", "AccountName", "IpAddress",
 )
 
-# rule 7 was graded twice, both true positive; rule 9 twice, never true positive
+# rule 7 was classified twice, both true positive; rule 9 twice, never true positive
 ROWS = (
     ("1", "100", "a1", "2024-06-01T08:00:00.000Z", "7", "Suspicious sign in",
      "InitialAccess", "T1078;T1078.004", "TruePositive", "alice", "10.0.0.1"),
@@ -39,13 +39,13 @@ ROWS = (
 )
 
 
-def plain_row(incident_id: str, rule: str, grade: str = "",
+def plain_row(incident_id: str, rule: str, classification: str = "",
               time: str = "2024-06-10T00:00:00Z") -> tuple:
     return ("1", incident_id, f"a{incident_id}", time, rule, "Title",
-            "Category", "", grade, "", "")
+            "Category", "", classification, "", "")
 
 
-# the score is logistic(4 * rule rate - 2), so a rule never graded before scores 0.5
+# the score is logistic(4 * rule rate - 2), so a rule never classified before scores 0.5
 WEIGHTS = {
     "inputs": list(INPUTS),
     "mean": [0.0] * len(INPUTS),

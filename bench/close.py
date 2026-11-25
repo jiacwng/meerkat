@@ -45,9 +45,9 @@ def main() -> None:
         closed = np.zeros(len(rows), bool)
         if level is not None:
             closed = in_test & (score < level)
-            if close.DEFAULT_KEEP_LINKED:
-                closed = closed & (found["linked_true_positive"].to_numpy() < 1)
-            closed = closed & (found["rule_graded"].to_numpy() > 0)
+            if close.DEFAULT_KEEP_SIMILAR:
+                closed = closed & (found["similar_true_positive"].to_numpy() < 1)
+            closed = closed & (found["rule_classified"].to_numpy() > 0)
 
         organisations += 1
         incidents_total += in_test.sum()

@@ -1,10 +1,10 @@
-# Reads the TOML file that says which columns and grade words an incident CSV uses.
+# Reads the TOML file that says which columns and classification words an incident CSV uses.
 
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.incidents import COLUMNS, GRADES
+from core.incidents import CLASSIFICATIONS, COLUMNS
 
 PRESET_DIR = Path(__file__).parent / "data" / "mappings"
 PRESETS = tuple(sorted(path.stem for path in PRESET_DIR.glob("*.toml")))
@@ -19,7 +19,7 @@ class MappingError(ValueError):
 class Mapping:
     name: str
     columns: dict[str, str]
-    grades: dict[str, str]
+    classifications: dict[str, str]
 
 
 def load_mapping(name_or_path: str) -> Mapping:
@@ -37,10 +37,11 @@ def load_mapping(name_or_path: str) -> Mapping:
     except tomllib.TOMLDecodeError as error:
         raise MappingError(f"{path}: not valid TOML ({error})") from None
     for key in table:
-        if key not in ("columns", "grades"):
-            raise MappingError(f"{path}: unknown table {key!r}, expected columns or grades")
+        if key not in ("columns", "classifications"):
+            raise MappingError(f"{path}: unknown table {key!r}, expected columns or "
+                               "classifications")
     return Mapping(name, _columns(path, table.get("columns", {})),
-                   _grades(path, table.get("grades", {})))
+                   _classifications(path, table.get("classifications", {})))
 
 
 def _columns(path: Path, given: dict) -> dict[str, str]:
@@ -59,19 +60,20 @@ def _columns(path: Path, given: dict) -> dict[str, str]:
     return columns
 
 
-def _grades(path: Path, given: dict) -> dict[str, str]:
+def _classifications(path: Path, given: dict) -> dict[str, str]:
     for key in given:
-        if key not in (*GRADES, OPEN):
-            raise MappingError(f"{path}: [grades] has unknown key {key!r}")
+        if key not in (*CLASSIFICATIONS, OPEN):
+            raise MappingError(f"{path}: [classifications] has unknown key {key!r}")
     owner: dict[str, str] = {}
-    for key in (*GRADES, OPEN):
+    for key in (*CLASSIFICATIONS, OPEN):
         listed = given.get(key, [] if key == OPEN else [key])
         if not isinstance(listed, list) or not all(
                 isinstance(word, str) and word for word in listed):
-            raise MappingError(f"{path}: [grades] {key} must be a list of non empty strings")
+            raise MappingError(f"{path}: [classifications] {key} must be a list of non empty "
+                               "strings")
         for word in listed:
             if word in owner:
                 raise MappingError(
-                    f"{path}: grade word {word!r} is listed under {owner[word]} and {key}")
+                    f"{path}: classification word {word!r} is listed under {owner[word]} and {key}")
             owner[word] = key
     return {word: "" if key == OPEN else key for word, key in owner.items()}

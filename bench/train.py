@@ -79,22 +79,22 @@ def main() -> None:
 
 def read_guide(path: Path) -> pd.DataFrame:
     # an incident takes its time and rule from its earliest row, as core.incidents does
-    firsts, grades, values = [], [], []
+    firsts, classifications, values = [], [], []
     wanted = [*KEY, "Timestamp", "DetectorId", "IncidentGrade", *LINKS]
     for rows in pd.read_csv(path, usecols=wanted, dtype=str, keep_default_na=False,
                             chunksize=1_000_000):
         rows = rows.sort_values("Timestamp", kind="stable")
         firsts.append(rows.groupby(KEY, sort=False)[["Timestamp", "DetectorId"]].first())
-        graded = rows[rows["IncidentGrade"] != ""]
-        grades.append(graded.groupby(KEY, sort=False)["IncidentGrade"].first())
+        classified = rows[rows["IncidentGrade"] != ""]
+        classifications.append(classified.groupby(KEY, sort=False)["IncidentGrade"].first())
         for column in LINKS:
             found = rows.loc[rows[column] != "", [*KEY, column]].drop_duplicates()
             values.append(found.rename(columns={column: "value"}).assign(column=column))
 
     first = pd.concat(firsts).sort_values("Timestamp", kind="stable")
     incidents = first[~first.index.duplicated()].copy()
-    grade = pd.concat(grades)
-    incidents["IncidentGrade"] = grade[~grade.index.duplicated()]
+    classification = pd.concat(classifications)
+    incidents["IncidentGrade"] = classification[~classification.index.duplicated()]
     incidents = incidents[incidents["IncidentGrade"].notna()]
 
     links = pd.concat(values).drop_duplicates().sort_values("value")

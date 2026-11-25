@@ -1,6 +1,6 @@
 # Microsoft Defender XDR incidents in the column names of the GUIDE dataset.
 
-[grades]
+[classifications]
 TruePositive = ["TruePositive", "truePositive"]
 BenignPositive = ["BenignPositive", "Informational, expected activity", "informationalExpectedActivity"]
 FalsePositive = ["FalsePositive", "falsePositive"]
