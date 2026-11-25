@@ -9,6 +9,11 @@
   inventory of 1.3.0 are removed.
 - The dependencies are numpy and pandas. `bench/train.py` also needs
   scikit-learn.
+- `--mapping` and `meerkat query` are removed. Meerkat picks the reader from
+  the file's header and reads the Defender queue export, a Splunk search export
+  or its own columns. The Defender JSON file and the Sentinel query are no
+  longer read.
+- A run's `meta.json` names its reader under `source` instead of `mapping`.
 
 ### Added
 

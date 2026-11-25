@@ -5,9 +5,8 @@ import unittest
 from pathlib import Path
 
 from core.features import compute
-from core.incidents import COLUMNS, SEPARATOR, IncidentError, read_incidents
-from core.mapping import load_mapping
-from tests.fixtures import DEFENDER, HEADER, ROWS, write_csv
+from core.incidents import COLUMNS, SEPARATOR, IncidentError
+from tests.fixtures import HEADER, ROWS, read_file, write_csv
 
 
 class ReadIncidentsTests(unittest.TestCase):
@@ -21,21 +20,21 @@ class ReadIncidentsTests(unittest.TestCase):
         return tuple(row.values())
 
     def test_one_row_per_incident_with_every_column(self):
-        incidents = read_incidents(write_csv(self.path), DEFENDER)
+        incidents = read_file(write_csv(self.path))
         self.assertEqual(list(incidents.columns), list(COLUMNS))
         self.assertEqual(sorted(incidents["IncidentId"]),
                          ["100", "101", "102", "103", "200", "201", "202"])
 
     def test_incident_takes_rule_and_time_from_its_earliest_row(self):
         rows = (ROWS[1], ROWS[0], *ROWS[2:])
-        incidents = read_incidents(write_csv(self.path, rows), DEFENDER).set_index("IncidentId")
+        incidents = read_file(write_csv(self.path, rows)).set_index("IncidentId")
         first = incidents.loc["100"]
         self.assertEqual(first["DetectorId"], "7")
         self.assertEqual(first["Timestamp"], "2024-06-01T08:00:00Z")
         self.assertEqual(first["AlertTitle"], "Suspicious sign in")
 
     def test_techniques_and_links_are_distinct_values_over_all_rows(self):
-        incidents = read_incidents(write_csv(self.path), DEFENDER).set_index("IncidentId")
+        incidents = read_file(write_csv(self.path)).set_index("IncidentId")
         first = incidents.loc["100"]
         self.assertEqual(first["MitreTechniques"], "T1078|T1078.004|T1114")
         self.assertEqual(first["IpAddress"], "10.0.0.1|10.0.0.2")
@@ -44,20 +43,20 @@ class ReadIncidentsTests(unittest.TestCase):
     def test_absent_optional_columns_read_as_blank(self):
         header = ("IncidentId", "Timestamp", "DetectorId")
         rows = (("5", "2024-06-01T08:00:00Z", "7"),)
-        incidents = read_incidents(write_csv(self.path, rows, header), DEFENDER)
+        incidents = read_file(write_csv(self.path, rows, header))
         self.assertEqual(incidents.loc[0, "IncidentGrade"], "")
         self.assertEqual(incidents.loc[0, "Url"], "")
 
     def test_classification_comes_from_any_row_of_the_incident(self):
         rows = (self._row(AlertId="x"), self._row(IncidentGrade="FalsePositive"))
-        incidents = read_incidents(write_csv(self.path, rows), DEFENDER)
+        incidents = read_file(write_csv(self.path, rows))
         self.assertEqual(incidents.loc[0, "IncidentGrade"], "FalsePositive")
 
     def test_a_separator_inside_a_link_value_does_not_link_incidents(self):
         header = ("IncidentId", "Timestamp", "DetectorId", "IncidentGrade", "Url")
         rows = (("1", "2024-06-01T08:00:00Z", "7", "TruePositive", "http://a/x|shared"),
                 ("2", "2024-06-02T08:00:00Z", "7", "", "http://b/y|shared"))
-        incidents = read_incidents(write_csv(self.path, rows, header), DEFENDER)
+        incidents = read_file(write_csv(self.path, rows, header))
         urls = [set(value.split(SEPARATOR)) for value in incidents["Url"]]
         self.assertEqual(urls[0] & urls[1], set())
         self.assertEqual(urls[0], {"http://a/x%7Cshared"})
@@ -69,131 +68,56 @@ class ReadIncidentsTests(unittest.TestCase):
                 self._row(AlertId="y", Timestamp="2024-06-02T00:00:00Z",
                           IncidentGrade="TruePositive"),
                 self._row(AlertId="z", Timestamp="2024-06-03T00:00:00Z", IncidentGrade=""))
-        incidents = read_incidents(write_csv(self.path, rows), DEFENDER)
+        incidents = read_file(write_csv(self.path, rows))
         self.assertEqual(incidents.loc[0, "IncidentGrade"], "TruePositive")
 
     def test_timestamps_are_normalised_to_utc(self):
         rows = (self._row(Timestamp="2024-06-05T14:00:00+02:00"),)
-        incidents = read_incidents(write_csv(self.path, rows), DEFENDER)
+        incidents = read_file(write_csv(self.path, rows))
         self.assertEqual(incidents.loc[0, "Timestamp"], "2024-06-05T12:00:00Z")
 
     def test_missing_file(self):
         with self.assertRaisesRegex(IncidentError, "no such file"):
-            read_incidents(self.tmp / "absent.csv", DEFENDER)
+            read_file(self.tmp / "absent.csv")
 
     def test_directory_instead_of_file(self):
         with self.assertRaisesRegex(IncidentError, "not a readable CSV"):
-            read_incidents(self.tmp, DEFENDER)
+            read_file(self.tmp)
 
     def test_empty_file(self):
         self.path.write_text("")
         with self.assertRaisesRegex(IncidentError, "not a readable CSV"):
-            read_incidents(self.path, DEFENDER)
+            read_file(self.path)
 
     def test_binary_file(self):
         self.path.write_bytes(bytes(range(256)) * 50)
         with self.assertRaises(IncidentError):
-            read_incidents(self.path, DEFENDER)
+            read_file(self.path)
 
     def test_header_without_rows(self):
         with self.assertRaisesRegex(IncidentError, "no incident rows"):
-            read_incidents(write_csv(self.path, rows=()), DEFENDER)
+            read_file(write_csv(self.path, rows=()))
 
     def test_two_organisations(self):
         rows = (self._row(), self._row(OrgId="2", IncidentId="300"))
         with self.assertRaisesRegex(IncidentError, "2 organisations"):
-            read_incidents(write_csv(self.path, rows), DEFENDER)
+            read_file(write_csv(self.path, rows))
 
     def test_blank_required_value(self):
         for name in ("IncidentId", "Timestamp", "DetectorId"):
             with self.subTest(name), self.assertRaisesRegex(
                     IncidentError, f"1 rows have no {name}"):
-                read_incidents(write_csv(self.path, (self._row(**{name: " "}),)), DEFENDER)
+                read_file(write_csv(self.path, (self._row(**{name: " "}),)))
 
-    def test_unknown_classification_names_the_source_column_and_accepted_words(self):
-        header = ("rule_id", "_time", "rule_name", "disposition_label")
-        rows = (("1", "2024-06-01T00:00:00Z", "r", "Maybe"),)
-        with self.assertRaisesRegex(
-                IncidentError, "disposition_label 'Maybe' is not one of True Positive"):
-            read_incidents(write_csv(self.path, rows, header), load_mapping("splunk"))
-
-    def test_a_missing_source_column_is_named(self):
-        rows = (("1", "2024-06-01T00:00:00Z"),)
-        with self.assertRaisesRegex(IncidentError, "missing column rule_name"):
-            read_incidents(write_csv(self.path, rows, ("rule_id", "_time")),
-                           load_mapping("splunk"))
-
-    def test_splunk_export_reads_like_guide_names(self):
-        header = ("rule_id", "_time", "rule_name", "rule_title", "security_domain",
-                  "disposition_label", "src", "dest", "user", "Category")
-        labels = ("True Positive - Suspicious Activity",
-                  "Benign Positive - Suspicious But Expected",
-                  "False Positive - Incorrect Analytic Logic",
-                  "False Positive - Inaccurate Data", "Undetermined", "Other")
-        rows = [(f"n{i}", "2024-06-01T08:00:00Z", "Brute force", "Title", "access",
-                 label, "10.0.0.1", "host1", "alice", "ignored")
-                for i, label in enumerate(labels)]
-        incidents = read_incidents(write_csv(self.path, rows, header),
-                                   load_mapping("splunk")).set_index("IncidentId")
-        self.assertEqual(list(incidents.reset_index().columns), list(COLUMNS))
-        self.assertEqual(list(incidents["IncidentGrade"]),
-                         ["TruePositive", "BenignPositive", "FalsePositive",
-                          "FalsePositive", "", ""])
-        self.assertEqual(incidents.loc["n0", "DetectorId"], "Brute force")
-        self.assertEqual(incidents.loc["n0", "Category"], "access")
-        self.assertEqual(incidents.loc["n0", "IpAddress"], "10.0.0.1")
-        self.assertEqual(incidents.loc["n0", "DeviceName"], "host1")
-
-    def test_severity_comes_from_the_earliest_row_under_the_mapped_name(self):
+    def test_severity_comes_from_the_earliest_row(self):
         header = ("IncidentId", "Timestamp", "DetectorId", "Severity")
         rows = (("1", "2024-06-02T00:00:00Z", "7", "Low"), ("1", "2024-06-01T00:00:00Z", "7", "High"))
-        incidents = read_incidents(write_csv(self.path, rows, header), DEFENDER)
+        incidents = read_file(write_csv(self.path, rows, header))
         self.assertEqual(list(incidents["Severity"]), ["High"])
-        mapping = self.path.with_name("urgency.toml")
-        mapping.write_text('[columns]\nSeverity = "urgency"\n')
-        renamed = write_csv(self.path, rows, (*header[:3], "urgency"))
-        self.assertEqual(list(read_incidents(renamed, load_mapping(str(mapping)))["Severity"]),
-                         ["High"])
 
-    def test_the_result_of_the_sentinel_query_reads_as_incidents(self):
-        # these rows are what Microsoft's query engine returned for core/data/queries/sentinel.kql
-        result = (
-            'IncidentId,Timestamp,DetectorId,IncidentGrade,AlertTitle,Category,Severity,IncidentUrl,MitreTechniques,DeviceName,DeviceId,AccountName,AccountUpn,AccountSid,IpAddress,Sha256,Url',
-            '1,2026-11-20T07:58:12Z,rule-a,TruePositive,Sign in from an unfamiliar place,"InitialAccess, Persistence",High,https://portal.azure.com/#incident/1,T1078;T1110,,,,,,10.0.0.1,,',
-            '1,2026-11-20T07:58:12Z,rule-a,TruePositive,Sign in from an unfamiliar place,"InitialAccess, Persistence",High,https://portal.azure.com/#incident/1,T1078;T1110,,,alice,alice@contoso.com,S-1-5-21-1,,,',
-            '1,2026-11-20T07:59:40Z,MDATP_Malware,TruePositive,Malware on a device,Execution,High,https://portal.azure.com/#incident/1,,,,,,,,,',
-            '2,2026-11-22T09:55:00Z,rule-b,,Suspicious download,CommandAndControl,Medium,https://portal.azure.com/#incident/2,T1105,,,,,,,,',
-            '2,2026-11-22T09:55:00Z,rule-b,,Suspicious download,CommandAndControl,Medium,https://portal.azure.com/#incident/2,T1105,,,,,,,,http://bad.example/x',
-            '2,2026-11-22T09:55:00Z,rule-b,,Suspicious download,CommandAndControl,Medium,https://portal.azure.com/#incident/2,T1105,,,,,,,abc123,',
-            '2,2026-11-22T09:55:00Z,rule-b,,Suspicious download,CommandAndControl,Medium,https://portal.azure.com/#incident/2,T1105,pc-7,/subscriptions/x/vm/pc-7,,,,,,',
-            '3,2026-11-23T10:50:00Z,rule-d,Undetermined,Port scan,Discovery,Low,https://portal.azure.com/#incident/3,T1046,,,,,,10.9.9.9,,',
-        )
-        self.path.write_text("\n".join(result) + "\n", encoding="utf-8")
-        incidents = read_incidents(self.path, load_mapping("sentinel")).set_index("IncidentId")
-        self.assertEqual(incidents["IncidentGrade"].to_dict(),
-                         {"1": "TruePositive", "2": "", "3": "closed"})
-        self.assertEqual(incidents["DetectorId"].to_dict(), {"1": "rule-a", "2": "rule-b", "3": "rule-d"})
-        first = incidents.loc["1"]
-        self.assertEqual((first["Timestamp"], first["Severity"], first["MitreTechniques"]),
-                         ("2026-11-20T07:58:12Z", "High", "T1078|T1110"))
-        self.assertEqual((first["AccountUpn"], first["IpAddress"], first["IncidentUrl"]),
-                         ("alice@contoso.com", "10.0.0.1", "https://portal.azure.com/#incident/1"))
-        second = incidents.loc["2"]
-        self.assertEqual((second["DeviceName"], second["Sha256"], second["Url"]),
-                         ("pc-7", "abc123", "http://bad.example/x"))
-
-    def test_a_site_file_can_rename_one_column_only(self):
-        site = self.tmp / "site.toml"
-        site.write_text('[columns]\nDetectorId = "rule"\n')
-        header = tuple("rule" if name == "DetectorId" else name for name in HEADER)
-        incidents = read_incidents(write_csv(self.path, ROWS, header),
-                                   load_mapping(str(site)))
-        self.assertEqual(sorted(incidents["IncidentId"]),
-                         ["100", "101", "102", "103", "200", "201", "202"])
-
-    def _refusal(self, mapping=DEFENDER) -> str:
+    def _refusal(self) -> str:
         with self.assertRaises(IncidentError) as raised:
-            read_incidents(self.path, mapping)
+            read_file(self.path)
         self.assertNotIn("\n", str(raised.exception))
         return str(raised.exception)
 
@@ -205,15 +129,8 @@ class ReadIncidentsTests(unittest.TestCase):
                 write_csv(self.path, rows)
                 self.assertEqual(
                     self._refusal(),
-                    f"{self.path}: Timestamp '{value}' is not ISO 8601, "
+                    f"{self.path}: Timestamp '{value}' is not a time meerkat reads, "
                     "like 2024-06-15T10:00:00Z")
-
-    def test_unparseable_timestamp_uses_the_mapped_column_name(self):
-        header = ("rule_id", "_time", "rule_name")
-        write_csv(self.path, (("1", "15/06/2024 10:00", "r"),), header)
-        self.assertEqual(self._refusal(load_mapping("splunk")),
-                         f"{self.path}: _time '15/06/2024 10:00' is not ISO 8601, "
-                         "like 2024-06-15T10:00:00Z")
 
     def test_saved_text_drops_fractions_and_converts_offsets_to_utc(self):
         cases = (("2024-06-15T10:00:00Z", "2024-06-15T10:00:00Z"),
@@ -222,7 +139,7 @@ class ReadIncidentsTests(unittest.TestCase):
         for value, saved in cases:
             with self.subTest(value):
                 write_csv(self.path, (self._row(Timestamp=value),))
-                self.assertEqual(read_incidents(self.path, DEFENDER).loc[0, "Timestamp"], saved)
+                self.assertEqual(read_file(self.path).loc[0, "Timestamp"], saved)
 
     def test_a_utf16_file_is_named_as_utf16(self):
         text = ",".join(HEADER) + "\n" + ",".join(ROWS[5]) + "\n"
@@ -239,7 +156,7 @@ class ReadIncidentsTests(unittest.TestCase):
     def test_a_utf8_byte_order_mark_is_read(self):
         text = ",".join(HEADER) + "\n" + ",".join(ROWS[5]) + "\n"
         self.path.write_bytes(b"\xef\xbb\xbf" + text.encode())
-        self.assertEqual(list(read_incidents(self.path, DEFENDER)["IncidentId"]), ["200"])
+        self.assertEqual(list(read_file(self.path)["IncidentId"]), ["200"])
 
     def test_a_semicolon_or_tab_header_names_the_separator(self):
         for separator, shown in ((";", "';'"), ("\t", "'\\t'")):
@@ -250,24 +167,37 @@ class ReadIncidentsTests(unittest.TestCase):
                                  f"{self.path}: columns are separated by {shown}, expected ','")
 
     def test_header_missing_a_column_names_it(self):
-        self.path.write_text("IncidentId;Timestamp\n1;2024-06-01\n")
+        self.path.write_text("IncidentId,DetectorId\n1,7\n")
+        self.assertEqual(self._refusal(), f"{self.path}: missing column Timestamp")
+        self.path.write_text("Incident Id,Status\n1,Active\n")
+        self.assertIn("missing column Creation time", self._refusal())
+
+    def test_a_header_of_no_known_layout_names_the_three_layouts(self):
+        for text in ("a,b\n1,2\n", "Incident name,Status\nx,Active\n"):
+            with self.subTest(text):
+                self.path.write_text(text)
+                self.assertEqual(self._refusal(),
+                                 f"{self.path}: not a Defender queue export, a Splunk search "
+                                 "export or a file with meerkat's columns IncidentId, Timestamp "
+                                 "and DetectorId")
+
+    def test_a_classification_word_outside_meerkats_three_is_refused(self):
+        write_csv(self.path, (self._row(IncidentGrade="truePositive"),))
         self.assertEqual(self._refusal(),
-                         f"{self.path}: missing column IncidentId, Timestamp, DetectorId")
-        self.path.write_text("a,b\n1,2\n")
-        self.assertEqual(self._refusal(),
-                         f"{self.path}: missing column IncidentId, Timestamp, DetectorId")
+                         f"{self.path}: IncidentGrade 'truePositive' is not one of "
+                         "TruePositive, BenignPositive, FalsePositive")
 
     def test_a_blank_organisation_does_not_count_as_one(self):
         rows = (self._row(), self._row(IncidentId="300", OrgId=""),
                 self._row(IncidentId="301", OrgId=" "))
-        incidents = read_incidents(write_csv(self.path, rows), DEFENDER)
+        incidents = read_file(write_csv(self.path, rows))
         self.assertEqual(sorted(incidents["IncidentId"]), ["200", "300", "301"])
 
     def test_many_rows(self):
         rows = [self._row(IncidentId=str(n % 20_000), AlertId=str(n),
                           IpAddress=f"10.0.{n % 250}.{n % 199}")
                 for n in range(100_000)]
-        incidents = read_incidents(write_csv(self.path, rows), DEFENDER)
+        incidents = read_file(write_csv(self.path, rows))
         self.assertEqual(len(incidents), 20_000)
 
 

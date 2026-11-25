@@ -107,12 +107,11 @@ dd { margin: 0; overflow-wrap: anywhere; }
   <span id="notice" aria-live="polite"></span>
   <span class="right">
     <span id="listed" class="soft"></span>
-    <label class="soft">Source <select id="mapping"></select></label>
     <input id="search" type="search" aria-label="Search" placeholder="Search">
   </span>
 </div>
 <div id="filters"></div>
-<input id="file" type="file" accept=".csv,text/csv,.json,application/json" hidden>
+<input id="file" type="file" accept=".csv,text/csv" hidden>
 <main>
   <div class="panel"><table>
     <thead><tr id="head"></tr></thead>
@@ -172,13 +171,6 @@ function tags(row) {
   }
   if (row.members.length) found.push(["Group", `Group of ${row.members.length + 1}`]);
   return found;
-}
-
-function remembered(name, value) {
-  try {
-    if (value !== undefined) localStorage.setItem(name, value);
-    return localStorage.getItem(name);
-  } catch { return null; }
 }
 
 async function call(path, body) {
@@ -244,8 +236,7 @@ async function upload(file) {
   say(`Loading ${file.name}`);
   try {
     const answer = await fetch("/api/load", { method: "POST", body: file, headers: {
-      "X-Meerkat-Token": TOKEN, "X-Meerkat-File": encodeURIComponent(file.name),
-      "X-Meerkat-Mapping": document.getElementById("mapping").value } });
+      "X-Meerkat-Token": TOKEN, "X-Meerkat-File": encodeURIComponent(file.name) } });
     const value = await answer.json();
     if (!answer.ok) throw new Error(value.error);
     say();
@@ -257,9 +248,6 @@ async function upload(file) {
 async function load(keep) {
   const record = await call("/api/queue");
   state.record = record;
-  const mapping = document.getElementById("mapping");
-  mapping.replaceChildren(...record.mappings.map(name => el("option", name)));
-  if (record.mappings.includes(remembered("mapping"))) mapping.value = remembered("mapping");
   const empty = record.queue === null;
   for (const id of ["counts", "filters", "refresh", "bulk", "search", "listed"]) {
     document.getElementById(id).hidden = empty;
@@ -643,7 +631,6 @@ document.getElementById("bulk").addEventListener("click", () => {
   state.closed = false;
   showChecked();
 });
-document.getElementById("mapping").addEventListener("change", event => remembered("mapping", event.target.value));
 document.getElementById("file").addEventListener("change", event => {
   upload(event.target.files[0]);
   event.target.value = "";

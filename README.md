@@ -56,34 +56,20 @@ of 35.
 
 ## Your own data
 
-Meerkat reads a CSV with one row per alert, for one organisation, with
-ISO 8601 times. It needs three columns: an incident id, a time and a rule id.
-A classification column gives it history. Columns for devices, accounts,
-addresses, files and URLs feed the similar incident inputs; without them the
-score uses rule and organisation history only. The default column names are
-those of the GUIDE dataset.
-
-`--mapping` names the columns and classification words of another source. The
-presets are `defender`, `sentinel` and `splunk`, or give a TOML file:
+Meerkat reads three kinds of CSV and tells them apart by their header: the
+incident queue export of the Microsoft Defender portal, which also holds
+Microsoft Sentinel incidents; a Splunk Enterprise Security search export with
+the notable event fields `rule_id`, `_time` and `rule_name`, and optionally
+`rule_title`, `security_domain`, `disposition_label`, `src`, `dest` and
+`user`; and meerkat's own columns, those of the GUIDE dataset, `IncidentId`,
+`Timestamp` and `DetectorId`, with `IncidentGrade` for history. A word or
+column meerkat does not know stops the load with its name and row. Devices,
+accounts, addresses, files and URLs feed the similar incident inputs; without
+them the score uses rule and organisation history only.
 
 ```bash
-meerkat queue export.csv --mapping sentinel
-meerkat queue export.csv --mapping site.toml
+meerkat queue incidents-queue-20261125.csv
 ```
-
-```toml
-[columns]
-IncidentId = "case_id"
-Timestamp = "opened_at"
-DetectorId = "rule"
-IncidentGrade = "outcome"
-
-[classifications]
-TruePositive = ["confirmed"]
-open = ["new", "in progress"]
-```
-
-A column or classification left out keeps its default name.
 
 ## How it works
 
@@ -101,9 +87,10 @@ reproduces both figures.
   criticality.
 - It was measured on GUIDE, one vendor's data from 2024, and not in a live SOC.
 - The sample is small at a small budget, so the interval is wide.
-- The `sentinel` and `splunk` presets were written from vendor documentation
-  and have not read a real export. Sentinel's `SecurityIncident` table has no
-  entity columns, so that preset gives rule and organisation history only.
+- The Defender reader was written from the portal's code and one real export
+  with no classified incident. The Splunk reader was tested on rows built in a
+  local Splunk without Enterprise Security. Neither has read a classified export
+  from a live SOC. The Defender export lists devices and accounts only.
 
 ## Scripts
 
@@ -169,7 +156,6 @@ meerkat classify --file examples/classifications.csv
 | `--all` | `queue` | Also lists the rows below the budget. |
 | `--limit N` | `queue` | Prints the first N rows. |
 | `--run ID` | `queue`, `details` | Only the incidents of one run. |
-| `--mapping NAME_OR_PATH` | `queue FILE`, `serve FILE` | Column names of the file, see above. |
 | `--group` | `classify` | Classifies the whole group. |
 | `--comment TEXT` | `classify` | Text stored with the classification. |
 | `--json` | `queue`, `details`, `runs`, `budget` | Machine readable output. |

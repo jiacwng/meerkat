@@ -24,7 +24,7 @@ meerkat = "meerkat.cli:main"
 packages = ["core", "meerkat"]
 
 [tool.setuptools.package-data]
-core = ["data/*.json", "data/mappings/*.toml", "data/queries/*"]
+core = ["data/*.json"]
 meerkat = ["page.html"]
 
 [tool.ruff]

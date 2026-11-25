@@ -1,4 +1,4 @@
-# The meerkat command line: queue, query, classify, details, runs, config, budget and serve.
+# The meerkat command line: queue, classify, details, runs, config, budget and serve.
 
 import argparse
 import json
@@ -10,7 +10,6 @@ from pathlib import Path
 from meerkat import __version__
 
 EXIT_ERROR = 1
-QUERIES = Path(__file__).parent.parent / "core" / "data" / "queries"
 STYLES = {"dim": "2", "cyan": "36", "red": "31"}
 CLASSIFICATION_CODES = {
     "tp": "TruePositive",
@@ -24,8 +23,6 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.command == "queue" and args.file is not None and args.run is not None:
         parser.error("queue takes a FILE or --run, not both")
-    if args.command in ("queue", "serve") and args.file is None and args.mapping is not None:
-        parser.error("--mapping needs FILE")
     if args.command == "classify":
         if args.file is None and (args.incident is None or args.classification is None):
             parser.error("classify takes INCIDENT and CLASSIFICATION, or --file")
@@ -42,7 +39,6 @@ def main(argv: list[str] | None = None) -> None:
 
     # pandas loads here so that --help and --version stay instant
     from core.incidents import IncidentError
-    from core.mapping import MappingError
     from core.store import StoreError
 
     try:
@@ -51,7 +47,7 @@ def main(argv: list[str] | None = None) -> None:
     except BrokenPipeError:
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         raise SystemExit(EXIT_ERROR) from None
-    except (IncidentError, MappingError, StoreError, OSError) as error:
+    except (IncidentError, StoreError, OSError) as error:
         print(f"meerkat: error: {_printable(str(error))}", file=sys.stderr)
         raise SystemExit(EXIT_ERROR) from None
 
@@ -66,23 +62,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     queue = sub.add_parser("queue", help="score a file of incidents, or reopen a run")
     queue.add_argument("file", nargs="?", type=Path, metavar="FILE",
-                       help="incident CSV or Defender JSON to score and save as a new run")
+                       help="incident CSV to score and save as a new run: a Defender queue "
+                            "export, a Splunk search export or meerkat's columns")
     shown = queue.add_mutually_exclusive_group()
     shown.add_argument("--limit", type=_positive, metavar="N", help="only the first N rows")
     shown.add_argument("--all", action="store_true",
                        help="also the incidents below the budget")
-    _add_mapping(queue)
     _add_run(queue)
     _add_json(queue)
     _add_runs_dir(queue)
     queue.set_defaults(handler=_queue)
-
-    query = sub.add_parser("query", help="print the saved query that exports a SIEM's "
-                                         "incidents as a file meerkat reads")
-    query.add_argument("source", choices=sorted(path.stem for path in QUERIES.iterdir()),
-                       metavar="SOURCE", help="defender (Microsoft Defender XDR, PowerShell) or "
-                                               "sentinel (Microsoft Sentinel, KQL)")
-    query.set_defaults(handler=_query)
 
     classify = sub.add_parser("classify", help="record the classification of an incident, "
                                                "or a file of classifications")
@@ -130,8 +119,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     serve = sub.add_parser("serve", help="open the queue as a web page on this machine")
     serve.add_argument("file", nargs="?", type=Path, metavar="FILE",
-                       help="incident CSV or Defender JSON to score and save as a new run first")
-    _add_mapping(serve)
+                       help="incident CSV to score and save as a new run first")
     serve.add_argument("--max-file-mb", type=_positive, default=200, metavar="N",
                        help="largest file the page may load, in megabytes (default 200)")
     serve.add_argument("--no-browser", action="store_true",
@@ -141,12 +129,6 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_runs_dir(serve)
     serve.set_defaults(handler=_serve)
     return parser
-
-
-def _add_mapping(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--mapping", metavar="NAME_OR_PATH",
-                        help="column names and classification words of FILE: defender, "
-                             "sentinel, splunk or a TOML file (default defender)")
 
 
 def _add_run(parser: argparse.ArgumentParser) -> None:
@@ -199,11 +181,6 @@ def _share(text: str) -> float:
 SETTINGS = {"budget": _budget, "sample_share": _share}
 
 
-def _query(args: argparse.Namespace) -> None:
-    found = next(path for path in QUERIES.iterdir() if path.stem == args.source)
-    sys.stdout.write(found.read_text(encoding="utf-8"))
-
-
 def _queue(args: argparse.Namespace) -> None:
     from core import store
     from meerkat import records
@@ -213,8 +190,7 @@ def _queue(args: argparse.Namespace) -> None:
     settings = records.settings(args.runs_dir)
     limit = settings["budget"]
     if args.file is not None:
-        scored, run = records.load(args.runs_dir, args.file, args.file.name,
-                                   args.mapping or "defender")
+        scored, run = records.load(args.runs_dir, args.file, args.file.name)
     else:
         if args.run is not None:
             _, in_run = store.load_run(args.runs_dir, args.run)
@@ -454,7 +430,7 @@ def _serve(args: argparse.Namespace) -> None:
     from meerkat import records, web
 
     if args.file is not None:
-        records.load(args.runs_dir, args.file, args.file.name, args.mapping or "defender")
+        records.load(args.runs_dir, args.file, args.file.name)
     web.serve(args.runs_dir, args.port, args.max_file_mb, not args.no_browser)
 
 
