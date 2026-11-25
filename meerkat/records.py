@@ -5,7 +5,8 @@ from pathlib import Path
 import pandas as pd
 
 from core import budget, features, groups, rank, store
-from core.incidents import CLASSIFICATIONS, LINKS, SEPARATOR
+from core.incidents import CLASSIFICATIONS, LINKS, SEPARATOR, read_incidents
+from core.mapping import load_mapping
 
 SIMILAR_SHOWN = ("IncidentId", "IncidentGrade", "Timestamp", "DetectorId", "AlertTitle")
 HOST = ("DeviceName", "DeviceId")
@@ -19,6 +20,47 @@ def settings(runs_dir: Path) -> dict:
 
 def scored(runs_dir: Path, incoming: pd.DataFrame | None = None) -> pd.DataFrame:
     return rank.score(store.load_history(runs_dir, incoming))
+
+
+def load(runs_dir: Path, path: Path, file: str, mapping_name: str) -> tuple[pd.DataFrame, str]:
+    mapping = load_mapping(mapping_name)
+    incoming = read_incidents(path, mapping)
+    scores = scored(runs_dir, incoming)
+    run = store.save_run(runs_dir, incoming, file, mapping.name)["run"]
+    draw_sample(runs_dir, run, settings(runs_dir), scores)
+    return scores, run
+
+
+def draw_sample(runs_dir: Path, run: str, chosen: dict, scores: pd.DataFrame) -> None:
+    if chosen["budget"] is None or store.has_sample(runs_dir, run):
+        return
+    opened = scores.loc[scores["IncidentGrade"] == "", "IncidentId"].tolist()
+    samples = store.read_samples(runs_dir)
+    lead = groups.leads(scores, budget.drawn_ids(samples))
+    sample = budget.draw(opened, chosen["budget"], chosen["sample_share"], samples, lead)
+    if sample["pool"]:
+        store.save_sample(runs_dir, run, sample)
+
+
+def change_setting(runs_dir: Path, name: str, value: float | None,
+                   scores: pd.DataFrame | None = None) -> None:
+    saved = store.read_settings(runs_dir)
+    if value is None:
+        saved.pop(name, None)
+    else:
+        saved[name] = value
+    runs = store.list_runs(runs_dir)
+    if runs and scores is None:
+        scores = scored(runs_dir)
+    store.write_settings(runs_dir, saved)
+    if runs:
+        # the newest sample is drawn again unless one of its rows is already classified
+        newest = runs[-1]["run"]
+        classified = set(scores.loc[scores["IncidentGrade"] != "", "IncidentId"])
+        if (store.has_sample(runs_dir, newest)
+                and not classified & set(store.read_samples(runs_dir)[-1]["drawn"])):
+            store.drop_sample(runs_dir, newest)
+        draw_sample(runs_dir, newest, settings(runs_dir), scores)
 
 
 def placed(runs_dir: Path, scores: pd.DataFrame,
@@ -45,15 +87,21 @@ def queue(runs_dir: Path, scores: pd.DataFrame, chosen: dict, run: str | None = 
                        "IncidentId"]
     sampled = budget.estimate(samples, classifications, set(unread))
     waiting = opened.loc[opened["placement"] == "below budget", "Timestamp"]
+    missed = budget.not_sampled(found, samples)
+    interval = sampled["tp_below_budget"]
+    if interval is not None:
+        interval = {**interval, "of": len(unread) - missed} if len(unread) > missed else None
+    files = {meta["run"]: meta["file"] for meta in store.list_runs(runs_dir)}
     return {
+        "file": files[run] if run is not None else list(files.values())[-1],
         "below_oldest": waiting.min() if len(waiting) else None,
         "run": run, "open": len(opened), "grouped": len(opened) - len(rows),
         "budget": chosen["budget"], "sample_share": chosen["sample_share"],
         "to_read": int((~under).sum()), "below_budget": int(under.sum()),
         "sample": {"drawn": sampled["drawn"], "classified": sampled["classified"],
                    "true_positive": sampled["true_positive"],
-                   "not_sampled": budget.not_sampled(found, samples)},
-        "tp_below_budget": sampled["tp_below_budget"],
+                   "not_sampled": missed},
+        "tp_below_budget": interval,
         "classifications": list(CLASSIFICATIONS), "links": list(LINKS),
         "queue": [{**as_record(row, position), "host": _first(together[row["group_lead"]], HOST),
                    "user": _first(together[row["group_lead"]], USER), "flag": _flag(row),

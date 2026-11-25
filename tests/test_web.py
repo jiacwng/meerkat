@@ -1,4 +1,4 @@
-# The web page's server: the page, its three JSON routes and the requests it refuses.
+# The web page's server: the page, its five JSON routes and the requests it refuses.
 
 import contextlib
 import http.client
@@ -24,22 +24,28 @@ class WebTests(unittest.TestCase):
         tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.runs_dir = tmp / "runs"
         rows = (*ROWS[:-1], (*ROWS[-1][:5], HOSTILE, *ROWS[-1][6:]))
-        source = write_csv(tmp / "incidents.csv", rows)
+        self.source = write_csv(tmp / "incidents.csv", rows)
+        self.empty_dir = tmp / "empty"
         with contextlib.redirect_stdout(io.StringIO()):
-            main(["queue", str(source), "--runs-dir", str(self.runs_dir)])
-        self.server = web.make_server(self.runs_dir, 0)
-        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+            main(["queue", str(self.source), "--runs-dir", str(self.runs_dir)])
+        self.server = self._serve(self.runs_dir)
+
+    def _serve(self, runs_dir: Path):
+        server = web.make_server(runs_dir, 0, 1)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(thread.join)
-        self.addCleanup(self.server.server_close)
-        self.addCleanup(self.server.shutdown)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return server
 
-    def _request(self, method: str, path: str, body: dict | str | None = None,
-                 token: bool = True, host: str | None = None) -> tuple[int, dict, str]:
+    def _request(self, method: str, path: str, body: dict | str | bytes | None = None,
+                 token: bool = True, host: str | None = None,
+                 headers: dict | None = None) -> tuple[int, dict, str]:
         port = self.server.server_port
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
         self.addCleanup(connection.close)
-        headers = {"Host": host or f"127.0.0.1:{port}"}
+        headers = {"Host": host or f"127.0.0.1:{port}", **(headers or {})}
         if token:
             headers[web.TOKEN_HEADER] = self.server.token
         if isinstance(body, dict):
@@ -123,6 +129,80 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self._request("GET", "/api/incident?id=999")[0], 404)
         self.assertEqual(self._request("GET", "/api/other")[0], 404)
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
+
+    def test_a_budget_typed_in_the_page_is_saved_and_splits_the_queue(self):
+        status, _, body = self._request("POST", "/api/budget", {"budget": 2})
+        self.assertEqual((status, json.loads(body)), (200, {"budget": 2}))
+        record = json.loads(self._request("GET", "/api/queue")[2])
+        self.assertEqual((record["budget"], record["to_read"], record["below_budget"]), (2, 2, 1))
+        self.assertEqual(json.loads((self.runs_dir / "settings.json").read_text()), {"budget": 2})
+        self.assertEqual(self._request("POST", "/api/budget", {"budget": None})[0], 200)
+        record = json.loads(self._request("GET", "/api/queue")[2])
+        self.assertEqual((record["budget"], record["to_read"]), (None, 3))
+
+    def test_a_wrong_budget_is_refused_and_nothing_is_saved(self):
+        for wrong in ({"budget": 0}, {"budget": -3}, {"budget": 2.5}, {"budget": "3"},
+                      {"budget": True}, {"size": 3}, "not json", "x" * (web.BODY_LIMIT + 1)):
+            with self.subTest(wrong):
+                self.assertEqual(self._request("POST", "/api/budget", wrong)[0], 400)
+        self.assertEqual(self._request("POST", "/api/budget", {"budget": 2}, token=False)[0], 403)
+        self.assertFalse((self.runs_dir / "settings.json").exists())
+
+    def test_the_queue_route_names_the_file_and_the_sample_behind_the_estimate(self):
+        self._request("POST", "/api/budget", {"budget": 2})
+        record = json.loads(self._request("GET", "/api/queue")[2])
+        self.assertEqual(record["file"], "incidents.csv")
+        self.assertEqual(record["sample"]["drawn"], 1)
+        self.assertIsNone(record["tp_below_budget"])
+        sampled = next(row["IncidentId"] for row in record["queue"] if row["flag"] == "sample")
+        self._request("POST", "/api/classify",
+                      {"incident": sampled, "classification": "FalsePositive"})
+        record = json.loads(self._request("GET", "/api/queue")[2])
+        self.assertEqual(record["sample"]["classified"], 1)
+
+    def test_a_page_with_no_run_loads_a_file_and_lists_its_queue(self):
+        self.server = self._serve(self.empty_dir)
+        record = json.loads(self._request("GET", "/api/queue")[2])
+        self.assertEqual((record["queue"], record["mappings"], record["max_file_bytes"]),
+                         (None, ["defender", "sentinel", "splunk"], 1024 * 1024))
+        sent = {web.FILE_HEADER: "C%3A%5Cexports%5Ctoday.csv", web.MAPPING_HEADER: "defender"}
+        status, _, body = self._request("POST", "/api/load", self.source.read_bytes(),
+                                        headers=sent)
+        self.assertEqual(status, 200, body)
+        record = json.loads(self._request("GET", "/api/queue")[2])
+        self.assertEqual([row["IncidentId"] for row in record["queue"]], ["201", "202", "200"])
+        self.assertEqual(record["file"], "today.csv")
+        self.assertEqual(self._request("POST", "/api/load", self.source.read_bytes(),
+                                       headers=sent)[0], 200)
+        self.assertEqual(len(list(self.empty_dir.glob("*/meta.json"))), 1)
+
+    def test_a_file_that_cannot_be_read_is_refused_under_its_own_name(self):
+        self.server = self._serve(self.empty_dir)
+        sent = {web.FILE_HEADER: "notes.csv", web.MAPPING_HEADER: "defender"}
+        for body in (b"", b"a,b\n1,2\n", b"\xff\xfe\x00", b'"open quote'):
+            with self.subTest(body):
+                status, _, answer = self._request("POST", "/api/load", body, headers=sent)
+                self.assertEqual(status, 400, answer)
+                self.assertIn("notes.csv", json.loads(answer)["error"])
+        for mapping in ("", "../defender", str(self.source)):
+            with self.subTest(mapping):
+                sent = {web.FILE_HEADER: "notes.csv", web.MAPPING_HEADER: mapping}
+                self.assertEqual(self._request("POST", "/api/load", self.source.read_bytes(),
+                                               headers=sent)[0], 400)
+        self.assertEqual(self._request("POST", "/api/load", self.source.read_bytes(),
+                                       headers=sent, token=False)[0], 403)
+        self.assertFalse(self.empty_dir.exists())
+
+    def test_a_file_above_the_size_limit_is_refused_before_it_is_read(self):
+        port = self.server.server_port
+        with socket.create_connection(("127.0.0.1", port), timeout=60) as raw:
+            raw.sendall((f"POST /api/load HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+                         f"{web.TOKEN_HEADER}: {self.server.token}\r\n"
+                         f"{web.MAPPING_HEADER}: defender\r\n"
+                         f"Content-Length: {1024 * 1024 + 1}\r\n\r\n").encode())
+            answer = b"".join(iter(lambda: raw.recv(65536), b"")).decode()
+        self.assertIn("413", answer.splitlines()[0])
+        self.assertIn("--max-file-mb", answer)
 
     def test_a_connection_that_sends_nothing_does_not_hold_the_other_requests(self):
         idle = socket.create_connection(("127.0.0.1", self.server.server_port))

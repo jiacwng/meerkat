@@ -28,9 +28,11 @@ header h1 { font-size: 15px; margin: 0 8px 0 0; align-self: center; }
         background: var(--cell); border-radius: 4px; min-width: 64px; }
 .stat span { font-size: 11px; color: var(--soft); }
 .stat b { font-size: 15px; font-weight: 600; }
+.stat input { width: 72px; padding: 0 4px; font: 600 15px ui-monospace, monospace; }
+#loader { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 #bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 14px; }
-input { font: inherit; color: var(--text); background: var(--panel);
-        border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; }
+input, select { font: inherit; color: var(--text); background: var(--panel);
+                border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; }
 #search { width: 280px; }
 #keys { margin-left: auto; color: var(--soft); }
 #keys span { margin-left: 12px; }
@@ -81,6 +83,7 @@ button:hover { background: var(--cell); }
 </head>
 <body>
 <header><h1>meerkat</h1></header>
+<input id="file" type="file" accept=".csv,text/csv" hidden>
 <div id="bar">
   <input id="search" type="search" aria-label="filter" placeholder="filter">
   <label><input id="all" type="checkbox"> <span id="all-label">show below budget</span></label>
@@ -153,9 +156,74 @@ async function call(path, body) {
   return value;
 }
 
+function remembered(name, value) {
+  try {
+    if (value !== undefined) localStorage.setItem(name, value);
+    return localStorage.getItem(name);
+  } catch { return null; }
+}
+
+function loader(record) {
+  const box = el("div"), pick = el("button", "load file"), mapping = el("select");
+  box.id = "loader";
+  mapping.id = "mapping";
+  mapping.setAttribute("aria-label", "mapping");
+  for (const name of record.mappings) mapping.append(el("option", name));
+  if (record.mappings.includes(remembered("mapping"))) mapping.value = remembered("mapping");
+  mapping.addEventListener("change", () => remembered("mapping", mapping.value));
+  pick.addEventListener("click", () => document.getElementById("file").click());
+  box.append(pick, mapping);
+  return box;
+}
+
+function budgetStat(record) {
+  const box = el("div", undefined, "stat"), field = el("input");
+  field.id = "budget";
+  field.type = "number";
+  field.min = "1";
+  field.setAttribute("aria-label", "budget");
+  field.value = record.budget ?? "";
+  field.addEventListener("change", async () => {
+    const notice = document.getElementById("notice");
+    notice.replaceChildren();
+    try { await call("/api/budget", { budget: field.value.trim() === "" ? null : Number(field.value) }); }
+    catch (error) { notice.replaceChildren(error.message); }
+    load(state.picked).catch(error => notice.replaceChildren(error.message));
+  });
+  box.append(el("span", "budget"), field);
+  return box;
+}
+
+async function upload(file) {
+  const notice = document.getElementById("notice");
+  if (!file || !state.record) return;
+  if (file.size > state.record.max_file_bytes) {
+    notice.replaceChildren(`${file.name}: larger than ${state.record.max_file_bytes / 1048576} MB`);
+    return;
+  }
+  notice.replaceChildren(`loading ${file.name}`);
+  try {
+    const answer = await fetch("/api/load", { method: "POST", body: file, headers: {
+      "X-Meerkat-Token": TOKEN, "X-Meerkat-File": encodeURIComponent(file.name),
+      "X-Meerkat-Mapping": document.getElementById("mapping").value } });
+    const value = await answer.json();
+    if (!answer.ok) throw new Error(value.error);
+    notice.replaceChildren();
+    state.viewing = null;
+    await load(null);
+  } catch (error) { notice.replaceChildren(error.message); }
+}
+
 async function load(keep) {
   const record = await call("/api/queue");
   state.record = record;
+  document.getElementById("search").hidden = record.queue === null;
+  document.getElementById("all").parentElement.hidden = record.queue === null;
+  if (record.queue === null) {
+    document.querySelector("header").replaceChildren(el("h1", "meerkat"), loader(record));
+    for (const id of ["head", "rows", "detail", "keys"]) document.getElementById(id).replaceChildren();
+    return;
+  }
   state.columns = COLUMNS.filter(([name]) => name !== "severity" || record.queue.some(row => row.Severity));
   document.getElementById("head").replaceChildren(...state.columns.map(([name]) => el("th", name)));
   state.keys = Object.fromEntries(record.classifications.map(name => [name[0].toLowerCase(), name]));
@@ -165,11 +233,15 @@ async function load(keep) {
                 ...record.links.map(name => row[name])].join(" ").toLowerCase();
   }
   const header = document.querySelector("header");
-  const stats = [stat("open", record.open), stat("budget", record.budget ?? "none")];
+  const stats = [stat("file", record.file), stat("open", record.open), budgetStat(record)];
   if (record.budget !== null) {
-    stats.push(stat("to read", record.to_read), stat("below budget", record.below_budget));
+    const interval = record.tp_below_budget;
+    stats.push(stat("to read", record.to_read), stat("below budget", record.below_budget),
+               stat("sample", `${record.sample.classified} of ${record.sample.drawn} classified`),
+               stat("TP below budget, 95% interval",
+                    interval ? `${interval.low} to ${interval.high} of ${interval.of}` : "not estimated"));
   }
-  header.replaceChildren(el("h1", "meerkat"), ...stats);
+  header.replaceChildren(el("h1", "meerkat"), ...stats, loader(record));
   document.getElementById("all-label").textContent = `show below budget ${record.below_budget}`;
   const keys = document.getElementById("keys");
   keys.replaceChildren();
@@ -181,6 +253,7 @@ async function load(keep) {
 }
 
 function draw(keep) {
+  if (!state.record || state.record.queue === null) return;
   const words = document.getElementById("search").value.toLowerCase().split(/\s+/).filter(Boolean);
   const matching = state.record.queue.filter(row => words.every(word => row.text.includes(word)));
   const all = document.getElementById("all").checked;
@@ -377,7 +450,8 @@ function step(by) {
 }
 
 document.addEventListener("keydown", event => {
-  if (event.target.tagName === "INPUT" && event.target.type !== "checkbox") {
+  if (event.target.tagName === "SELECT"
+      || (event.target.tagName === "INPUT" && event.target.type !== "checkbox")) {
     if (event.key !== "Escape") return;
     if (event.target.id === "search") { event.target.value = ""; draw(state.picked); }
     event.target.blur();
@@ -392,6 +466,15 @@ document.addEventListener("keydown", event => {
   }
 });
 document.getElementById("search").addEventListener("input", () => draw(state.picked));
+document.getElementById("file").addEventListener("change", event => {
+  upload(event.target.files[0]);
+  event.target.value = "";
+});
+document.addEventListener("dragover", event => event.preventDefault());
+document.addEventListener("drop", event => {
+  event.preventDefault();
+  upload(event.dataTransfer.files[0]);
+});
 document.getElementById("all").addEventListener("change", () => draw(state.picked));
 load(null).catch(error => { document.getElementById("notice").textContent = error.message; });
 </script>

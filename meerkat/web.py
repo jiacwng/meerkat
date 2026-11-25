@@ -1,14 +1,18 @@
-# The queue as a web page: one HTML file and three JSON routes, served on this machine only.
+# The queue as a web page: one HTML file and five JSON routes, served on this machine only.
 
 import json
 import secrets
+import tempfile
 import threading
+import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
-from core.incidents import CLASSIFICATIONS
+from core import store
+from core.incidents import CLASSIFICATIONS, IncidentError
+from core.mapping import PRESETS, MappingError
 from core.store import StoreError
 from meerkat import records
 
@@ -16,11 +20,16 @@ PAGE = Path(__file__).parent / "page.html"
 HOST = "127.0.0.1"
 BODY_LIMIT = 4096
 TOKEN_HEADER = "X-Meerkat-Token"
+FILE_HEADER = "X-Meerkat-File"
+MAPPING_HEADER = "X-Meerkat-Mapping"
 
 
-def serve(runs_dir: Path, port: int) -> None:
-    server = make_server(runs_dir, port)
-    print(f"meerkat is on http://{HOST}:{server.server_port}  (Ctrl+C stops it)", flush=True)
+def serve(runs_dir: Path, port: int, max_file_mb: int, browser: bool) -> None:
+    server = make_server(runs_dir, port, max_file_mb)
+    address = f"http://{HOST}:{server.server_port}"
+    print(f"meerkat is on {address}  (Ctrl+C stops it)", flush=True)
+    if browser:
+        webbrowser.open(address)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -29,9 +38,10 @@ def serve(runs_dir: Path, port: int) -> None:
         server.server_close()
 
 
-def make_server(runs_dir: Path, port: int) -> ThreadingHTTPServer:
+def make_server(runs_dir: Path, port: int, max_file_mb: int) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((HOST, port), _Handler)
     server.runs_dir = runs_dir
+    server.max_file_bytes = max_file_mb * 1024 * 1024
     server.lock = threading.Lock()
     server.token = secrets.token_urlsafe(32)
     server.scored = (None, None)
@@ -39,7 +49,8 @@ def make_server(runs_dir: Path, port: int) -> ThreadingHTTPServer:
 
 
 def _version(runs_dir: Path) -> tuple:
-    files = (path for path in runs_dir.rglob("*") if path.is_file())
+    files = (path for path in runs_dir.rglob("*") if path.is_file()
+             and path.name not in (store.SETTINGS_FILE, store.SAMPLE_FILE))
     return tuple(sorted((str(path), path.stat().st_mtime_ns, path.stat().st_size)
                         for path in files))
 
@@ -64,10 +75,14 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._local() or not self._trusted():
             self._json(HTTPStatus.FORBIDDEN, {"error": "missing or wrong token"})
-        elif urlsplit(self.path).path != "/api/classify":
-            self._json(HTTPStatus.NOT_FOUND, {"error": "no such page"})
-        else:
+        elif urlsplit(self.path).path == "/api/classify":
             self._classify()
+        elif urlsplit(self.path).path == "/api/budget":
+            self._budget()
+        elif urlsplit(self.path).path == "/api/load":
+            self._load()
+        else:
+            self._json(HTTPStatus.NOT_FOUND, {"error": "no such page"})
 
     # a page on another site can reach this port, but it cannot send this host name or read the token
     def _local(self) -> bool:
@@ -87,18 +102,73 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _queue(self) -> dict:
         runs_dir = self.server.runs_dir
-        return records.queue(runs_dir, self._scores(), records.settings(runs_dir))
+        page = {"mappings": list(PRESETS), "max_file_bytes": self.server.max_file_bytes}
+        if not store.list_runs(runs_dir):
+            return {**page, "queue": None}
+        return {**page, **records.queue(runs_dir, self._scores(), records.settings(runs_dir))}
 
-    def _classify(self) -> None:
+    def _read(self, limit: int) -> bytes | None:
         try:
             size = int(self.headers.get("Content-Length", ""))
         except ValueError:
             size = -1
-        if not 0 <= size <= BODY_LIMIT:
+        if not 0 <= size <= limit:
+            self.close_connection = True
+            return None
+        return self.rfile.read(size)
+
+    def _load(self) -> None:
+        mapping = self.headers.get(MAPPING_HEADER, "")
+        if mapping not in PRESETS:
+            self.close_connection = True
+            self._json(HTTPStatus.BAD_REQUEST, {"error": f"mapping is one of {', '.join(PRESETS)}"})
+            return
+        body = self._read(self.server.max_file_bytes)
+        if body is None:
+            megabytes = self.server.max_file_bytes // (1024 * 1024)
+            self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                       {"error": f"the file is larger than {megabytes} MB, see --max-file-mb"})
+            return
+        name = Path(unquote(self.headers.get(FILE_HEADER, "")).replace("\\", "/")).name
+        name = "".join(ch for ch in name if ch.isprintable()) or "incidents.csv"
+        self._answer(lambda: self._keep(body, name, mapping))
+
+    def _keep(self, body: bytes, name: str, mapping: str) -> dict:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "incidents.csv"
+            path.write_bytes(body)
+            try:
+                _, run = records.load(self.server.runs_dir, path, name, mapping)
+            except IncidentError as error:
+                raise IncidentError(str(error).replace(str(path), name)) from None
+        return {"run": run}
+
+    def _budget(self) -> None:
+        body = self._read(BODY_LIMIT)
+        try:
+            chosen = json.loads(body)["budget"]
+        except (ValueError, KeyError, TypeError):
+            chosen = False
+        if chosen is not None and (isinstance(chosen, bool) or not isinstance(chosen, int)
+                                   or chosen < 1):
+            self._json(HTTPStatus.BAD_REQUEST,
+                       {"error": "budget is a whole number above 0, or null"})
+            return
+        self._answer(lambda: self._change(chosen))
+
+    def _change(self, chosen: int | None) -> dict:
+        runs_dir = self.server.runs_dir
+        scores = self._scores() if store.list_runs(runs_dir) else None
+        records.change_setting(runs_dir, "budget", chosen, scores)
+        return {"budget": chosen}
+
+    def _classify(self) -> None:
+        body = self._read(BODY_LIMIT)
+        if body is None:
             self._json(HTTPStatus.BAD_REQUEST, {"error": "the request body has no valid length"})
             return
         try:
-            body = json.loads(self.rfile.read(size))
+            body = json.loads(body)
             incident, classification = body["incident"], body["classification"]
             comment = body.get("comment", "")
             whole = body.get("group", False)
@@ -127,6 +197,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK, built)
         except StoreError as error:
             self._json(HTTPStatus.NOT_FOUND, {"error": str(error)})
+        except (IncidentError, MappingError) as error:
+            self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
 
     def _page(self) -> None:
         nonce = secrets.token_urlsafe(16)

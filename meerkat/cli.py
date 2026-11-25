@@ -23,7 +23,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.command == "queue" and args.file is not None and args.run is not None:
         parser.error("queue takes a FILE or --run, not both")
-    if args.command == "queue" and args.file is None and args.mapping is not None:
+    if args.command in ("queue", "serve") and args.file is None and args.mapping is not None:
         parser.error("--mapping needs FILE")
     if args.command == "classify":
         if args.file is None and (args.incident is None or args.classification is None):
@@ -70,9 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
     shown.add_argument("--limit", type=_positive, metavar="N", help="only the first N rows")
     shown.add_argument("--all", action="store_true",
                        help="also the incidents below the budget")
-    queue.add_argument("--mapping", metavar="NAME_OR_PATH",
-                       help="column names and classification words of FILE: defender, "
-                            "sentinel, splunk or a TOML file (default defender)")
+    _add_mapping(queue)
     _add_run(queue)
     _add_json(queue)
     _add_runs_dir(queue)
@@ -123,11 +121,24 @@ def _build_parser() -> argparse.ArgumentParser:
     report.set_defaults(handler=_budget_report)
 
     serve = sub.add_parser("serve", help="open the queue as a web page on this machine")
+    serve.add_argument("file", nargs="?", type=Path, metavar="FILE",
+                       help="incident CSV to score and save as a new run first")
+    _add_mapping(serve)
+    serve.add_argument("--max-file-mb", type=_positive, default=200, metavar="N",
+                       help="largest file the page may load, in megabytes (default 200)")
+    serve.add_argument("--no-browser", action="store_true",
+                       help="do not open the page in the default browser")
     serve.add_argument("--port", type=_port, default=0, metavar="N",
                        help="port to listen on (default: a free one)")
     _add_runs_dir(serve)
     serve.set_defaults(handler=_serve)
     return parser
+
+
+def _add_mapping(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--mapping", metavar="NAME_OR_PATH",
+                        help="column names and classification words of FILE: defender, "
+                             "sentinel, splunk or a TOML file (default defender)")
 
 
 def _add_run(parser: argparse.ArgumentParser) -> None:
@@ -180,42 +191,23 @@ def _share(text: str) -> float:
 SETTINGS = {"budget": _budget, "sample_share": _share}
 
 
-def _draw_sample(runs_dir: Path, run: str, settings: dict, scored) -> None:
-    from core import budget, groups, store
-
-    if settings["budget"] is None or store.has_sample(runs_dir, run):
-        return
-    opened = scored.loc[scored["IncidentGrade"] == "", "IncidentId"].tolist()
-    samples = store.read_samples(runs_dir)
-    lead = groups.leads(scored, budget.drawn_ids(samples))
-    sample = budget.draw(opened, settings["budget"], settings["sample_share"], samples, lead)
-    if sample["pool"]:
-        store.save_sample(runs_dir, run, sample)
-
-
 def _queue(args: argparse.Namespace) -> None:
     from core import store
-    from core.incidents import read_incidents
-    from core.mapping import load_mapping
     from meerkat import records
 
-    incoming = None
     run = None
     run_ids = None
-    if args.file is not None:
-        mapping = load_mapping("defender" if args.mapping is None else args.mapping)
-        incoming = read_incidents(args.file, mapping)
-    elif args.run is not None:
-        _, in_run = store.load_run(args.runs_dir, args.run)
-        run = args.run
-        run_ids = in_run["IncidentId"]
-
     settings = records.settings(args.runs_dir)
-    scored = records.scored(args.runs_dir, incoming)
     limit = settings["budget"]
-    if incoming is not None:
-        run = store.save_run(args.runs_dir, incoming, args.file.name, mapping.name)["run"]
-        _draw_sample(args.runs_dir, run, settings, scored)
+    if args.file is not None:
+        scored, run = records.load(args.runs_dir, args.file, args.file.name,
+                                   args.mapping or "defender")
+    else:
+        if args.run is not None:
+            _, in_run = store.load_run(args.runs_dir, args.run)
+            run = args.run
+            run_ids = in_run["IncidentId"]
+        scored = records.scored(args.runs_dir)
     record = records.queue(args.runs_dir, scored, settings, run, run_ids)
 
     reading = record["queue"][:record["to_read"]]
@@ -296,16 +288,15 @@ def _budget_report(args: argparse.Namespace) -> None:
         lines.append(("  to classify", ", ".join(waiting)))
     if sample["not_sampled"]:
         lines.append(("  not sampled",str(sample["not_sampled"])))
-    if interval is None:
+    if not sample["classified"]:
         estimated = "not estimated, 0 classified samples"
     elif unread == 0:
         estimated = "not estimated, 0 incidents below budget"
-    elif unread == sample["not_sampled"]:
+    elif interval is None:
         estimated = f"not estimated, {sample['not_sampled']} not sampled"
     else:
-        estimated = (f"{interval['low']} to {interval['high']} of "
-                     f"{unread - sample['not_sampled']}, 95% interval, "
-                     f"from {sample['classified']} classified")
+        estimated = (f"{interval['low']} to {interval['high']} of {interval['of']}, "
+                     f"95% interval, from {sample['classified']} classified")
     lines.append(("TP BELOW BUDGET", estimated))
     width = max(len(label) for label, _ in lines)
     for label, value in lines:
@@ -321,7 +312,6 @@ def _clock(timestamp: str) -> str:
 
 
 def _config(args: argparse.Namespace) -> None:
-    from core import store
     from meerkat import records
 
     settings = records.settings(args.runs_dir)
@@ -330,22 +320,7 @@ def _config(args: argparse.Namespace) -> None:
             print(_setting_line(name, value))
         return
 
-    saved = store.read_settings(args.runs_dir)
-    if args.value is None:
-        saved.pop(args.setting, None)
-    else:
-        saved[args.setting] = args.value
-    runs = store.list_runs(args.runs_dir)
-    if runs:
-        scored = records.scored(args.runs_dir)
-    store.write_settings(args.runs_dir, saved)
-    if runs:
-        newest = runs[-1]["run"]
-        classified = set(scored.loc[scored["IncidentGrade"] != "", "IncidentId"])
-        if (store.has_sample(args.runs_dir, newest)
-                and not classified & set(store.read_samples(args.runs_dir)[-1]["drawn"])):
-            store.drop_sample(args.runs_dir, newest)
-        _draw_sample(args.runs_dir, newest, records.settings(args.runs_dir), scored)
+    records.change_setting(args.runs_dir, args.setting, args.value)
     print(_setting_line(args.setting, args.value))
 
 
@@ -462,9 +437,11 @@ def _details(args: argparse.Namespace) -> None:
 
 
 def _serve(args: argparse.Namespace) -> None:
-    from meerkat import web
+    from meerkat import records, web
 
-    web.serve(args.runs_dir, args.port)
+    if args.file is not None:
+        records.load(args.runs_dir, args.file, args.file.name, args.mapping or "defender")
+    web.serve(args.runs_dir, args.port, args.max_file_mb, not args.no_browser)
 
 
 def _runs(args: argparse.Namespace) -> None:

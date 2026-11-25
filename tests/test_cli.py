@@ -562,13 +562,13 @@ class CliTests(unittest.TestCase):
         report = self._queue_json()
         self.assertEqual(report["sample"], {"drawn": 1, "classified": 1, "true_positive": 0,
                                             "not_sampled": 0})
-        self.assertEqual(report["tp_below_budget"], {"estimate": 0, "low": 0, "high": 6})
+        self.assertEqual(report["tp_below_budget"], {"estimate": 0, "low": 0, "high": 6, "of": 6})
 
     def test_a_true_positive_in_the_sample_raises_the_estimate(self):
         sampled = self._budget()
         self._run("classify", sampled, "tp")
         self.assertEqual(self._queue_json()["tp_below_budget"],
-                         {"estimate": 6, "low": 0, "high": 6})
+                         {"estimate": 6, "low": 0, "high": 6, "of": 6})
 
     def test_a_budget_above_the_open_incidents_reads_them_all(self):
         self.assertEqual(self._budget("25"), "")
@@ -680,6 +680,17 @@ class CliTests(unittest.TestCase):
             "SAMPLE                1 drawn, 1 classified, 0 TP",
             "  not sampled         2",
             "TP BELOW BUDGET       not estimated, 2 not sampled"])
+
+    def test_serve_with_a_file_saves_it_as_a_run_before_the_page_opens(self):
+        with mock.patch("meerkat.web.serve") as served:
+            code, out, err = self._run("serve", str(self.csv), "--no-browser")
+        self.assertEqual((code, out, err), (0, "", ""))
+        self.assertEqual([meta["file"] for meta in store.list_runs(self.runs_dir)],
+                         [self.csv.name])
+        served.assert_called_once_with(self.runs_dir, 0, 200, False)
+        code, out, err = self._run("serve", "--mapping", "sentinel")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("--mapping needs FILE", err)
 
     def test_config_prints_the_defaults_on_an_empty_runs_folder(self):
         code, out, err = self._run("config")
