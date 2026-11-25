@@ -66,7 +66,16 @@ def fetch(since: str | None) -> list[dict]:
     return found
 
 
-def incidents(found: list[dict]) -> pd.DataFrame:
+def incidents(found: list[dict]) -> tuple[pd.DataFrame, str | None]:
+    try:
+        updated = max((incident["lastUpdateDateTime"] for incident in found), default=None)
+        return _table(found), updated
+    except (KeyError, TypeError, AttributeError, ValueError) as error:
+        raise PullError(f"{GRAPH}: an incident is not as Microsoft Graph documents it "
+                        f"({error!r})") from None
+
+
+def _table(found: list[dict]) -> pd.DataFrame:
     rows = []
     for incident in found:
         for alert in incident.get("alerts") or []:
@@ -94,10 +103,6 @@ def incidents(found: list[dict]) -> pd.DataFrame:
     times = pd.to_datetime(table["Timestamp"], utc=True, format="ISO8601")
     table["Timestamp"] = times.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     return collapse(table)
-
-
-def latest(found: list[dict]) -> str:
-    return max(incident["lastUpdateDateTime"] for incident in found)
 
 
 def _value(evidence: dict, path: tuple[str, ...]) -> str:

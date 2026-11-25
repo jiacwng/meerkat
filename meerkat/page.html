@@ -210,8 +210,10 @@ function budgetCount(record) {
   field.value = record.budget ?? "";
   field.addEventListener("change", async () => {
     say();
-    try { await call("/api/budget", { budget: field.value.trim() === "" ? null : Number(field.value) }); }
-    catch (error) { say(error.message); }
+    try {
+      await call("/api/budget", { budget: field.value.trim() === "" ? null : Number(field.value) });
+      state.filters.budget = "within";
+    } catch (error) { say(error.message); }
     load(state.picked).catch(error => say(error.message));
   });
   box.append(el("b"), el("span", "Reading budget, rows"));

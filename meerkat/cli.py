@@ -203,8 +203,7 @@ def _pull(args: argparse.Namespace) -> None:
     from core import store
     from meerkat import defender, records
 
-    found = defender.fetch(store.read_cursor(args.runs_dir))
-    incoming = defender.incidents(found)
+    incoming, updated = defender.incidents(defender.fetch(store.read_cursor(args.runs_dir)))
     if incoming.empty:
         print(_summary("PULLED", {"incidents": 0}))
     else:
@@ -213,8 +212,8 @@ def _pull(args: argparse.Namespace) -> None:
         print(_summary("PULLED", {"incidents": len(incoming),
                                   "open": len(incoming) - classified,
                                   "classified": classified, "run": run}))
-    if found:
-        store.write_cursor(args.runs_dir, defender.latest(found))
+    if updated is not None:
+        store.write_cursor(args.runs_dir, updated)
 
 
 def _queue(args: argparse.Namespace) -> None:

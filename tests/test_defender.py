@@ -172,11 +172,24 @@ class DefenderTests(unittest.TestCase):
                  self._incident("2", "falsePositive", "2024-06-01T09:00:00Z",
                                 incidentWebUrl="javascript:alert(1)"),
                  self._incident("3", None, "2024-06-01T09:00:00Z", alerts=[])]
-        table = defender.incidents(found).set_index("IncidentId")
+        table = defender.incidents(found)[0].set_index("IncidentId")
         self.assertEqual(table["IncidentGrade"].to_dict(),
                          {"1": "BenignPositive", "2": "FalsePositive"})
         self.assertEqual(table["IncidentUrl"].to_dict(),
                          {"1": "https://security.example/incident2/1", "2": ""})
+
+    def test_an_answer_that_is_not_in_the_documented_shape_stops_the_pull(self):
+        good = self._incident("1", "unknown", "2024-06-01T09:00:00Z")
+        no_id = {name: value for name, value in good.items() if name != "id"}
+        undated = {name: value for name, value in good.items() if name != "lastUpdateDateTime"}
+        bad_time = {**good, "alerts": [{"detectorId": "7", "createdDateTime": "yesterday"}]}
+        for wrong in (no_id, undated, bad_time, {**good, "alerts": "none"}, "incident"):
+            with self.subTest(wrong):
+                self.server.pages = [[wrong]]
+                code, out, err = self._run("pull", "defender")
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn("is not as Microsoft Graph documents it", err)
+        self.assertFalse(self.runs_dir.exists())
 
     def test_missing_settings_and_a_next_page_elsewhere_stop_the_pull(self):
         with mock.patch.dict(os.environ, {"MEERKAT_CLIENT_SECRET": ""}):
