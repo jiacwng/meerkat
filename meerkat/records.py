@@ -19,8 +19,8 @@ def settings(runs_dir: Path) -> dict:
             **store.read_settings(runs_dir)}
 
 
-def scored(runs_dir: Path, incoming: pd.DataFrame | None = None) -> pd.DataFrame:
-    return rank.score(store.load_history(runs_dir, incoming))
+def scored(runs_dir: Path) -> pd.DataFrame:
+    return rank.score(store.load_history(runs_dir))
 
 
 def load(runs_dir: Path, path: Path, file: str, mapping_name: str) -> tuple[pd.DataFrame, str]:
@@ -32,8 +32,8 @@ def load(runs_dir: Path, path: Path, file: str, mapping_name: str) -> tuple[pd.D
 
 def keep(runs_dir: Path, incoming: pd.DataFrame, file: str,
          mapping_name: str) -> tuple[pd.DataFrame, str]:
-    scores = scored(runs_dir, incoming)
     run = store.save_run(runs_dir, incoming, file, mapping_name)["run"]
+    scores = scored(runs_dir)
     draw_sample(runs_dir, run, settings(runs_dir), scores)
     return scores, run
 

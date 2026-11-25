@@ -25,11 +25,7 @@ class IncidentError(ValueError):
 
 
 def read_incidents(path, mapping: "Mapping") -> pd.DataFrame:
-    incidents = collapse(_read_rows(path, mapping))
-    incidents = incidents[incidents["IncidentGrade"] != CLOSED].reset_index(drop=True)
-    if incidents.empty:
-        raise IncidentError(f"{path}: every incident was closed without a classification")
-    return incidents
+    return collapse(_read_rows(path, mapping))
 
 
 def read_classifications(path) -> list[tuple[str, str]]:

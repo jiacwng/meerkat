@@ -705,6 +705,11 @@ class CliTests(unittest.TestCase):
         self.assertLessEqual(set(named), set(COLUMNS))
         self.assertLessEqual({"IncidentId", "Timestamp", "DetectorId", "IncidentGrade"}, set(named))
         self.assertEqual(self._run("query", "elastic")[0], 2)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            main(["query", "defender"])
+        self.assertIn("security/incidents?$expand=alerts", out.getvalue())
+        self.assertIn("SecurityIncident.Read.All", out.getvalue())
 
     def test_config_prints_the_defaults_on_an_empty_runs_folder(self):
         code, out, err = self._run("config")

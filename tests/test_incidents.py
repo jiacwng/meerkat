@@ -170,8 +170,9 @@ class ReadIncidentsTests(unittest.TestCase):
         )
         self.path.write_text("\n".join(result) + "\n", encoding="utf-8")
         incidents = read_incidents(self.path, load_mapping("sentinel")).set_index("IncidentId")
-        self.assertEqual(incidents["IncidentGrade"].to_dict(), {"1": "TruePositive", "2": ""})
-        self.assertEqual(incidents["DetectorId"].to_dict(), {"1": "rule-a", "2": "rule-b"})
+        self.assertEqual(incidents["IncidentGrade"].to_dict(),
+                         {"1": "TruePositive", "2": "", "3": "closed"})
+        self.assertEqual(incidents["DetectorId"].to_dict(), {"1": "rule-a", "2": "rule-b", "3": "rule-d"})
         first = incidents.loc["1"]
         self.assertEqual((first["Timestamp"], first["Severity"], first["MitreTechniques"]),
                          ("2026-11-20T07:58:12Z", "High", "T1078|T1110"))
@@ -180,12 +181,6 @@ class ReadIncidentsTests(unittest.TestCase):
         second = incidents.loc["2"]
         self.assertEqual((second["DeviceName"], second["Sha256"], second["Url"]),
                          ("pc-7", "abc123", "http://bad.example/x"))
-
-    def test_every_incident_closed_without_a_classification_is_refused(self):
-        header = ("IncidentId", "Timestamp", "DetectorId", "IncidentGrade")
-        write_csv(self.path, (("6", "2024-06-01T08:00:00Z", "rule-a", "Undetermined"),), header)
-        self.assertEqual(self._refusal(load_mapping("sentinel")),
-                         f"{self.path}: every incident was closed without a classification")
 
     def test_a_site_file_can_rename_one_column_only(self):
         site = self.tmp / "site.toml"

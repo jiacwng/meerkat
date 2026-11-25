@@ -64,9 +64,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"meerkat {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    queue = sub.add_parser("queue", help="score an incident CSV, or reopen a run")
+    queue = sub.add_parser("queue", help="score a file of incidents, or reopen a run")
     queue.add_argument("file", nargs="?", type=Path, metavar="FILE",
-                       help="incident CSV to score and save as a new run")
+                       help="incident CSV or Defender JSON to score and save as a new run")
     shown = queue.add_mutually_exclusive_group()
     shown.add_argument("--limit", type=_positive, metavar="N", help="only the first N rows")
     shown.add_argument("--all", action="store_true",
@@ -78,9 +78,10 @@ def _build_parser() -> argparse.ArgumentParser:
     queue.set_defaults(handler=_queue)
 
     query = sub.add_parser("query", help="print the saved query that exports a SIEM's "
-                                         "incidents in the columns meerkat reads")
+                                         "incidents as a file meerkat reads")
     query.add_argument("source", choices=sorted(path.stem for path in QUERIES.iterdir()),
-                       metavar="SOURCE", help="sentinel (Microsoft Sentinel, KQL)")
+                       metavar="SOURCE", help="defender (Microsoft Defender XDR, PowerShell) or "
+                                               "sentinel (Microsoft Sentinel, KQL)")
     query.set_defaults(handler=_query)
 
     classify = sub.add_parser("classify", help="record the classification of an incident, "
@@ -129,7 +130,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     serve = sub.add_parser("serve", help="open the queue as a web page on this machine")
     serve.add_argument("file", nargs="?", type=Path, metavar="FILE",
-                       help="incident CSV to score and save as a new run first")
+                       help="incident CSV or Defender JSON to score and save as a new run first")
     _add_mapping(serve)
     serve.add_argument("--max-file-mb", type=_positive, default=200, metavar="N",
                        help="largest file the page may load, in megabytes (default 200)")

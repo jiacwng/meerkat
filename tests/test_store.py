@@ -2,12 +2,14 @@
 
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 
 from core import store
-from core.incidents import read_incidents
+from core.incidents import CLOSED, read_incidents
 from tests.fixtures import DEFENDER, ROWS, write_csv
 
 
@@ -18,7 +20,7 @@ class StoreTests(unittest.TestCase):
         self.incidents = read_incidents(write_csv(self.tmp / "incidents.csv"), DEFENDER)
 
     def _classification_of(self, incident_id: str) -> str:
-        _, incidents = store.load_run(self.runs_dir, store.list_runs(self.runs_dir)[-1]["run"])
+        incidents = store.load_history(self.runs_dir)
         return incidents.set_index("IncidentId").loc[incident_id, "IncidentGrade"]
 
     def test_run_round_trip(self):
@@ -121,7 +123,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(row["IpAddress"], "10.0.0.2")
         self.assertEqual(row["Sha256"], "")
 
-    def test_a_later_classification_is_kept_and_an_earlier_one_survives_a_blank(self):
+    def test_the_newest_file_gives_the_classification_and_a_blank_reopens(self):
         classified = ("1", "500", "a", "2024-06-01T00:00:00Z", "7", "", "", "", "FalsePositive",
                   "", "")
         reclassified = ("1", "500", "b", "2024-06-02T00:00:00Z", "7", "", "", "", "TruePositive",
@@ -129,18 +131,39 @@ class StoreTests(unittest.TestCase):
         blank = ("1", "500", "c", "2024-06-03T00:00:00Z", "7", "", "", "", "", "", "")
         self.assertEqual(self._merged((classified,), (reclassified,)).loc["500", "IncidentGrade"],
                          "TruePositive")
-        self.assertEqual(self._merged((reclassified,), (blank,)).loc["500", "IncidentGrade"],
-                         "TruePositive")
+        self.assertEqual(self._merged((reclassified,), (blank,)).loc["500", "IncidentGrade"], "")
+
+    def test_an_incident_closed_in_the_newest_file_leaves_the_history(self):
+        store.save_run(self.runs_dir, self.incidents, "monday.csv", "defender")
+        closed = self.incidents["IncidentId"].isin(["200", "103"])
+        tuesday = self.incidents.assign(
+            IncidentGrade=self.incidents["IncidentGrade"].mask(closed, CLOSED))
+        store.save_run(self.runs_dir, tuesday, "tuesday.csv", "defender")
+        self.assertEqual(sorted(store.load_history(self.runs_dir)["IncidentId"]),
+                         ["100", "101", "102", "201", "202"])
+        store.save_run(self.runs_dir, self.incidents[~closed], "wednesday.csv", "defender")
+        self.assertEqual(len(store.load_history(self.runs_dir)), 5)
+        store.save_run(self.runs_dir, self.incidents.iloc[::-1], "thursday.csv", "defender")
+        self.assertEqual(self._classification_of("200"), "")
+        self.assertEqual(self._classification_of("103"), "FalsePositive")
+
+    def test_a_classification_given_here_holds_until_a_later_file_names_the_incident(self):
+        times = [datetime(2026, 1, day, tzinfo=UTC) for day in (1, 2, 3, 4)]
+        with mock.patch.object(store, "datetime") as clock:
+            clock.now.side_effect = times
+            store.save_run(self.runs_dir, self.incidents, "monday.csv", "defender")
+            for incident in ("200", "201"):
+                store.append_classification(self.runs_dir, incident, "TruePositive", "", 0.5,
+                                            "to read")
+            only = self.incidents[self.incidents["IncidentId"] == "200"]
+            store.save_run(self.runs_dir, only, "tuesday.csv", "defender")
+        self.assertEqual(self._classification_of("200"), "")
+        self.assertEqual(self._classification_of("201"), "TruePositive")
 
     def test_an_incident_in_one_run_comes_out_unchanged(self):
         history = self._merged(ROWS)
         expected = self.incidents.set_index("IncidentId")
         self.assertTrue(history.sort_index().equals(expected.sort_index()))
-
-    def test_history_with_an_incoming_file_needs_no_saved_run(self):
-        history = store.load_history(self.runs_dir, self.incidents)
-        self.assertEqual(len(history), 7)
-        self.assertFalse(self.runs_dir.exists())
 
     def test_settings_round_trip_and_absence(self):
         self.assertEqual(store.read_settings(self.runs_dir), {})
