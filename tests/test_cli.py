@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from core import budget, store
+from core.incidents import COLUMNS
 from meerkat import __version__, cli
 from meerkat.cli import main
 from tests.fixtures import (
@@ -562,13 +563,13 @@ class CliTests(unittest.TestCase):
         report = self._queue_json()
         self.assertEqual(report["sample"], {"drawn": 1, "classified": 1, "true_positive": 0,
                                             "not_sampled": 0})
-        self.assertEqual(report["tp_below_budget"], {"estimate": 0, "low": 0, "high": 6})
+        self.assertEqual(report["tp_below_budget"], {"estimate": 0, "low": 0, "high": 6, "of": 6})
 
     def test_a_true_positive_in_the_sample_raises_the_estimate(self):
         sampled = self._budget()
         self._run("classify", sampled, "tp")
         self.assertEqual(self._queue_json()["tp_below_budget"],
-                         {"estimate": 6, "low": 0, "high": 6})
+                         {"estimate": 6, "low": 0, "high": 6, "of": 6})
 
     def test_a_budget_above_the_open_incidents_reads_them_all(self):
         self.assertEqual(self._budget("25"), "")
@@ -680,6 +681,35 @@ class CliTests(unittest.TestCase):
             "SAMPLE                1 drawn, 1 classified, 0 TP",
             "  not sampled         2",
             "TP BELOW BUDGET       not estimated, 2 not sampled"])
+
+    def test_serve_with_a_file_saves_it_as_a_run_before_the_page_opens(self):
+        with mock.patch("meerkat.web.serve") as served:
+            code, out, err = self._run("serve", str(self.csv), "--no-browser")
+        self.assertEqual((code, out, err), (0, "", ""))
+        self.assertEqual([meta["file"] for meta in store.list_runs(self.runs_dir)],
+                         [self.csv.name])
+        served.assert_called_once_with(self.runs_dir, 0, 200, False)
+        code, out, err = self._run("serve", "--mapping", "sentinel")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("--mapping needs FILE", err)
+
+    def test_query_prints_the_saved_query_and_its_columns_are_the_ones_read(self):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            main(["query", "sentinel"])
+        text = out.getvalue()
+        self.assertEqual(err.getvalue(), "")
+        self.assertIn("SecurityIncident", text)
+        project = text.split("| project\n")[-1]
+        named = [line.strip().split(" = ")[0].rstrip(",") for line in project.splitlines()]
+        self.assertLessEqual(set(named), set(COLUMNS))
+        self.assertLessEqual({"IncidentId", "Timestamp", "DetectorId", "IncidentGrade"}, set(named))
+        self.assertEqual(self._run("query", "elastic")[0], 2)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            main(["query", "defender"])
+        self.assertIn("security/incidents?$expand=alerts", out.getvalue())
+        self.assertIn("SecurityIncident.Read.All", out.getvalue())
 
     def test_config_prints_the_defaults_on_an_empty_runs_folder(self):
         code, out, err = self._run("config")

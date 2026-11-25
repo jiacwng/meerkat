@@ -1,11 +1,4 @@
-# Microsoft Sentinel SecurityIncident table, one row per incident and alert.
-
-[columns]
-IncidentId = "IncidentNumber"
-Timestamp = "CreatedTime"
-DetectorId = "RelatedAnalyticRuleIds"
-AlertTitle = "Title"
-IncidentGrade = "Classification"
+# The result of `meerkat query sentinel`, run in a Microsoft Sentinel workspace.
 
 [classifications]
-open = ["Undetermined"]
+closed = ["Undetermined"]

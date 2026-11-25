@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.incidents import COLUMNS, collapse
+from core.incidents import CLOSED, COLUMNS, collapse
 
 CLASSIFICATIONS_FILE = "classifications.csv"
 SETTINGS_FILE = "settings.json"
@@ -81,22 +81,24 @@ def load_run(runs_dir: Path, run_id: str) -> tuple[dict, pd.DataFrame]:
     meta = next((run for run in runs if run["run"] == run_id), None)
     if meta is None:
         raise StoreError(f"no run {run_id!r} in {runs_dir}")
-    return meta, _apply_classifications(runs_dir, _read_run(runs_dir, meta["run"]))
+    return meta, _read_run(runs_dir, meta["run"])
 
 
-def load_history(runs_dir: Path, incoming: pd.DataFrame | None = None) -> pd.DataFrame:
-    # an incident present in several runs becomes one row, as if all its alerts came in one file
+def load_history(runs_dir: Path) -> pd.DataFrame:
+    # an incident takes its alerts from every file that holds it, and its state from the newest
     runs = list_runs(runs_dir)
-    if not runs and incoming is None:
+    if not runs:
         raise StoreError(f"no runs in {runs_dir}; score a file with: meerkat queue FILE")
-    frames = [_read_run(runs_dir, meta["run"]) for meta in runs]
-    if incoming is not None:
-        frames.append(incoming)
-    history = pd.concat(frames, ignore_index=True)
-    repeated = history["IncidentId"].duplicated(keep=False)
+    frames = [_read_run(runs_dir, meta["run"]).assign(loaded=meta["created"]) for meta in runs]
+    rows = pd.concat(frames, ignore_index=True)
+    newest = rows.drop_duplicates("IncidentId", keep="last").set_index("IncidentId")
+    closed = rows["IncidentId"].map(newest["IncidentGrade"]) == CLOSED
+    rows = rows.loc[~closed & (rows["DetectorId"] != ""), list(COLUMNS)]
+    repeated = rows["IncidentId"].duplicated(keep=False)
     if repeated.any():
-        history = pd.concat([history[~repeated], collapse(history[repeated])], ignore_index=True)
-    return _apply_classifications(runs_dir, history)
+        rows = pd.concat([rows[~repeated], collapse(rows[repeated])], ignore_index=True)
+    history = rows.assign(IncidentGrade=rows["IncidentId"].map(newest["IncidentGrade"]))
+    return _apply_classifications(runs_dir, history, history["IncidentId"].map(newest["loaded"]))
 
 
 def read_settings(runs_dir: Path) -> dict:
@@ -167,8 +169,7 @@ def append_classification(runs_dir: Path, incident_id: str, classification: str,
         writer = csv.writer(handle)
         if os.fstat(handle.fileno()).st_size == 0:
             writer.writerow(CLASSIFICATION_COLUMNS)
-        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        writer.writerow((now, incident_id, classification, comment, repr(score), placement))
+        writer.writerow((_now(), incident_id, classification, comment, repr(score), placement))
 
 
 def read_classifications(runs_dir: Path) -> pd.DataFrame:
@@ -201,10 +202,18 @@ def _read_run(runs_dir: Path, run_id: str) -> pd.DataFrame:
     return incidents
 
 
-def _apply_classifications(runs_dir: Path, incidents: pd.DataFrame) -> pd.DataFrame:
+def _apply_classifications(runs_dir: Path, incidents: pd.DataFrame,
+                           loaded: pd.Series) -> pd.DataFrame:
+    # a classification given here holds until a later file names the incident again
     classifications = read_classifications(runs_dir)
     if classifications.empty:
         return incidents
-    classifications = classifications.drop_duplicates("IncidentId", keep="last")
-    latest = incidents["IncidentId"].map(classifications.set_index("IncidentId")["classification"])
-    return incidents.assign(IncidentGrade=latest.fillna(incidents["IncidentGrade"]))
+    latest = classifications.drop_duplicates("IncidentId", keep="last").set_index("IncidentId")
+    given = incidents["IncidentId"].map(latest["classification"])
+    since = incidents["IncidentId"].map(latest["time"]).fillna("")
+    return incidents.assign(
+        IncidentGrade=given.where(since >= loaded).fillna(incidents["IncidentGrade"]))
+
+
+def _now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

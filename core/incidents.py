@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from core.mapping import Mapping
 
 REQUIRED = ("IncidentId", "Timestamp", "DetectorId")
-DESCRIPTIVE = ("AlertTitle", "Category", "Severity")
+DESCRIPTIVE = ("AlertTitle", "Category", "Severity", "IncidentUrl")
 LINKS = (
     "DeviceId", "DeviceName", "AccountObjectId", "AccountSid", "AccountUpn",
     "AccountName", "IpAddress", "Sha256", "Url",
@@ -17,6 +17,7 @@ LINKS = (
 CLASSIFICATIONS = ("TruePositive", "BenignPositive", "FalsePositive")
 COLUMNS = (*REQUIRED, "IncidentGrade", *DESCRIPTIVE, "MitreTechniques", *LINKS)
 SEPARATOR = "|"
+CLOSED = "closed"
 
 
 class IncidentError(ValueError):
@@ -64,6 +65,9 @@ def collapse(rows: pd.DataFrame) -> pd.DataFrame:
 
     incidents = by_incident[["Timestamp", "DetectorId", *DESCRIPTIVE]].first()
     incidents["IncidentGrade"] = classifications
+    # the link is opened from the page, so only an https address is kept
+    incidents["IncidentUrl"] = incidents["IncidentUrl"].where(
+        incidents["IncidentUrl"].str.startswith("https://", na=False), "")
     for column in ("MitreTechniques", *LINKS):
         incidents[column] = _distinct(rows, column)
     return incidents.fillna("").reset_index()[list(COLUMNS)]

@@ -32,7 +32,7 @@ class MappingTests(unittest.TestCase):
                 mapping = load_mapping(name)
                 self.assertEqual(mapping.name, name)
                 self.assertEqual(list(mapping.columns), list(COLUMNS))
-                self.assertEqual(set(mapping.classifications.values()) - {""},
+                self.assertEqual(set(mapping.classifications.values()) - {"", "closed"},
                                  {"TruePositive", "BenignPositive", "FalsePositive"})
 
     def test_an_empty_file_has_the_defender_columns(self):
