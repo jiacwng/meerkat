@@ -5,11 +5,11 @@ import random
 
 import pandas as pd
 
-from core.incidents import GRADES
+from core.incidents import CLASSIFICATIONS
 
 DEFAULT_SAMPLE_SHARE = 0.10
 PLACEMENTS = ("to read", "sample", "below budget")
-TRUE_POSITIVE = GRADES[0]
+TRUE_POSITIVE = CLASSIFICATIONS[0]
 Z = 1.959964
 
 
@@ -59,11 +59,11 @@ def draw(opened: list[str], budget: int, share: float, samples: list[dict],
     return {"pool": pool, "drawn": sorted(picked)}
 
 
-def place(scored: pd.DataFrame, reviews: pd.DataFrame, budget: int | None,
+def place(scored: pd.DataFrame, classifications: pd.DataFrame, budget: int | None,
           samples: list[dict], lead: dict[str, str]) -> pd.DataFrame:
     opened = scored.loc[scored["IncidentGrade"] == "", "IncidentId"].tolist()
     placement = split(opened, budget, drawn_ids(samples), lead)
-    first = reviews.drop_duplicates("IncidentId").set_index("IncidentId")["placement"]
+    first = classifications.drop_duplicates("IncidentId").set_index("IncidentId")["placement"]
     recorded = scored["IncidentId"].map(first).fillna("")
     return scored.assign(placement=scored["IncidentId"].map(placement).fillna(recorded),
                          group_lead=scored["IncidentId"].map(lead).fillna(""))
@@ -76,28 +76,29 @@ def not_sampled(placed: pd.DataFrame, samples: list[dict]) -> int:
     return int((~below.isin(pooled)).sum())
 
 
-def estimate(samples: list[dict], grades: dict[str, str], below: set[str]) -> dict:
-    total = known = unread = drawn = graded = positives = 0
+def estimate(samples: list[dict], classifications: dict[str, str], below: set[str]) -> dict:
+    total = known = unread = drawn = classified = positives = 0
     weights = squares = hits = 0.0
     for sample in samples:
         pool = sample["pool"]
         total += len(pool)
-        known += sum(grades.get(incident) == TRUE_POSITIVE for incident in pool)
+        known += sum(classifications.get(incident) == TRUE_POSITIVE for incident in pool)
         unread += sum(incident in below for incident in pool)
         drawn += len(sample["drawn"])
-        marked = [incident for incident in sample["drawn"] if grades.get(incident, "") != ""]
+        marked = [incident for incident in sample["drawn"]
+                  if classifications.get(incident, "") != ""]
         if marked:
-            # a graded sample row stands for this many incidents of its pool
+            # a classified sample row stands for this many incidents of its pool
             weight = len(pool) / len(marked)
-            found = sum(grades[incident] == TRUE_POSITIVE for incident in marked)
-            graded += len(marked)
+            found = sum(classifications[incident] == TRUE_POSITIVE for incident in marked)
+            classified += len(marked)
             positives += found
             weights += weight * len(marked)
             squares += weight * weight * len(marked)
             hits += weight * found
-    result = {"drawn": drawn, "graded": graded, "true_positive": positives,
+    result = {"drawn": drawn, "classified": classified, "true_positive": positives,
               "tp_below_budget": None}
-    if graded:
+    if classified:
         rate = hits / weights
         low, high = _wilson(rate, weights * weights / squares)
         result["tp_below_budget"] = {

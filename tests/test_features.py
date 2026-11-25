@@ -5,7 +5,7 @@ import unittest
 
 import pandas as pd
 
-from core.features import CAP, INPUTS, LINKED, RULE, compute, linked_to
+from core.features import CAP, INPUTS, RULE, SIMILAR, compute, similar_to
 from core.incidents import COLUMNS
 
 PRIOR = 0.2
@@ -21,8 +21,8 @@ def _at(minute: int) -> str:
     return f"2024-06-10T{minute // 60:02d}:{minute % 60:02d}:00Z"
 
 
-def _incident(name: str, minute: int, grade: str = "", **values: str) -> dict:
-    return {"IncidentId": name, "Timestamp": _at(minute), "IncidentGrade": grade, **values}
+def _incident(name: str, minute: int, classification: str = "", **values: str) -> dict:
+    return {"IncidentId": name, "Timestamp": _at(minute), "IncidentGrade": classification, **values}
 
 
 def _smooth(positives: int, total: int) -> float:
@@ -60,9 +60,9 @@ class HistoryTests(unittest.TestCase):
             for value, wanted in zip(self._row(position), expected, strict=True):
                 self.assertAlmostEqual(value, wanted)
 
-    def test_rule_counts_cover_only_earlier_graded_incidents_of_the_rule(self):
+    def test_rule_counts_cover_only_earlier_classified_incidents_of_the_rule(self):
         counts = self.inputs[list(RULE)]
-        self.assertEqual(counts["rule_graded"].tolist(), [0, 0, 1, 1, 0, 2])
+        self.assertEqual(counts["rule_classified"].tolist(), [0, 0, 1, 1, 0, 2])
         self.assertEqual(counts["rule_true_positives"].tolist(), [0, 0, 1, 1, 0, 1])
 
     def test_the_rule_counts_its_own_incidents_and_the_organisation_all(self):
@@ -76,7 +76,7 @@ class HistoryTests(unittest.TestCase):
 
 
 class LinkTests(unittest.TestCase):
-    def test_links_count_strictly_earlier_incidents_by_grade(self):
+    def test_links_count_strictly_earlier_incidents_by_classification(self):
         inputs = compute(_frame(
             _incident("a", 0, "TruePositive", AccountName="alice"),
             _incident("b", 1, "FalsePositive", IpAddress="10.0.0.1|10.0.0.2"),
@@ -87,15 +87,15 @@ class LinkTests(unittest.TestCase):
             _incident("other", 5, "TruePositive", DeviceName="server"),
         ), PRIOR)
         now = inputs.iloc[4]
-        # a and b are earlier and graded; c is open and "same" is not earlier
-        self.assertEqual(now[list(LINKED)].tolist(), [2, 1, 0, 1])
-        self.assertAlmostEqual(now["log_linked"], math.log1p(2))
-        self.assertAlmostEqual(now["linked_true_positive_log_odds"], _log_odds(1, 2))
-        self.assertEqual(inputs["has_linked_true_positive"].tolist(), [0, 0, 1, 0, 1, 0, 0])
-        self.assertEqual(inputs["linked"].tolist(), [0, 0, 1, 0, 2, 0, 0])
+        # a and b are earlier and classified; c is open and "same" is not earlier
+        self.assertEqual(now[list(SIMILAR)].tolist(), [2, 1, 0, 1])
+        self.assertAlmostEqual(now["log_similar"], math.log1p(2))
+        self.assertAlmostEqual(now["similar_true_positive_log_odds"], _log_odds(1, 2))
+        self.assertEqual(inputs["has_similar_true_positive"].tolist(), [0, 0, 1, 0, 1, 0, 0])
+        self.assertEqual(inputs["similar"].tolist(), [0, 0, 1, 0, 2, 0, 0])
         self.assertEqual(inputs["has_link"].tolist(), [1.0] * 7)
 
-    def test_linked_to_names_the_counted_incidents_newest_first(self):
+    def test_similar_to_names_the_counted_incidents_newest_first(self):
         frame = _frame(
             _incident("a", 0, "TruePositive", AccountName="alice"),
             _incident("b", 1, "FalsePositive", IpAddress="10.0.0.2"),
@@ -104,19 +104,19 @@ class LinkTests(unittest.TestCase):
             _incident("later", 4, "TruePositive", AccountName="alice"),
             _incident("x", 5), _incident("y", 6), _incident("z", 7),
         )
-        self.assertEqual(linked_to(frame, "now")["IncidentId"].tolist(), ["b", "a"])
-        self.assertEqual(linked_to(frame, "a")["IncidentId"].tolist(), [])
+        self.assertEqual(similar_to(frame, "now")["IncidentId"].tolist(), ["b", "a"])
+        self.assertEqual(similar_to(frame, "a")["IncidentId"].tolist(), [])
         shuffled = frame.iloc[::-1]
-        self.assertEqual(linked_to(shuffled, "now")["IncidentId"].tolist(), ["b", "a"])
+        self.assertEqual(similar_to(shuffled, "now")["IncidentId"].tolist(), ["b", "a"])
 
     def test_a_value_in_more_than_half_the_incidents_is_ignored(self):
         common = [_incident(str(i), i, "TruePositive", Url="x") for i in range(3)]
         inputs = compute(_frame(*common, _incident("3", 3)), PRIOR)
-        self.assertEqual(inputs["linked"].tolist(), [0, 0, 0, 0])
+        self.assertEqual(inputs["similar"].tolist(), [0, 0, 0, 0])
         self.assertEqual(inputs["has_link"].tolist(), [0.0] * 4)
         half = [_incident(str(i), i, "TruePositive", Url="x") for i in range(2)]
         inputs = compute(_frame(*half, _incident("2", 2), _incident("3", 3)), PRIOR)
-        self.assertEqual(inputs["linked"].tolist(), [0, 1, 0, 0])
+        self.assertEqual(inputs["similar"].tolist(), [0, 1, 0, 0])
         self.assertEqual(inputs["has_link"].tolist(), [1.0, 1.0, 0.0, 0.0])
 
     def test_each_value_counts_only_the_most_recent_earlier_incidents(self):
@@ -126,9 +126,9 @@ class LinkTests(unittest.TestCase):
         filler = [_incident(f"f{i}", 100 + i) for i in range(CAP + 5)]
         newest = _incident("new", 200, Sha256="h", Url="u")
         inputs = compute(_frame(*sharing, *filler, newest), PRIOR)
-        # the two oldest are past the cap on both values, so their grades never count
-        self.assertEqual(inputs.iloc[-1][list(LINKED)].tolist(), [CAP, 0, 0, CAP])
-        self.assertEqual(inputs.iloc[CAP + 1]["linked"], CAP)
+        # the two oldest are past the cap on both values, so their classifications never count
+        self.assertEqual(inputs.iloc[-1][list(SIMILAR)].tolist(), [CAP, 0, 0, CAP])
+        self.assertEqual(inputs.iloc[CAP + 1]["similar"], CAP)
 
     def test_a_pair_sharing_several_values_counts_once(self):
         inputs = compute(_frame(
@@ -139,15 +139,15 @@ class LinkTests(unittest.TestCase):
             _incident("c", 2),
             _incident("d", 3),
         ), PRIOR)
-        self.assertEqual(inputs["linked"].tolist(), [0, 1, 0, 0])
-        self.assertEqual(inputs["linked_true_positive"].tolist(), [0, 1, 0, 0])
+        self.assertEqual(inputs["similar"].tolist(), [0, 1, 0, 0])
+        self.assertEqual(inputs["similar_true_positive"].tolist(), [0, 1, 0, 0])
 
     def test_a_frame_without_link_values(self):
         inputs = compute(_frame(_incident("a", 0, "TruePositive"), _incident("b", 1)), PRIOR)
-        self.assertEqual(inputs["linked"].tolist(), [0, 0])
-        for value in inputs["linked_true_positive_log_odds"]:
+        self.assertEqual(inputs["similar"].tolist(), [0, 0])
+        for value in inputs["similar_true_positive_log_odds"]:
             self.assertAlmostEqual(value, _log_odds(0, 0))
-        self.assertEqual(inputs["has_linked_true_positive"].tolist(), [0.0, 0.0])
+        self.assertEqual(inputs["has_similar_true_positive"].tolist(), [0.0, 0.0])
         self.assertEqual(inputs["has_link"].tolist(), [0.0, 0.0])
 
     def test_inputs_keep_the_index_and_order_of_the_frame(self):
@@ -157,8 +157,8 @@ class LinkTests(unittest.TestCase):
         frame.index = [10, 20, 30, 40]
         inputs = compute(frame, PRIOR)
         self.assertEqual(list(inputs.index), [10, 20, 30, 40])
-        self.assertEqual(inputs["linked"].tolist(), [1, 0, 0, 0])
-        self.assertEqual(list(inputs.columns), [*INPUTS, *LINKED, *RULE])
+        self.assertEqual(inputs["similar"].tolist(), [1, 0, 0, 0])
+        self.assertEqual(list(inputs.columns), [*INPUTS, *SIMILAR, *RULE])
 
 
 if __name__ == "__main__":

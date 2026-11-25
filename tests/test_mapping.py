@@ -32,7 +32,7 @@ class MappingTests(unittest.TestCase):
                 mapping = load_mapping(name)
                 self.assertEqual(mapping.name, name)
                 self.assertEqual(list(mapping.columns), list(COLUMNS))
-                self.assertEqual(set(mapping.grades.values()) - {""},
+                self.assertEqual(set(mapping.classifications.values()) - {""},
                                  {"TruePositive", "BenignPositive", "FalsePositive"})
 
     def test_an_empty_file_has_the_defender_columns(self):
@@ -82,29 +82,29 @@ class MappingTests(unittest.TestCase):
         self._refused('[columns]\nCategory = "AlertTitle"\n',
                       "AlertTitle and Category both read column 'AlertTitle'")
 
-    def test_unknown_grade_key(self):
-        self._refused('[grades]\nMaybe = ["x"]\n', r"\[grades\] has unknown key 'Maybe'")
+    def test_unknown_classification_key(self):
+        self._refused('[classifications]\nMaybe = ["x"]\n', r"\[classifications\] has unknown key 'Maybe'")
 
-    def test_grade_value_must_be_a_list_of_strings(self):
+    def test_classification_value_must_be_a_list_of_strings(self):
         for value in ('"x"', "[1]", '[""]'):
             with self.subTest(value):
-                self._refused(f"[grades]\nopen = {value}\n",
-                              r"\[grades\] open must be a list of non empty strings")
+                self._refused(f"[classifications]\nopen = {value}\n",
+                              r"\[classifications\] open must be a list of non empty strings")
 
-    def test_a_word_cannot_mean_two_grades(self):
-        self._refused('[grades]\nTruePositive = ["x"]\nFalsePositive = ["x"]\n',
-                      "grade word 'x' is listed under TruePositive and FalsePositive")
-        self._refused('[grades]\nopen = ["FalsePositive"]\n',
-                      "grade word 'FalsePositive' is listed under FalsePositive and open")
+    def test_a_word_cannot_mean_two_classifications(self):
+        self._refused('[classifications]\nTruePositive = ["x"]\nFalsePositive = ["x"]\n',
+                      "classification word 'x' is listed under TruePositive and FalsePositive")
+        self._refused('[classifications]\nopen = ["FalsePositive"]\n',
+                      "classification word 'FalsePositive' is listed under FalsePositive and open")
 
     def test_a_file_with_a_byte_order_mark(self):
         path = self.tmp / "site.toml"
         path.write_bytes(b'\xef\xbb\xbf[columns]\nDetectorId = "rule"\n')
         self.assertEqual(load_mapping(str(path)).columns["DetectorId"], "rule")
 
-    def test_an_unlisted_grade_keeps_its_own_name(self):
-        mapping = load_mapping(self._site('[grades]\nFalsePositive = ["Noise"]\n'))
-        self.assertEqual(mapping.grades, {
+    def test_an_unlisted_classification_keeps_its_own_name(self):
+        mapping = load_mapping(self._site('[classifications]\nFalsePositive = ["Noise"]\n'))
+        self.assertEqual(mapping.classifications, {
             "TruePositive": "TruePositive", "BenignPositive": "BenignPositive",
             "Noise": "FalsePositive"})
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from core import features, store
-from core.incidents import GRADES, LINKS, SEPARATOR, read_incidents
+from core.incidents import CLASSIFICATIONS, LINKS, SEPARATOR, read_incidents
 from meerkat.cli import main
 from tests.fixtures import DEFENDER
 
@@ -26,12 +26,12 @@ class ExampleTests(unittest.TestCase):
         rows = pd.read_csv(EXAMPLES / "incidents.csv", dtype=str, usecols=["OrgId"])
         self.assertEqual(rows["OrgId"].nunique(), 1)
 
-    def test_grades_file_holds_exactly_the_open_incidents(self):
-        grades = pd.read_csv(EXAMPLES / "grades.csv", dtype=str, keep_default_na=False)
+    def test_classifications_file_holds_exactly_the_open_incidents(self):
+        classifications = pd.read_csv(EXAMPLES / "classifications.csv", dtype=str, keep_default_na=False)
         opened = self.incidents.loc[self.incidents["IncidentGrade"] == "", "IncidentId"]
-        self.assertEqual(set(grades["IncidentId"]), set(opened))
-        self.assertEqual(len(grades), len(opened))
-        self.assertTrue(grades["IncidentGrade"].isin(GRADES).all())
+        self.assertEqual(set(classifications["IncidentId"]), set(opened))
+        self.assertEqual(len(classifications), len(opened))
+        self.assertTrue(classifications["IncidentGrade"].isin(CLASSIFICATIONS).all())
 
     def test_no_link_value_is_a_placeholder(self):
         for column in LINKS:
@@ -69,12 +69,12 @@ class ExampleTests(unittest.TestCase):
         for line in footer:
             self.assertIn(line, readme)
 
-    def test_readme_quotes_what_budget_prints_once_the_sample_is_graded(self):
+    def test_readme_quotes_what_budget_prints_once_the_sample_is_classified(self):
         runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self._quick_start(runs_dir)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            main(["review", store.read_samples(runs_dir)[0]["drawn"][0], "fp",
+            main(["classify", store.read_samples(runs_dir)[0]["drawn"][0], "fp",
                   "--runs-dir", str(runs_dir)])
             out.truncate(0)
             out.seek(0)
@@ -82,14 +82,14 @@ class ExampleTests(unittest.TestCase):
         readme = (EXAMPLES.parent / "README.md").read_text(encoding="utf-8")
         self.assertIn(f"```text\n{out.getvalue()}```", readme)
 
-    def test_grades_file_counts_the_true_positives_in_the_list_and_below_it(self):
+    def test_classifications_file_counts_the_true_positives_in_the_list_and_below_it(self):
         runs_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self._quick_start(runs_dir)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            main(["review", "--file", str(EXAMPLES / "grades.csv"), "--runs-dir", str(runs_dir)])
+            main(["classify", "--file", str(EXAMPLES / "classifications.csv"), "--runs-dir", str(runs_dir)])
         self.assertEqual(out.getvalue().splitlines()[-1],
-                         "GRADED   incidents 42   tp 20   tp_to_read 9   tp_sample 0   tp_below 11")
+                         "CLASSIFIED   incidents 42   tp 20   tp_to_read 9   tp_sample 0   tp_below 11")
         sample = store.read_samples(runs_dir)[0]
         self.assertEqual((len(sample["pool"]), len(sample["drawn"])), (33, 1))
 

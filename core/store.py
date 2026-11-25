@@ -1,4 +1,4 @@
-# Keeps each run as <runs_dir>/<run id>/ and every review in <runs_dir>/grades.csv.
+# Keeps each run as <runs_dir>/<run id>/ and every classification in <runs_dir>/classifications.csv.
 
 import csv
 import json
@@ -11,10 +11,11 @@ import pandas as pd
 
 from core.incidents import COLUMNS, collapse
 
-GRADES_FILE = "grades.csv"
+CLASSIFICATIONS_FILE = "classifications.csv"
 SETTINGS_FILE = "settings.json"
 SAMPLE_FILE = "sample.json"
-GRADE_COLUMNS = ("time", "IncidentId", "grade", "comment", "score", "placement")
+CLASSIFICATION_COLUMNS = ("time", "IncidentId", "classification", "comment", "score",
+                          "placement")
 
 
 class StoreError(ValueError):
@@ -80,7 +81,7 @@ def load_run(runs_dir: Path, run_id: str) -> tuple[dict, pd.DataFrame]:
     meta = next((run for run in runs if run["run"] == run_id), None)
     if meta is None:
         raise StoreError(f"no run {run_id!r} in {runs_dir}")
-    return meta, _apply_grades(runs_dir, _read_run(runs_dir, meta["run"]))
+    return meta, _apply_classifications(runs_dir, _read_run(runs_dir, meta["run"]))
 
 
 def load_history(runs_dir: Path, incoming: pd.DataFrame | None = None) -> pd.DataFrame:
@@ -95,7 +96,7 @@ def load_history(runs_dir: Path, incoming: pd.DataFrame | None = None) -> pd.Dat
     repeated = history["IncidentId"].duplicated(keep=False)
     if repeated.any():
         history = pd.concat([history[~repeated], collapse(history[repeated])], ignore_index=True)
-    return _apply_grades(runs_dir, history)
+    return _apply_classifications(runs_dir, history)
 
 
 def read_settings(runs_dir: Path) -> dict:
@@ -159,29 +160,33 @@ def read_samples(runs_dir: Path) -> list[dict]:
     return found
 
 
-def append_grade(runs_dir: Path, incident_id: str, grade: str, comment: str,
-                 score: float, placement: str) -> None:
-    grades_file = runs_dir / GRADES_FILE
-    with grades_file.open("a", newline="", encoding="utf-8") as handle:
+def append_classification(runs_dir: Path, incident_id: str, classification: str,
+                          comment: str, score: float, placement: str) -> None:
+    classifications_file = runs_dir / CLASSIFICATIONS_FILE
+    with classifications_file.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         if os.fstat(handle.fileno()).st_size == 0:
-            writer.writerow(GRADE_COLUMNS)
+            writer.writerow(CLASSIFICATION_COLUMNS)
         now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        writer.writerow((now, incident_id, grade, comment, repr(score), placement))
+        writer.writerow((now, incident_id, classification, comment, repr(score), placement))
 
 
-def read_reviews(runs_dir: Path) -> pd.DataFrame:
-    grades_file = runs_dir / GRADES_FILE
-    if not grades_file.exists():
-        empty = pd.DataFrame({name: [] for name in GRADE_COLUMNS})
+def read_classifications(runs_dir: Path) -> pd.DataFrame:
+    earlier = runs_dir / "grades.csv"
+    if earlier.exists():
+        raise StoreError(f"{earlier}: saved by another version of meerkat, remove "
+                         f"{runs_dir} and load its files again")
+    classifications_file = runs_dir / CLASSIFICATIONS_FILE
+    if not classifications_file.exists():
+        empty = pd.DataFrame({name: [] for name in CLASSIFICATION_COLUMNS})
         return empty.astype({"score": float})
     try:
-        reviews = pd.read_csv(grades_file, dtype=str, keep_default_na=False)
-        if not set(GRADE_COLUMNS) <= set(reviews.columns):
-            raise ValueError(f"expected the columns {', '.join(GRADE_COLUMNS)}")
-        return reviews.astype({"score": float})
+        classifications = pd.read_csv(classifications_file, dtype=str, keep_default_na=False)
+        if not set(CLASSIFICATION_COLUMNS) <= set(classifications.columns):
+            raise ValueError(f"expected the columns {', '.join(CLASSIFICATION_COLUMNS)}")
+        return classifications.astype({"score": float})
     except (OSError, ValueError) as error:
-        raise StoreError(f"{grades_file}: unreadable ({error})") from None
+        raise StoreError(f"{classifications_file}: unreadable ({error})") from None
 
 
 def _read_run(runs_dir: Path, run_id: str) -> pd.DataFrame:
@@ -196,10 +201,10 @@ def _read_run(runs_dir: Path, run_id: str) -> pd.DataFrame:
     return incidents
 
 
-def _apply_grades(runs_dir: Path, incidents: pd.DataFrame) -> pd.DataFrame:
-    reviews = read_reviews(runs_dir)
-    if reviews.empty:
+def _apply_classifications(runs_dir: Path, incidents: pd.DataFrame) -> pd.DataFrame:
+    classifications = read_classifications(runs_dir)
+    if classifications.empty:
         return incidents
-    reviews = reviews.drop_duplicates("IncidentId", keep="last")
-    latest = incidents["IncidentId"].map(reviews.set_index("IncidentId")["grade"])
+    classifications = classifications.drop_duplicates("IncidentId", keep="last")
+    latest = incidents["IncidentId"].map(classifications.set_index("IncidentId")["classification"])
     return incidents.assign(IncidentGrade=latest.fillna(incidents["IncidentGrade"]))

@@ -14,7 +14,7 @@ LINKS = (
     "DeviceId", "DeviceName", "AccountObjectId", "AccountSid", "AccountUpn",
     "AccountName", "IpAddress", "Sha256", "Url",
 )
-GRADES = ("TruePositive", "BenignPositive", "FalsePositive")
+CLASSIFICATIONS = ("TruePositive", "BenignPositive", "FalsePositive")
 COLUMNS = (*REQUIRED, "IncidentGrade", *DESCRIPTIVE, "MitreTechniques", *LINKS)
 SEPARATOR = "|"
 
@@ -27,7 +27,7 @@ def read_incidents(path, mapping: "Mapping") -> pd.DataFrame:
     return collapse(_read_rows(path, mapping))
 
 
-def read_grades(path) -> list[tuple[str, str]]:
+def read_classifications(path) -> list[tuple[str, str]]:
     try:
         with open(path, encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -41,28 +41,29 @@ def read_grades(path) -> list[tuple[str, str]]:
         if name not in names:
             raise IncidentError(f"{path}: missing column {name}")
     if not rows:
-        raise IncidentError(f"{path}: no grade rows")
-    grades = []
+        raise IncidentError(f"{path}: no classification rows")
+    classifications = []
     for row in rows:
         incident = (row["IncidentId"] or "").strip()
-        grade = (row["IncidentGrade"] or "").strip()
+        classification = (row["IncidentGrade"] or "").strip()
         if not incident:
             raise IncidentError(f"{path}: a row has no IncidentId")
-        if grade not in GRADES:
+        if classification not in CLASSIFICATIONS:
             raise IncidentError(
-                f"{path}: IncidentGrade {grade!r} is not one of {', '.join(GRADES)}")
-        grades.append((incident, grade))
-    return grades
+                f"{path}: IncidentGrade {classification!r} is not one of "
+                f"{', '.join(CLASSIFICATIONS)}")
+        classifications.append((incident, classification))
+    return classifications
 
 
 def collapse(rows: pd.DataFrame) -> pd.DataFrame:
     # an incident takes its time, rule, title and category from its earliest row
-    grades = rows["IncidentGrade"].replace("", pd.NA).groupby(rows["IncidentId"]).last()
+    classifications = rows["IncidentGrade"].replace("", pd.NA).groupby(rows["IncidentId"]).last()
     rows = rows.sort_values("Timestamp", kind="stable")
     by_incident = rows.groupby("IncidentId", sort=False)
 
     incidents = by_incident[["Timestamp", "DetectorId", *DESCRIPTIVE]].first()
-    incidents["IncidentGrade"] = grades
+    incidents["IncidentGrade"] = classifications
     for column in ("MitreTechniques", *LINKS):
         incidents[column] = _distinct(rows, column)
     return incidents.fillna("").reset_index()[list(COLUMNS)]
@@ -111,12 +112,12 @@ def _read_rows(path, mapping: "Mapping") -> pd.DataFrame:
         blank = int((rows[name] == "").sum())
         if blank:
             raise IncidentError(f"{path}: {blank} rows have no {mapping.columns[name]}")
-    words = {"": "", **mapping.grades}
+    words = {"": "", **mapping.classifications}
     unknown = rows.loc[~rows["IncidentGrade"].isin(words), "IncidentGrade"]
     if len(unknown):
         raise IncidentError(
             f"{path}: {mapping.columns['IncidentGrade']} {unknown.iloc[0]!r} "
-            f"is not one of {', '.join(mapping.grades)}")
+            f"is not one of {', '.join(mapping.classifications)}")
     rows["IncidentGrade"] = rows["IncidentGrade"].map(words)
     name = mapping.columns["Timestamp"]
     times = pd.to_datetime(rows["Timestamp"], utc=True, format="ISO8601", errors="coerce")

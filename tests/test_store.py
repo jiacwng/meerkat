@@ -1,4 +1,4 @@
-# Runs and grades on disk: what is written, what is read back, what is refused.
+# Runs and classifications on disk: what is written, what is read back, what is refused.
 
 import tempfile
 import unittest
@@ -17,7 +17,7 @@ class StoreTests(unittest.TestCase):
         self.runs_dir = self.tmp / "runs"
         self.incidents = read_incidents(write_csv(self.tmp / "incidents.csv"), DEFENDER)
 
-    def _grade_of(self, incident_id: str) -> str:
+    def _classification_of(self, incident_id: str) -> str:
         _, incidents = store.load_run(self.runs_dir, store.list_runs(self.runs_dir)[-1]["run"])
         return incidents.set_index("IncidentId").loc[incident_id, "IncidentGrade"]
 
@@ -50,33 +50,33 @@ class StoreTests(unittest.TestCase):
         with self.assertRaisesRegex(store.StoreError, "no runs"):
             store.load_history(self.runs_dir)
 
-    def test_latest_review_wins_over_the_file_and_over_earlier_reviews(self):
+    def test_latest_classification_wins_over_the_file_and_over_earlier_classifications(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
-        self.assertEqual(self._grade_of("200"), "")
-        store.append_grade(self.runs_dir, "200", "FalsePositive", "", 0.5, "to read")
-        store.append_grade(self.runs_dir, "200", "TruePositive", "second look, real",
+        self.assertEqual(self._classification_of("200"), "")
+        store.append_classification(self.runs_dir, "200", "FalsePositive", "", 0.5, "to read")
+        store.append_classification(self.runs_dir, "200", "TruePositive", "second look, real",
                            0.5, "to read")
-        store.append_grade(self.runs_dir, "102", "TruePositive", "", 0.5, "to read")
-        self.assertEqual(self._grade_of("200"), "TruePositive")
-        self.assertEqual(self._grade_of("102"), "TruePositive")
-        self.assertEqual(self._grade_of("103"), "FalsePositive")
+        store.append_classification(self.runs_dir, "102", "TruePositive", "", 0.5, "to read")
+        self.assertEqual(self._classification_of("200"), "TruePositive")
+        self.assertEqual(self._classification_of("102"), "TruePositive")
+        self.assertEqual(self._classification_of("103"), "FalsePositive")
 
     def test_comments_with_commas_quotes_and_newlines_survive(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
-        store.append_grade(self.runs_dir, "200", "TruePositive", 'a, "b"\nc', 0.5, "to read")
-        store.append_grade(self.runs_dir, "201", "BenignPositive", "", 0.5, "to read")
-        self.assertEqual(self._grade_of("200"), "TruePositive")
-        self.assertEqual(self._grade_of("201"), "BenignPositive")
+        store.append_classification(self.runs_dir, "200", "TruePositive", 'a, "b"\nc', 0.5, "to read")
+        store.append_classification(self.runs_dir, "201", "BenignPositive", "", 0.5, "to read")
+        self.assertEqual(self._classification_of("200"), "TruePositive")
+        self.assertEqual(self._classification_of("201"), "BenignPositive")
 
-    def test_a_review_stores_the_score_and_placement_it_had(self):
+    def test_a_classification_stores_the_score_and_placement_it_had(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
-        self.assertTrue(store.read_reviews(self.runs_dir).empty)
-        store.append_grade(self.runs_dir, "200", "TruePositive", "", 0.123456789, "sample")
-        header = (self.runs_dir / store.GRADES_FILE).read_text().splitlines()[0]
-        self.assertEqual(header, "time,IncidentId,grade,comment,score,placement")
-        reviews = store.read_reviews(self.runs_dir)
-        self.assertEqual(reviews["score"].tolist(), [0.123456789])
-        self.assertEqual(reviews["placement"].tolist(), ["sample"])
+        self.assertTrue(store.read_classifications(self.runs_dir).empty)
+        store.append_classification(self.runs_dir, "200", "TruePositive", "", 0.123456789, "sample")
+        header = (self.runs_dir / store.CLASSIFICATIONS_FILE).read_text().splitlines()[0]
+        self.assertEqual(header, "time,IncidentId,classification,comment,score,placement")
+        classifications = store.read_classifications(self.runs_dir)
+        self.assertEqual(classifications["score"].tolist(), [0.123456789])
+        self.assertEqual(classifications["placement"].tolist(), ["sample"])
 
     def test_history_merges_repeats_to_one_row(self):
         store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")
@@ -121,15 +121,15 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(row["IpAddress"], "10.0.0.2")
         self.assertEqual(row["Sha256"], "")
 
-    def test_a_later_grade_is_kept_and_an_earlier_one_survives_a_blank(self):
-        graded = ("1", "500", "a", "2024-06-01T00:00:00Z", "7", "", "", "", "FalsePositive",
+    def test_a_later_classification_is_kept_and_an_earlier_one_survives_a_blank(self):
+        classified = ("1", "500", "a", "2024-06-01T00:00:00Z", "7", "", "", "", "FalsePositive",
                   "", "")
-        regraded = ("1", "500", "b", "2024-06-02T00:00:00Z", "7", "", "", "", "TruePositive",
+        reclassified = ("1", "500", "b", "2024-06-02T00:00:00Z", "7", "", "", "", "TruePositive",
                     "", "")
         blank = ("1", "500", "c", "2024-06-03T00:00:00Z", "7", "", "", "", "", "", "")
-        self.assertEqual(self._merged((graded,), (regraded,)).loc["500", "IncidentGrade"],
+        self.assertEqual(self._merged((classified,), (reclassified,)).loc["500", "IncidentGrade"],
                          "TruePositive")
-        self.assertEqual(self._merged((regraded,), (blank,)).loc["500", "IncidentGrade"],
+        self.assertEqual(self._merged((reclassified,), (blank,)).loc["500", "IncidentGrade"],
                          "TruePositive")
 
     def test_an_incident_in_one_run_comes_out_unchanged(self):
@@ -164,11 +164,11 @@ class StoreTests(unittest.TestCase):
                 with self.assertRaisesRegex(store.StoreError, store.SAMPLE_FILE):
                     store.read_samples(self.runs_dir)
 
-    def test_a_damaged_run_or_grade_file_is_refused(self):
+    def test_a_damaged_run_or_classification_file_is_refused(self):
         run = store.save_run(self.runs_dir, self.incidents, "a.csv", "defender")["run"]
-        (self.runs_dir / store.GRADES_FILE).write_text("time,IncidentId\nx,200\n")
-        with self.assertRaisesRegex(store.StoreError, store.GRADES_FILE):
-            store.read_reviews(self.runs_dir)
+        (self.runs_dir / store.CLASSIFICATIONS_FILE).write_text("time,IncidentId\nx,200\n")
+        with self.assertRaisesRegex(store.StoreError, store.CLASSIFICATIONS_FILE):
+            store.read_classifications(self.runs_dir)
         for text in ("not json", "[]", '{"created": "2024-06-01T00:00:00Z"}'):
             with self.subTest(text):
                 (self.runs_dir / run / "meta.json").write_text(text)

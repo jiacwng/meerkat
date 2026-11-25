@@ -2,11 +2,11 @@
   "inputs": [
     "org_true_positive_rate",
     "rule_true_positive_rate",
-    "log_org_graded",
-    "log_rule_graded",
-    "log_linked",
-    "linked_true_positive_log_odds",
-    "has_linked_true_positive",
+    "log_org_classified",
+    "log_rule_classified",
+    "log_similar",
+    "similar_true_positive_log_odds",
+    "has_similar_true_positive",
     "has_link"
   ],
   "mean": [

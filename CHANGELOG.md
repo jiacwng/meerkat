@@ -12,10 +12,11 @@
 
 ### Added
 
-- `queue`, `review`, `inspect`, `runs` and `config`.
-- The score is a logistic regression on ten inputs, fitted on GUIDE, with the
-  reason shown beside each score.
-- Incidents under a close level leave the queue, and one in ten is audited.
+- `queue`, `classify`, `details`, `budget`, `serve`, `runs` and `config`.
+- The score is a logistic regression on eight inputs, fitted on GUIDE, with
+  the classification history shown beside each score.
+- The queue lists as many rows as the reading budget. A random sample of the
+  rest gives a 95% interval for the true positives left unread.
 - `examples/incidents.csv`, one organisation of GUIDE.
 
 ## 1.3.0 - 2026-10-22

@@ -67,17 +67,17 @@ class WebTests(unittest.TestCase):
     def test_the_queue_route_lists_the_open_incidents_by_score(self):
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
 
-    def test_the_queue_route_sends_the_grades_links_and_row_columns(self):
+    def test_the_queue_route_sends_the_classifications_links_and_row_columns(self):
         record = json.loads(self._request("GET", "/api/queue")[2])
-        self.assertEqual(record["grades"], ["TruePositive", "BenignPositive", "FalsePositive"])
+        self.assertEqual(record["classifications"], ["TruePositive", "BenignPositive", "FalsePositive"])
         self.assertIn("AccountUpn", record["links"])
         first = record["queue"][0]
         self.assertEqual((first["host"], first["user"], first["flag"]), ("", "alice", ""))
 
     def test_a_request_without_the_token_is_refused(self):
         self.assertEqual(self._request("GET", "/api/queue", token=False)[0], 403)
-        grade = {"incident": "201", "grade": "TruePositive"}
-        self.assertEqual(self._request("POST", "/api/grade", grade, token=False)[0], 403)
+        classification = {"incident": "201", "classification": "TruePositive"}
+        self.assertEqual(self._request("POST", "/api/classify", classification, token=False)[0], 403)
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
 
     def test_a_request_under_another_host_name_is_refused(self):
@@ -86,40 +86,40 @@ class WebTests(unittest.TestCase):
         port = self.server.server_port
         self.assertEqual(self._request("GET", "/", host=f"localhost:{port}")[0], 200)
 
-    def test_a_grade_from_the_page_closes_the_incident(self):
+    def test_a_classification_from_the_page_closes_the_incident(self):
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
-        grade = {"incident": "201", "grade": "TruePositive", "comment": "checked with the user"}
-        status, _, body = self._request("POST", "/api/grade", grade)
-        self.assertEqual((status, json.loads(body)["grade"]), (200, "TruePositive"))
+        classification = {"incident": "201", "classification": "TruePositive", "comment": "checked with the user"}
+        status, _, body = self._request("POST", "/api/classify", classification)
+        self.assertEqual((status, json.loads(body)["classification"]), (200, "TruePositive"))
         self.assertEqual(self._queue_ids(), ["202", "200"])
-        self.assertIn("checked with the user", (self.runs_dir / "grades.csv").read_text())
+        self.assertIn("checked with the user", (self.runs_dir / "classifications.csv").read_text())
         record = json.loads(self._request("GET", "/api/incident?id=201")[2])
         self.assertEqual(record["IncidentGrade"], "TruePositive")
-        linked = record["linked_incidents"]
-        self.assertEqual([row["IncidentId"] for row in linked], ["100"])
-        self.assertEqual(linked[0]["shared"], ["AccountName alice", "IpAddress 10.0.0.1"])
+        similar = record["similar_incidents"]
+        self.assertEqual([row["IncidentId"] for row in similar], ["100"])
+        self.assertEqual(similar[0]["shared"], ["AccountName alice", "IpAddress 10.0.0.1"])
         self.assertEqual(record["entities"], [
-            {"field": "AccountName", "value": "alice", "graded_before": 1,
+            {"field": "AccountName", "value": "alice", "classified_before": 1,
              "TruePositive": 1, "BenignPositive": 0, "FalsePositive": 0},
-            {"field": "IpAddress", "value": "10.0.0.1", "graded_before": 1,
+            {"field": "IpAddress", "value": "10.0.0.1", "classified_before": 1,
              "TruePositive": 1, "BenignPositive": 0, "FalsePositive": 0}])
 
-    def test_a_grade_recorded_in_the_terminal_reaches_the_page(self):
+    def test_a_classification_recorded_in_the_terminal_reaches_the_page(self):
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
         with contextlib.redirect_stdout(io.StringIO()):
-            main(["review", "202", "fp", "--runs-dir", str(self.runs_dir)])
+            main(["classify", "202", "fp", "--runs-dir", str(self.runs_dir)])
         self.assertEqual(self._queue_ids(), ["201", "200"])
 
-    def test_a_wrong_grade_an_unknown_incident_and_a_long_body_are_refused(self):
-        wrong = {"incident": "201", "grade": "Malicious"}
-        self.assertEqual(self._request("POST", "/api/grade", wrong)[0], 400)
-        wrong = {"incident": "201", "grade": "TruePositive", "group": "yes"}
-        self.assertEqual(self._request("POST", "/api/grade", wrong)[0], 400)
-        unknown = {"incident": "999", "grade": "TruePositive"}
-        self.assertEqual(self._request("POST", "/api/grade", unknown)[0], 404)
-        self.assertEqual(self._request("POST", "/api/grade", "not json")[0], 400)
+    def test_a_wrong_classification_an_unknown_incident_and_a_long_body_are_refused(self):
+        wrong = {"incident": "201", "classification": "Malicious"}
+        self.assertEqual(self._request("POST", "/api/classify", wrong)[0], 400)
+        wrong = {"incident": "201", "classification": "TruePositive", "group": "yes"}
+        self.assertEqual(self._request("POST", "/api/classify", wrong)[0], 400)
+        unknown = {"incident": "999", "classification": "TruePositive"}
+        self.assertEqual(self._request("POST", "/api/classify", unknown)[0], 404)
+        self.assertEqual(self._request("POST", "/api/classify", "not json")[0], 400)
         long = "x" * (web.BODY_LIMIT + 1)
-        self.assertEqual(self._request("POST", "/api/grade", long)[0], 400)
+        self.assertEqual(self._request("POST", "/api/classify", long)[0], 400)
         self.assertEqual(self._request("GET", "/api/incident?id=999")[0], 404)
         self.assertEqual(self._request("GET", "/api/other")[0], 404)
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
@@ -129,11 +129,11 @@ class WebTests(unittest.TestCase):
         self.addCleanup(idle.close)
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
 
-    def test_a_damaged_grade_file_is_answered_with_an_error(self):
-        (self.runs_dir / "grades.csv").write_text('"open quote')
+    def test_a_damaged_classification_file_is_answered_with_an_error(self):
+        (self.runs_dir / "classifications.csv").write_text('"open quote')
         status, _, body = self._request("GET", "/api/queue")
         self.assertEqual(status, 404)
-        self.assertIn("grades.csv", json.loads(body)["error"])
+        self.assertIn("classifications.csv", json.loads(body)["error"])
 
     def test_incident_text_reaches_the_page_as_data_and_is_never_parsed_as_html(self):
         status, headers, body = self._request("GET", "/api/incident?id=202")

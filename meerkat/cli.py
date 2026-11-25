@@ -1,4 +1,4 @@
-# The meerkat command line: queue, review, inspect, runs, config, budget and serve.
+# The meerkat command line: queue, classify, details, runs, config, budget and serve.
 
 import argparse
 import json
@@ -11,7 +11,7 @@ from meerkat import __version__
 
 EXIT_ERROR = 1
 STYLES = {"dim": "2", "cyan": "36", "red": "31"}
-GRADE_CODES = {
+CLASSIFICATION_CODES = {
     "tp": "TruePositive",
     "bp": "BenignPositive",
     "fp": "FalsePositive",
@@ -25,11 +25,11 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("queue takes a FILE or --run, not both")
     if args.command == "queue" and args.file is None and args.mapping is not None:
         parser.error("--mapping needs FILE")
-    if args.command == "review":
-        if args.file is None and (args.incident is None or args.grade is None):
-            parser.error("review takes INCIDENT and GRADE, or --file")
+    if args.command == "classify":
+        if args.file is None and (args.incident is None or args.classification is None):
+            parser.error("classify takes INCIDENT and CLASSIFICATION, or --file")
         if args.file is not None and (args.incident is not None or args.comment or args.group):
-            parser.error("--file takes no INCIDENT, GRADE, --comment or --group")
+            parser.error("--file takes no INCIDENT, CLASSIFICATION, --comment or --group")
     if args.command == "config":
         if (args.setting is None) != (args.value is None):
             parser.error("config takes SETTING and VALUE, or nothing")
@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="meerkat",
-        description="Rank a SOC's open incidents and learn from the grades "
+        description="Rank a SOC's open incidents and learn from the classifications "
                     "analysts give.")
     parser.add_argument("--version", action="version", version=f"meerkat {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -71,34 +71,36 @@ def _build_parser() -> argparse.ArgumentParser:
     shown.add_argument("--all", action="store_true",
                        help="also the incidents below the budget")
     queue.add_argument("--mapping", metavar="NAME_OR_PATH",
-                       help="column names and grade words of FILE: defender, sentinel, "
-                            "splunk or a TOML file (default defender)")
+                       help="column names and classification words of FILE: defender, "
+                            "sentinel, splunk or a TOML file (default defender)")
     _add_run(queue)
     _add_json(queue)
     _add_runs_dir(queue)
     queue.set_defaults(handler=_queue)
 
-    review = sub.add_parser("review", help="record the grade of an incident, or a file "
-                                           "of grades")
-    review.add_argument("incident", nargs="?", metavar="INCIDENT")
-    review.add_argument("grade", nargs="?", choices=tuple(GRADE_CODES), metavar="GRADE",
-                        help="tp (true positive), bp (benign positive) or "
-                             "fp (false positive)")
-    review.add_argument("--comment", default="", metavar="TEXT",
-                        help="free text stored with the grade")
-    review.add_argument("--group", action="store_true",
-                        help="also grade the open incidents grouped with INCIDENT")
-    review.add_argument("--file", type=Path, metavar="FILE",
-                        help="CSV of grades with the columns IncidentId and IncidentGrade")
-    _add_runs_dir(review)
-    review.set_defaults(handler=_review)
+    classify = sub.add_parser("classify", help="record the classification of an incident, "
+                                               "or a file of classifications")
+    classify.add_argument("incident", nargs="?", metavar="INCIDENT")
+    classify.add_argument("classification", nargs="?", choices=tuple(CLASSIFICATION_CODES),
+                          metavar="CLASSIFICATION",
+                          help="tp (true positive), bp (benign positive) or "
+                               "fp (false positive)")
+    classify.add_argument("--comment", default="", metavar="TEXT",
+                          help="free text stored with the classification")
+    classify.add_argument("--group", action="store_true",
+                          help="also classify the open incidents grouped with INCIDENT")
+    classify.add_argument("--file", type=Path, metavar="FILE",
+                          help="CSV of classifications with the columns IncidentId and "
+                               "IncidentGrade")
+    _add_runs_dir(classify)
+    classify.set_defaults(handler=_classify)
 
-    inspect = sub.add_parser("inspect", help="show one incident")
-    inspect.add_argument("incident", metavar="INCIDENT")
-    _add_run(inspect)
-    _add_json(inspect)
-    _add_runs_dir(inspect)
-    inspect.set_defaults(handler=_inspect)
+    details = sub.add_parser("details", help="show one incident")
+    details.add_argument("incident", metavar="INCIDENT")
+    _add_run(details)
+    _add_json(details)
+    _add_runs_dir(details)
+    details.set_defaults(handler=_details)
 
     runs = sub.add_parser("runs", help="list saved runs")
     _add_json(runs)
@@ -138,7 +140,7 @@ def _add_json(parser: argparse.ArgumentParser) -> None:
 
 def _add_runs_dir(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"), metavar="PATH",
-                        help="where runs and grades are kept (default runs/)")
+                        help="where runs and classifications are kept (default runs/)")
 
 
 def _positive(text: str) -> int:
@@ -228,11 +230,11 @@ def _queue(args: argparse.Namespace) -> None:
         rows = [
             (str(row["position"]), row["IncidentId"], f"{row['score']:.2f}",
              str(len(row["members"]) + 1) if row["members"] else "",
-             _rule_tp(row), f"{row['linked_true_positive']}/{row['linked']}", row["flag"],
+             _rule_tp(row), f"{row['similar_true_positive']}/{row['similar']}", row["flag"],
              row["Category"], row["Severity"], row["host"], row["user"],
              _clock(row["latest"]), row["AlertTitle"])
             for row in shown]
-        header = ("#", "incident", "score", "group", "rule_tp", "linked_tp", "flag",
+        header = ("#", "incident", "score", "group", "rule_tp", "similar_tp", "flag",
                   "category", "severity", "host", "user", "time", "title")
         if not any(row["Severity"] for row in shown):
             at = header.index("severity")
@@ -242,7 +244,7 @@ def _queue(args: argparse.Namespace) -> None:
         styles = ["dim" if low else "cyan" if row["flag"] == "sample" else ""
                   for row, low in zip(shown, under, strict=True)]
         _print_table(header, rows,
-                     {"#", "score", "group", "rule_tp", "linked_tp"}, styles,
+                     {"#", "score", "group", "rule_tp", "similar_tp"}, styles,
                      (len(shown) - sum(under), f"below budget {len(below)}"))
         print()
     rows_listed = f"{len(listed)} listed"
@@ -252,9 +254,9 @@ def _queue(args: argparse.Namespace) -> None:
                       f"{rows_listed}")]
     if limit is not None:
         marks = [row["flag"] for row in below]
-        lines.append(("BELOW BUDGET", f"{len(below)} rows, {marks.count('linked TP')} "
-                                      f"linked TP, {marks.count('ungraded rule')} "
-                                      "ungraded rule"))
+        lines.append(("BELOW BUDGET", f"{len(below)} rows, {marks.count('similar TP')} "
+                                      f"similar TP, {marks.count('unclassified rule')} "
+                                      "unclassified rule"))
     if run_ids is not None:
         lines.append(("RUN", run))
     for label, value in lines:
@@ -268,7 +270,7 @@ def _budget_report(args: argparse.Namespace) -> None:
     record = records.queue(args.runs_dir, records.scored(args.runs_dir), settings)
     if args.json:
         _print_json({name: value for name, value in record.items()
-                     if name not in ("queue", "grades", "links")})
+                     if name not in ("queue", "classifications", "links")})
         return
     if settings["budget"] is None:
         print("BUDGET   not set")
@@ -281,21 +283,21 @@ def _budget_report(args: argparse.Namespace) -> None:
              ("BELOW BUDGET", f"{len(below)} rows, {unread} incidents")]
     if below:
         marks = [row["flag"] for row in below]
-        lines += [("  linked TP", str(marks.count("linked TP"))),
-                  ("  ungraded rule", str(marks.count("ungraded rule"))),
+        lines += [("  similar TP", str(marks.count("similar TP"))),
+                  ("  unclassified rule", str(marks.count("unclassified rule"))),
                   ("  oldest below", _clock(record["below_oldest"]))]
     sample, interval = record["sample"], record["tp_below_budget"]
-    graded = f"{sample['drawn']} drawn, {sample['graded']} graded"
-    if sample["graded"]:
-        graded += f", {sample['true_positive']} TP"
-    lines.append(("SAMPLE", graded))
+    classified = f"{sample['drawn']} drawn, {sample['classified']} classified"
+    if sample["classified"]:
+        classified += f", {sample['true_positive']} TP"
+    lines.append(("SAMPLE", classified))
     waiting = [_printable(row["IncidentId"]) for row in reading if row["flag"] == "sample"]
     if waiting:
-        lines.append(("  to grade", ", ".join(waiting)))
+        lines.append(("  to classify", ", ".join(waiting)))
     if sample["not_sampled"]:
         lines.append(("  not sampled",str(sample["not_sampled"])))
     if interval is None:
-        estimated = "not estimated, 0 graded samples"
+        estimated = "not estimated, 0 classified samples"
     elif unread == 0:
         estimated = "not estimated, 0 incidents below budget"
     elif unread == sample["not_sampled"]:
@@ -303,7 +305,7 @@ def _budget_report(args: argparse.Namespace) -> None:
     else:
         estimated = (f"{interval['low']} to {interval['high']} of "
                      f"{unread - sample['not_sampled']}, 95% interval, "
-                     f"from {sample['graded']} graded")
+                     f"from {sample['classified']} classified")
     lines.append(("TP BELOW BUDGET", estimated))
     width = max(len(label) for label, _ in lines)
     for label, value in lines:
@@ -339,9 +341,9 @@ def _config(args: argparse.Namespace) -> None:
     store.write_settings(args.runs_dir, saved)
     if runs:
         newest = runs[-1]["run"]
-        graded = set(scored.loc[scored["IncidentGrade"] != "", "IncidentId"])
+        classified = set(scored.loc[scored["IncidentGrade"] != "", "IncidentId"])
         if (store.has_sample(args.runs_dir, newest)
-                and not graded & set(store.read_samples(args.runs_dir)[-1]["drawn"])):
+                and not classified & set(store.read_samples(args.runs_dir)[-1]["drawn"])):
             store.drop_sample(args.runs_dir, newest)
         _draw_sample(args.runs_dir, newest, records.settings(args.runs_dir), scored)
     print(_setting_line(args.setting, args.value))
@@ -351,46 +353,49 @@ def _setting_line(name: str, value: float | None) -> str:
     return f"{name}={str(value).lower()}"
 
 
-def _review(args: argparse.Namespace) -> None:
+def _classify(args: argparse.Namespace) -> None:
     from core import budget
-    from core.incidents import read_grades
+    from core.incidents import read_classifications
     from meerkat import records
 
     scored = records.scored(args.runs_dir)
     kept = {}
     if args.file is not None:
-        grades = read_grades(args.file)
+        classifications = read_classifications(args.file)
     elif args.group:
         together = records.with_group(args.runs_dir, scored, args.incident)
-        grades = [(incident, GRADE_CODES[args.grade]) for incident in together]
-        kept = {incident: grade for incident, grade
-                in records.reviewed_with(args.runs_dir, scored, args.incident).items()
-                if grade != GRADE_CODES[args.grade]}
+        chosen = CLASSIFICATION_CODES[args.classification]
+        classifications = [(incident, chosen) for incident in together]
+        kept = {incident: classification for incident, classification
+                in records.classified_with(args.runs_dir, scored, args.incident).items()
+                if classification != chosen}
     else:
-        grades = [(args.incident, GRADE_CODES[args.grade])]
-    true_positives = records.grade(args.runs_dir, scored, grades, args.comment)
+        classifications = [(args.incident, CLASSIFICATION_CODES[args.classification])]
+    true_positives = records.classify(args.runs_dir, scored, classifications, args.comment)
     if args.file is None:
-        counts = {"incident": _printable(args.incident), "grade": grades[0][1],
-                  "incidents": len(grades)}
+        counts = {"incident": _printable(args.incident),
+                  "classification": classifications[0][1],
+                  "incidents": len(classifications)}
         before = dict(zip(scored["IncidentId"], scored["IncidentGrade"], strict=True))
-        if before[args.incident] not in ("", grades[0][1]):
+        if before[args.incident] not in ("", classifications[0][1]):
             counts["replaced"] = before[args.incident]
-        print(_summary("GRADED", counts))
+        print(_summary("CLASSIFIED", counts))
         if args.group:
-            print("  graded   " + " ".join(_printable(incident) for incident, _ in grades))
+            print("  classified   " + " ".join(_printable(incident)
+                                               for incident, _ in classifications))
         if kept:
-            print("  kept     " + ", ".join(f"{_printable(incident)} {grade}"
-                                            for incident, grade in kept.items()))
+            print("  kept         " + ", ".join(f"{_printable(incident)} {classification}"
+                                                for incident, classification in kept.items()))
         return
-    counts = {"incidents": len(grades), "tp": len(true_positives)}
+    counts = {"incidents": len(classifications), "tp": len(true_positives)}
     if records.settings(args.runs_dir)["budget"] is not None:
         to_read, sample, below = (true_positives.count(name) for name in budget.PLACEMENTS)
         counts.update(tp_to_read=to_read, tp_sample=sample, tp_below=below)
-    print(_summary("GRADED", counts))
+    print(_summary("CLASSIFIED", counts))
 
 
-def _inspect(args: argparse.Namespace) -> None:
-    from core.incidents import GRADES
+def _details(args: argparse.Namespace) -> None:
+    from core.incidents import CLASSIFICATIONS
     from meerkat import records
 
     scored = records.scored(args.runs_dir)
@@ -408,18 +413,18 @@ def _inspect(args: argparse.Namespace) -> None:
             ("category", record["Category"]),
             ("severity", record["Severity"]),
             ("techniques", ", ".join(record["MitreTechniques"])),
-            ("grade", record["IncidentGrade"] or "open"),
+            ("classification", record["IncidentGrade"] or "open"),
             ("placement", record["placement"]),
         ],
         "SCORE": [
             ("score", f"{record['score']:.2f}"),
-            *zip(("rule", "linked"), _graded_before(
+            *zip(("rule", "similar"), _classified_before(
                 (record["rule_true_positives"], record["rule_benign_positives"],
-                 record["rule_graded"]),
-                (record["linked_true_positive"], record["linked_benign_positive"],
-                 record["linked"])), strict=True),
-            ("same rule", f"{record['linked_same_rule']} of {record['linked']}"
-             if record["linked"] else ""),
+                 record["rule_classified"]),
+                (record["similar_true_positive"], record["similar_benign_positive"],
+                 record["similar"])), strict=True),
+            ("same rule", f"{record['similar_same_rule']} of {record['similar']}"
+             if record["similar"] else ""),
         ],
         "GROUP": [("incidents", ", ".join(record["members"]))],
     }
@@ -430,28 +435,30 @@ def _inspect(args: argparse.Namespace) -> None:
             print(title if title == "INCIDENT" else f"\n{title}")
         for name, value in lines:
             print(f"{name:<{width}}  {_printable(value)}")
-    red = {GRADES[0]: "red"}
-    if record["grade_history"]:
+    red = {CLASSIFICATIONS[0]: "red"}
+    if record["classification_history"]:
         print("\nHISTORY")
-        _print_table(("graded", "grade", "comment"),
-                     [(past["time"], past["grade"], past["comment"])
-                      for past in record["grade_history"]], set(),
-                     [red.get(past["grade"], "") for past in record["grade_history"]])
+        _print_table(("classified", "classification", "comment"),
+                     [(past["time"], past["classification"], past["comment"])
+                      for past in record["classification_history"]], set(),
+                     [red.get(past["classification"], "")
+                      for past in record["classification_history"]])
     if record["entities"]:
         print("\nENTITIES")
-        short = ["".join(letter for letter in grade if letter.isupper()) for grade in GRADES]
-        _print_table(("entity", "value", "graded_before", *short),
-                     [(entity["field"], entity["value"], str(entity["graded_before"]),
-                       *(str(entity[grade]) for grade in GRADES))
-                      for entity in record["entities"]], {"graded_before", *short},
+        short = ["".join(letter for letter in name if letter.isupper())
+                 for name in CLASSIFICATIONS]
+        _print_table(("entity", "value", "classified_before", *short),
+                     [(entity["field"], entity["value"], str(entity["classified_before"]),
+                       *(str(entity[name]) for name in CLASSIFICATIONS))
+                      for entity in record["entities"]], {"classified_before", *short},
                      [""] * len(record["entities"]))
-    if record["linked_incidents"]:
-        print("\nLINKED")
-        _print_table(("incident", "grade", "time", "rule", "title"),
-                     [tuple(linked[name] for name in records.LINKED_SHOWN)
-                      for linked in record["linked_incidents"]], set(),
-                     [red.get(linked["IncidentGrade"], "")
-                      for linked in record["linked_incidents"]])
+    if record["similar_incidents"]:
+        print("\nSIMILAR")
+        _print_table(("incident", "classification", "time", "rule", "title"),
+                     [tuple(similar[name] for name in records.SIMILAR_SHOWN)
+                      for similar in record["similar_incidents"]], set(),
+                     [red.get(similar["IncidentGrade"], "")
+                      for similar in record["similar_incidents"]])
 
 
 def _serve(args: argparse.Namespace) -> None:
@@ -477,15 +484,15 @@ def _runs(args: argparse.Namespace) -> None:
                  [""] * len(rows))
 
 
-def _graded_before(*counts: tuple[int, int, int]) -> list[str]:
+def _classified_before(*counts: tuple[int, int, int]) -> list[str]:
     cells = [(str(tp), str(bp), str(total - tp - bp), str(total)) for tp, bp, total in counts]
     wide = [max(len(row[at]) for row in cells) for at in range(4)]
     return [f"{tp:>{wide[0]}} TP  {bp:>{wide[1]}} BP  {fp:>{wide[2]}} FP  "
-            f"of {total:>{wide[3]}} graded before" for tp, bp, fp, total in cells]
+            f"of {total:>{wide[3]}} classified before" for tp, bp, fp, total in cells]
 
 
 def _rule_tp(row: dict) -> str:
-    return f"{row['rule_true_positives']}/{row['rule_graded']}"
+    return f"{row['rule_true_positives']}/{row['rule_classified']}"
 
 
 def _print_json(value) -> None:

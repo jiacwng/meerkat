@@ -48,7 +48,7 @@ class ReadIncidentsTests(unittest.TestCase):
         self.assertEqual(incidents.loc[0, "IncidentGrade"], "")
         self.assertEqual(incidents.loc[0, "Url"], "")
 
-    def test_grade_comes_from_any_row_of_the_incident(self):
+    def test_classification_comes_from_any_row_of_the_incident(self):
         rows = (self._row(AlertId="x"), self._row(IncidentGrade="FalsePositive"))
         incidents = read_incidents(write_csv(self.path, rows), DEFENDER)
         self.assertEqual(incidents.loc[0, "IncidentGrade"], "FalsePositive")
@@ -61,9 +61,9 @@ class ReadIncidentsTests(unittest.TestCase):
         urls = [set(value.split(SEPARATOR)) for value in incidents["Url"]]
         self.assertEqual(urls[0] & urls[1], set())
         self.assertEqual(urls[0], {"http://a/x%7Cshared"})
-        self.assertEqual(compute(incidents, 0.5)["linked"].tolist(), [0, 0])
+        self.assertEqual(compute(incidents, 0.5)["similar"].tolist(), [0, 0])
 
-    def test_grade_is_the_latest_one_and_a_later_blank_does_not_erase_it(self):
+    def test_classification_is_the_latest_one_and_a_later_blank_does_not_erase_it(self):
         rows = (self._row(AlertId="x", Timestamp="2024-06-01T00:00:00Z",
                           IncidentGrade="FalsePositive"),
                 self._row(AlertId="y", Timestamp="2024-06-02T00:00:00Z",
@@ -110,7 +110,7 @@ class ReadIncidentsTests(unittest.TestCase):
                     IncidentError, f"1 rows have no {name}"):
                 read_incidents(write_csv(self.path, (self._row(**{name: " "}),)), DEFENDER)
 
-    def test_unknown_grade_names_the_source_column_and_accepted_words(self):
+    def test_unknown_classification_names_the_source_column_and_accepted_words(self):
         header = ("rule_id", "_time", "rule_name", "disposition_label")
         rows = (("1", "2024-06-01T00:00:00Z", "r", "Maybe"),)
         with self.assertRaisesRegex(
