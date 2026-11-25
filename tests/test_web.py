@@ -120,6 +120,9 @@ class WebTests(unittest.TestCase):
                 body = {"incidents": wrong, "classification": "TruePositive"}
                 self.assertIn(self._request("POST", "/api/classify", body)[0], (400, 404))
         self.assertEqual(self._queue_ids(), ["200"])
+        many = {"incidents": ["200"] * 5000, "classification": "FalsePositive"}
+        self.assertEqual(self._request("POST", "/api/classify", many)[0], 200)
+        self.assertEqual(self._queue_ids(), [])
 
     def test_a_classification_recorded_in_the_terminal_reaches_the_page(self):
         self.assertEqual(self._queue_ids(), ["201", "202", "200"])
@@ -135,7 +138,7 @@ class WebTests(unittest.TestCase):
         unknown = {"incidents": ["999"], "classification": "TruePositive"}
         self.assertEqual(self._request("POST", "/api/classify", unknown)[0], 404)
         self.assertEqual(self._request("POST", "/api/classify", "not json")[0], 400)
-        long = "x" * (web.BODY_LIMIT + 1)
+        long = "x" * (self.server.max_file_bytes + 1)
         self.assertEqual(self._request("POST", "/api/classify", long)[0], 400)
         self.assertEqual(self._request("GET", "/api/incident?id=999")[0], 404)
         self.assertEqual(self._request("GET", "/api/other")[0], 404)
@@ -153,7 +156,7 @@ class WebTests(unittest.TestCase):
 
     def test_a_wrong_budget_is_refused_and_nothing_is_saved(self):
         for wrong in ({"budget": 0}, {"budget": -3}, {"budget": 2.5}, {"budget": "3"},
-                      {"budget": True}, {"size": 3}, "not json", "x" * (web.BODY_LIMIT + 1)):
+                      {"budget": True}, {"size": 3}, "not json", "x" * (self.server.max_file_bytes + 1)):
             with self.subTest(wrong):
                 self.assertEqual(self._request("POST", "/api/budget", wrong)[0], 400)
         self.assertEqual(self._request("POST", "/api/budget", {"budget": 2}, token=False)[0], 403)

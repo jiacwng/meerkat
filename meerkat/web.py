@@ -18,7 +18,6 @@ from meerkat import records
 
 PAGE = Path(__file__).parent / "page.html"
 HOST = "127.0.0.1"
-BODY_LIMIT = 4096
 TOKEN_HEADER = "X-Meerkat-Token"
 FILE_HEADER = "X-Meerkat-File"
 MAPPING_HEADER = "X-Meerkat-Mapping"
@@ -107,12 +106,12 @@ class _Handler(BaseHTTPRequestHandler):
             return {**page, "queue": None}
         return {**page, **records.queue(runs_dir, self._scores(), records.settings(runs_dir))}
 
-    def _read(self, limit: int) -> bytes | None:
+    def _read(self) -> bytes | None:
         try:
             size = int(self.headers.get("Content-Length", ""))
         except ValueError:
             size = -1
-        if not 0 <= size <= limit:
+        if not 0 <= size <= self.server.max_file_bytes:
             self.close_connection = True
             return None
         return self.rfile.read(size)
@@ -123,7 +122,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._json(HTTPStatus.BAD_REQUEST, {"error": f"mapping is one of {', '.join(PRESETS)}"})
             return
-        body = self._read(self.server.max_file_bytes)
+        body = self._read()
         if body is None:
             megabytes = self.server.max_file_bytes // (1024 * 1024)
             self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
@@ -144,7 +143,7 @@ class _Handler(BaseHTTPRequestHandler):
         return {"run": run}
 
     def _budget(self) -> None:
-        body = self._read(BODY_LIMIT)
+        body = self._read()
         try:
             chosen = json.loads(body)["budget"]
         except (ValueError, KeyError, TypeError):
@@ -163,7 +162,7 @@ class _Handler(BaseHTTPRequestHandler):
         return {"budget": chosen}
 
     def _classify(self) -> None:
-        body = self._read(BODY_LIMIT)
+        body = self._read()
         if body is None:
             self._json(HTTPStatus.BAD_REQUEST, {"error": "the request body has no valid length"})
             return
