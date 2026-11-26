@@ -32,6 +32,7 @@ DEFENDER_READ = {
     "IncidentId": "Incident Id", "Timestamp": "Creation time", "DetectorId": "Policy name",
     "AlertTitle": "Incident name", "Category": "Categories", "Severity": "Severity",
 }
+DEFENDER_LINK = "https://security.microsoft.com/incident2/{incident}/overview?tid={tenant}"
 DEFENDER_STATUS = ("Active", "In Progress", "Awaiting Customer Action", "Resolved")
 DEFENDER_CLASSIFICATION = {
     "Not set": CLOSED, "True alert": TRUE_POSITIVE, "Benign Positive": BENIGN_POSITIVE,
@@ -65,11 +66,17 @@ SPLUNK_DISPOSITION = {
 SPLUNK_TIME = re.compile(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d(?:\.\d+)?) (?:GMT|UTC)$")
 
 
-def read(path) -> tuple[pd.DataFrame, str]:
+def read(path, defender_tenant: str | None = None) -> tuple[pd.DataFrame, str]:
     table = read_table(path)
     for source, mark, reader in LAYOUTS:
         if mark in table.columns:
-            return reader(path, table), source
+            incidents = reader(path, table)
+            if source == "defender" and defender_tenant:
+                incidents["IncidentUrl"] = [
+                    DEFENDER_LINK.format(incident=incident, tenant=defender_tenant)
+                    if incident.isascii() and incident.isdigit() else ""
+                    for incident in incidents["IncidentId"]]
+            return incidents, source
     with open(path, encoding="utf-8-sig", newline="") as handle:
         header = handle.readline()
     for separator in (";", "\t"):

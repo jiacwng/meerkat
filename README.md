@@ -170,6 +170,7 @@ Colour is used on a terminal only. Set `NO_COLOR` to turn it off.
 | --- | --- | --- |
 | `budget` | Number of rows the team plans to read. | none |
 | `sample_share` | Share of the budget drawn at random from below it. | 0.1 |
+| `defender_tenant` | Microsoft Entra tenant id. Defender incidents loaded after it is set link to their page in the Defender portal. | none |
 
 ```bash
 meerkat config

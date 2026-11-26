@@ -14,7 +14,7 @@ USER = ("AccountUpn", "AccountName", "AccountSid", "AccountObjectId")
 
 def settings(runs_dir: Path) -> dict:
     return {"budget": None, "sample_share": budget.DEFAULT_SAMPLE_SHARE,
-            **store.read_settings(runs_dir)}
+            "defender_tenant": None, **store.read_settings(runs_dir)}
 
 
 def scored(runs_dir: Path) -> pd.DataFrame:
@@ -22,7 +22,7 @@ def scored(runs_dir: Path) -> pd.DataFrame:
 
 
 def load(runs_dir: Path, path: Path, file: str) -> tuple[pd.DataFrame, str]:
-    incidents, source = exports.read(path)
+    incidents, source = exports.read(path, settings(runs_dir)["defender_tenant"])
     return keep(runs_dir, incidents, file, source)
 
 
@@ -45,13 +45,16 @@ def draw_sample(runs_dir: Path, run: str, chosen: dict, scores: pd.DataFrame) ->
         store.save_sample(runs_dir, run, sample)
 
 
-def change_setting(runs_dir: Path, name: str, value: float | None,
+def change_setting(runs_dir: Path, name: str, value: float | str | None,
                    scores: pd.DataFrame | None = None) -> None:
     saved = store.read_settings(runs_dir)
     if value is None:
         saved.pop(name, None)
     else:
         saved[name] = value
+    if name == "defender_tenant":
+        store.write_settings(runs_dir, saved)
+        return
     runs = store.list_runs(runs_dir)
     if runs and scores is None:
         scores = scored(runs_dir)

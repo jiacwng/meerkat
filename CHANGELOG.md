@@ -23,6 +23,8 @@
 - The queue lists as many rows as the reading budget. A random sample of the
   rest gives a 95% interval for the true positives left unread.
 - `examples/incidents.csv`, one organisation of GUIDE.
+- `meerkat config defender_tenant ID` links Defender incidents to the Defender
+  portal.
 
 ## 1.3.0 - 2026-10-22
 
