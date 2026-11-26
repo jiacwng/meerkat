@@ -24,6 +24,11 @@ from tests.fixtures import (
     write_csv,
 )
 
+DEFENDER_EXPORT = (
+    "Incident name,Incident Id,Severity,Categories,Impacted assets,Policy name,Status,"
+    "Classification,Creation time\n"
+    "Lockout,61,medium,CredentialAccess,Accounts: admin01,Lockout,Active,Not set,"
+    "2026-05-04T22:05:25.680Z\n")
 
 class CliTests(unittest.TestCase):
     def setUp(self):
@@ -692,20 +697,44 @@ class CliTests(unittest.TestCase):
     def test_config_prints_the_defaults_on_an_empty_runs_folder(self):
         code, out, err = self._run("config")
         self.assertEqual((code, err), (0, ""))
-        self.assertEqual(out, f"budget=none\nsample_share={budget.DEFAULT_SAMPLE_SHARE}\n")
+        self.assertEqual(out, f"budget=none\nsample_share={budget.DEFAULT_SAMPLE_SHARE}\n"
+                              "defender_tenant=none\n")
         self.assertFalse(self.runs_dir.exists())
 
     def test_config_sets_shows_and_clears_each_setting(self):
         self.assertEqual(self._run("config", "budget", "25")[1], "budget=25\n")
         self.assertEqual(self._run("config", "budget", "30")[1], "budget=30\n")
         self.assertEqual(self._run("config", "sample_share", "0.2")[1], "sample_share=0.2\n")
-        self.assertEqual(self._run("config")[1], "budget=30\nsample_share=0.2\n")
+        self.assertEqual(self._run("config")[1],
+                         "budget=30\nsample_share=0.2\ndefender_tenant=none\n")
         saved = json.loads((self.runs_dir / "settings.json").read_text())
         self.assertEqual(saved, {"budget": 30, "sample_share": 0.2})
         self.assertEqual(self._run("config", "budget", "none")[1], "budget=none\n")
         self.assertEqual(json.loads((self.runs_dir / "settings.json").read_text()),
                          {"sample_share": 0.2})
         self.assertEqual(self._queue_json(str(self.csv))["budget"], None)
+
+    def test_a_defender_tenant_gives_defender_incidents_their_portal_link(self):
+        path = self.tmp / "incidents-queue.csv"
+        path.write_text(DEFENDER_EXPORT, encoding="utf-8")
+        self.assertEqual(self._run("queue", str(path))[0], 0)
+        code, out, err = self._run("config", "defender_tenant",
+                                   "CFCDBE43-297B-4C6B-AC7E-8D7F6BEFB514")
+        self.assertEqual((code, out, err),
+                         (0, "defender_tenant=cfcdbe43-297b-4c6b-ac7e-8d7f6befb514\n", ""))
+        self.assertEqual(self._run("queue", str(path))[0], 0)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            main(["details", "61", "--json", "--runs-dir", str(self.runs_dir)])
+        self.assertEqual(json.loads(out.getvalue())["IncidentUrl"],
+                         "https://security.microsoft.com/incident2/61/overview?tid=cfcdbe43-297b-4c6b-ac7e-8d7f6befb514")
+        self.assertEqual(self._run("config", "defender_tenant", "none")[1],
+                         "defender_tenant=none\n")
+        for value in ("abc", "cfcdbe43-297b-4c6b-ac7e-8d7f6befb514x", "", "../../etc"):
+            with self.subTest(value):
+                code, out, err = self._run("config", "defender_tenant", value)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("defender_tenant: expected a tenant id", err)
 
     def test_config_with_one_argument_is_a_usage_error(self):
         for setting in ("budget", "sample_share"):

@@ -103,11 +103,12 @@ def _build_parser() -> argparse.ArgumentParser:
     runs.set_defaults(handler=_runs)
 
     config = sub.add_parser("config", help="show the settings, or change one")
-    config.add_argument("setting", nargs="?", choices=("budget", "sample_share"),
-                        metavar="SETTING", help="budget or sample_share")
+    config.add_argument("setting", nargs="?", choices=tuple(SETTINGS), metavar="SETTING",
+                        help="budget, sample_share or defender_tenant")
     config.add_argument("value", nargs="?", metavar="VALUE",
                         help="a whole number above 0 or none for budget, a number from 0 "
-                             "up to 1 for sample_share")
+                             "up to 1 for sample_share, the Microsoft Entra tenant id or none "
+                             "for defender_tenant")
     _add_runs_dir(config)
     config.set_defaults(handler=_config)
 
@@ -178,7 +179,19 @@ def _share(text: str) -> float:
     return value
 
 
-SETTINGS = {"budget": _budget, "sample_share": _share}
+def _tenant(text: str) -> str | None:
+    from core.store import tenant_id
+
+    if text == "none":
+        return None
+    found = tenant_id(text)
+    if found is None:
+        raise argparse.ArgumentTypeError("expected a tenant id like "
+                                         "cfcdbe43-297b-4c6b-ac7e-8d7f6befb514, or none")
+    return found
+
+
+SETTINGS = {"budget": _budget, "sample_share": _share, "defender_tenant": _tenant}
 
 
 def _queue(args: argparse.Namespace) -> None:
@@ -313,7 +326,7 @@ def _config(args: argparse.Namespace) -> None:
     print(_setting_line(args.setting, args.value))
 
 
-def _setting_line(name: str, value: float | None) -> str:
+def _setting_line(name: str, value: float | str | None) -> str:
     return f"{name}={str(value).lower()}"
 
 

@@ -63,6 +63,17 @@ class ExportTests(unittest.TestCase):
         self.assertEqual((row["DeviceName"], row["AccountName"]),
                          ("DC01.cyberlab.local", "admin01"))
 
+    def test_a_defender_tenant_links_each_numeric_incident_to_its_portal_page(self):
+        incidents, _ = read(self._defender({}, {"Incident Id": "6a"}), "cfcdbe43-297b-4c6b-ac7e-8d7f6befb514")
+        self.assertEqual(incidents.set_index("IncidentId")["IncidentUrl"].to_dict(),
+                         {"61": "https://security.microsoft.com/incident2/61/overview"
+                                "?tid=cfcdbe43-297b-4c6b-ac7e-8d7f6befb514", "6a": ""})
+        self.assertEqual(read(self.path)[0]["IncidentUrl"].tolist(), ["", ""])
+
+    def test_a_defender_tenant_leaves_a_splunk_export_without_links(self):
+        write_csv(self.path, (splunk_row(),), SPLUNK_HEADER)
+        self.assertEqual(read(self.path, "cfcdbe43-297b-4c6b-ac7e-8d7f6befb514")[0]["IncidentUrl"].tolist(), [""])
+
     def test_a_byte_order_mark_and_crlf_lines_are_read(self):
         text = self._defender().read_text(encoding="utf-8").replace("\n", "\r\n")
         self.path.write_bytes(b"\xef\xbb\xbf" + text.encode())
