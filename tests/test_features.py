@@ -1,4 +1,4 @@
-# The eight inputs on hand computed histories: strictly earlier only, busy hosts and the cap.
+# The seven inputs on hand computed histories: strictly earlier only, busy hosts and the cap.
 
 import math
 import unittest
@@ -93,7 +93,6 @@ class LinkTests(unittest.TestCase):
         self.assertAlmostEqual(now["similar_true_positive_log_odds"], _log_odds(1, 2))
         self.assertEqual(inputs["has_similar_true_positive"].tolist(), [0, 0, 1, 0, 1, 0, 0])
         self.assertEqual(inputs["similar"].tolist(), [0, 0, 1, 0, 2, 0, 0])
-        self.assertEqual(inputs["has_link"].tolist(), [1.0] * 7)
 
     def test_similar_to_names_the_counted_incidents_newest_first(self):
         frame = _frame(
@@ -113,7 +112,6 @@ class LinkTests(unittest.TestCase):
         inputs = compute(_frame(*busy, _incident("now", 5, DeviceName="dc01")), PRIOR)
         self.assertEqual(inputs["similar"].tolist(), [0, 1, 2, 3, 4, 5])
         self.assertEqual(inputs["similar_true_positive"].tolist(), [0, 1, 2, 3, 4, 5])
-        self.assertEqual(inputs["has_link"].tolist(), [1.0] * 6)
 
     def test_each_value_counts_only_the_most_recent_earlier_incidents(self):
         sharing = [_incident(f"s{i}", i, "FalsePositive", Sha256="h", Url="u")
@@ -142,7 +140,6 @@ class LinkTests(unittest.TestCase):
         for value in inputs["similar_true_positive_log_odds"]:
             self.assertAlmostEqual(value, _log_odds(0, 0))
         self.assertEqual(inputs["has_similar_true_positive"].tolist(), [0.0, 0.0])
-        self.assertEqual(inputs["has_link"].tolist(), [0.0, 0.0])
 
     def test_inputs_keep_the_index_and_order_of_the_frame(self):
         frame = _frame(_incident("late", 5, "TruePositive", AccountName="a"),

@@ -1,4 +1,4 @@
-# The eight inputs of the score, each taken from incidents strictly earlier in time.
+# The seven inputs of the score, each taken from incidents strictly earlier in time.
 
 import numpy as np
 import pandas as pd
@@ -8,7 +8,7 @@ from core.incidents import CLASSIFICATIONS, LINKS, SEPARATOR
 INPUTS = (
     "org_true_positive_rate", "rule_true_positive_rate", "log_org_classified",
     "log_rule_classified", "log_similar", "similar_true_positive_log_odds",
-    "has_similar_true_positive", "has_link",
+    "has_similar_true_positive",
 )
 SIMILAR = ("similar", "similar_true_positive", "similar_benign_positive",
            "similar_false_positive")
@@ -30,7 +30,7 @@ def compute(incidents: pd.DataFrame, prior: float) -> pd.DataFrame:
     rule = pd.factorize(incidents["DetectorId"])[0]
     rule_classified, rule_tp = _earlier_totals(rule, rank, classified, true_positive)
     _, rule_bp = _earlier_totals(rule, rank, classified, classification == 1)
-    by_classification, has_link = _links(incidents, rank, classification)
+    by_classification = _links(incidents, rank, classification)
     similar = by_classification.sum(axis=0)
 
     columns = {
@@ -39,7 +39,6 @@ def compute(incidents: pd.DataFrame, prior: float) -> pd.DataFrame:
         "log_org_classified": np.log1p(org_classified),
         "log_rule_classified": np.log1p(rule_classified),
         **similar_inputs(by_classification[0], similar, prior),
-        "has_link": has_link.astype(np.float64),
         "similar": similar,
         "similar_true_positive": by_classification[0],
         "similar_benign_positive": by_classification[1],
@@ -53,7 +52,7 @@ def compute(incidents: pd.DataFrame, prior: float) -> pd.DataFrame:
 
 def similar_to(incidents: pd.DataFrame, incident_id: str) -> pd.DataFrame:
     incidents = incidents.reset_index(drop=True)
-    incident, other, _ = _pairs(incidents, _time_rank(incidents))
+    incident, other = _pairs(incidents, _time_rank(incidents))
     position = incidents.index[incidents["IncidentId"] == incident_id][0]
     found = incidents.iloc[other[incident == position]]
     found = found[found["IncidentGrade"] != ""]
@@ -90,23 +89,20 @@ def _time_rank(incidents: pd.DataFrame) -> np.ndarray:
 
 
 def _links(incidents: pd.DataFrame, rank: np.ndarray,
-           classification: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+           classification: np.ndarray) -> np.ndarray:
     count = len(incidents)
-    incident, other, has_link = _pairs(incidents, rank)
+    incident, other = _pairs(incidents, rank)
     by_classification = np.zeros((len(CLASSIFICATIONS), count), np.int64)
     for code in range(len(CLASSIFICATIONS)):
         by_classification[code] = np.bincount(incident[classification[other] == code],
                                               minlength=count)
-    return by_classification, has_link
+    return by_classification
 
 
 def _pairs(incidents: pd.DataFrame,
-           rank: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+           rank: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     count = len(incidents)
     entries = _entries(incidents, rank)
-    has_link = np.zeros(count, bool)
-    has_link[entries["owner"]] = True
-
     entries = entries.sort_values(["value", "rank"], kind="stable", ignore_index=True)
     owner = entries["owner"].to_numpy()
     row = entries.index.to_numpy()
@@ -120,7 +116,7 @@ def _pairs(incidents: pd.DataFrame,
         inside = before >= value_start
         pairs.append(owner[inside] * count + owner[before[inside]])
     pairs = np.unique(np.concatenate(pairs))
-    return pairs // count, pairs % count, has_link
+    return pairs // count, pairs % count
 
 
 def _entries(incidents: pd.DataFrame, rank: np.ndarray) -> pd.DataFrame:
