@@ -9,22 +9,17 @@
   inventory of 1.3.0 are removed.
 - The dependencies are numpy and pandas. `bench/train.py` also needs
   scikit-learn.
-- `--mapping` and `meerkat query` are removed. Meerkat picks the reader from
-  the file's header and reads the Defender queue export, a Splunk search export
-  or its own columns. The Defender JSON file and the Sentinel query are no
-  longer read.
-- A run's `meta.json` names its reader under `source` instead of `mapping`.
+- Meerkat reads Defender XDR incidents from a Microsoft Graph JSON file, or a
+  CSV in its own columns.
 
 ### Added
 
 - `queue`, `classify`, `details`, `budget`, `serve`, `runs` and `config`.
-- The score is a logistic regression on eight inputs, fitted on GUIDE, with
+- The score is a logistic regression on seven inputs, fitted on GUIDE, with
   the classification history shown beside each score.
 - The queue lists as many rows as the reading budget. A random sample of the
   rest gives a 95% interval for the true positives left unread.
 - `examples/incidents.csv`, one organisation of GUIDE.
-- `meerkat config defender_tenant ID` links Defender incidents to the Defender
-  portal.
 
 ## 1.3.0 - 2026-10-22
 
