@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import defender
+from core import defender, features
 from core.incidents import IncidentError
 from meerkat.cli import main
 from tests.fixtures import graph_alert, graph_incident, use_weights
@@ -112,7 +112,7 @@ class DefenderTests(unittest.TestCase):
              "mdeDeviceId": "f3b0", "deviceDnsName": "pc-1.contoso.com"},
             {"@odata.type": "#microsoft.graph.security.userEvidence",
              "userAccount": {"azureAdUserId": "e1", "userSid": "S-1-5-21-1",
-                             "userPrincipalName": "bob@contoso.com", "accountName": "bob"}},
+                             "userPrincipalName": "Bob@Contoso.com", "accountName": "BOB"}},
             {"@odata.type": "#microsoft.graph.security.ipEvidence", "ipAddress": "10.0.0.5"},
             {"@odata.type": "#microsoft.graph.security.fileEvidence",
              "fileDetails": {"sha256": "ab" * 32, "fileName": "a.exe"}},
@@ -132,10 +132,43 @@ class DefenderTests(unittest.TestCase):
         self.assertEqual(row["IncidentUrl"], "https://security.microsoft.com/incidents/1")
         self.assertEqual(
             {name: row[name] for name in ENTITIES},
-            {"DeviceId": "f3b0", "DeviceName": "pc-1.contoso.com", "AccountObjectId": "e1",
+            {"DeviceId": "f3b0", "DeviceName": "pc-1", "AccountObjectId": "e1",
              "AccountSid": "S-1-5-21-1", "AccountUpn": "bob@contoso.com",
              "AccountName": "alice|bob", "IpAddress": "10.0.0.5", "Sha256": "ab" * 32,
              "Url": "https://x.example/a"})
+
+    def test_a_host_and_an_account_link_across_case_and_dns_domain(self):
+        device = "#microsoft.graph.security.deviceEvidence"
+        user = "#microsoft.graph.security.userEvidence"
+        pairs = {
+            "DeviceName dc01": ({"@odata.type": device, "hostName": "DC01",
+                                 "deviceDnsName": "DC01.contoso.local"},
+                                {"@odata.type": device, "deviceDnsName": "dc01.contoso.local"}),
+            "DeviceId 4a1b": ({"@odata.type": device, "mdeDeviceId": "4a1b"},
+                              {"@odata.type": device, "mdeDeviceId": "4a1b", "hostName": "pc-9"}),
+            "AccountUpn alice@contoso.com": (
+                {"@odata.type": user, "userAccount": {"userPrincipalName": "Alice@Contoso.com"}},
+                {"@odata.type": user, "userAccount": {"userPrincipalName": "alice@contoso.com"}}),
+            "AccountName alice": ({"@odata.type": user, "userAccount": {"accountName": "ALICE"}},
+                                  {"@odata.type": user, "userAccount": {"accountName": "alice"}}),
+            "AccountSid S-1-5-21-7": (
+                {"@odata.type": user, "userAccount": {"userSid": "S-1-5-21-7"}},
+                {"@odata.type": user, "userAccount": {"userSid": "S-1-5-21-7",
+                                                      "accountName": "other"}}),
+        }
+        for shared, (earlier, later) in pairs.items():
+            with self.subTest(shared):
+                table = self._read(
+                    graph_incident("1", "resolved", "truePositive",
+                                   alerts=[graph_alert(evidence=[earlier])]),
+                    graph_incident("2", alerts=[graph_alert(time="2024-06-02T08:00:00Z",
+                                                            evidence=[later])]),
+                    *(graph_incident(number, alerts=[graph_alert(evidence=[])])
+                      for number in ("3", "4")))
+                similar = features.similar_to(table.reset_index(), "2")
+                self.assertEqual(similar["IncidentId"].tolist(), ["1"])
+                column, value = shared.split(" ")
+                self.assertEqual(table.loc["2", column], value)
 
     def test_an_alert_without_a_detector_id_still_brings_its_evidence(self):
         unnamed = graph_alert(None, "2024-06-01T07:30:00Z", evidence=[
