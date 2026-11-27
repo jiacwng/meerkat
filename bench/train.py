@@ -18,6 +18,7 @@ from core.incidents import LINKS, SEPARATOR
 KEY = ["OrgId", "IncidentId"]
 TRAIN_SHARE = 0.6
 MIN_TEST = 20
+PLACEHOLDER_SHARE = 0.5
 HISTORY = features.INPUTS[:4]
 
 
@@ -112,7 +113,7 @@ def markers(incidents: pd.DataFrame) -> dict[str, pd.Index]:
         values = incidents[column].str.split(SEPARATOR).explode()
         values = values[values != ""]
         share = values.value_counts() / len(incidents)
-        found[column] = share[share > features.PLACEHOLDER_SHARE].index
+        found[column] = share[share > PLACEHOLDER_SHARE].index
     return found
 
 

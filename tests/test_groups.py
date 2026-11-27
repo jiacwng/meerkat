@@ -9,8 +9,7 @@ from core.incidents import COLUMNS
 
 
 def _scored(*rows: dict) -> pd.DataFrame:
-    filler = [{"IncidentId": f"x{number}", "DetectorId": "1"} for number in range(6)]
-    return pd.DataFrame([*rows, *filler], columns=list(COLUMNS)).fillna("")
+    return pd.DataFrame(list(rows), columns=list(COLUMNS)).fillna("")
 
 
 class GroupTests(unittest.TestCase):
@@ -50,11 +49,11 @@ class GroupTests(unittest.TestCase):
         lead = groups.leads(scored, {"b"})
         self.assertEqual((lead["a"], lead["b"], lead["c"]), ("a", "b", "a"))
 
-    def test_a_value_on_more_than_half_of_the_incidents_groups_nothing(self):
-        rows = [{"IncidentId": f"n{number}", "DetectorId": "7", "Url": "everywhere"}
-                for number in range(8)]
+    def test_a_host_on_every_incident_groups_them_all(self):
+        rows = [{"IncidentId": f"n{number}", "DetectorId": "7", "DeviceName": "dc01"}
+                for number in range(6)]
         lead = groups.leads(_scored(*rows), set())
-        self.assertEqual(lead["n3"], "n3")
+        self.assertEqual(set(lead.values()), {"n0"})
 
 
 if __name__ == "__main__":
