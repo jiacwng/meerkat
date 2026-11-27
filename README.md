@@ -44,7 +44,7 @@ rows. `Group of N` classifies every open incident of its group. Tick several
 rows and press `Classify incidents` to classify them together. Each
 classification changes the queue at once.
 
-To load the next export, press `Load file` or drop the CSV on the page.
+To load the next export, press `Load file` or drop the file on the page.
 Earlier classifications count for it.
 
 ## Checking the budget
@@ -56,19 +56,18 @@ of 35.
 
 ## Your own data
 
-Meerkat reads three kinds of CSV and tells them apart by their header: the
-incident queue export of the Microsoft Defender portal, which also holds
-Microsoft Sentinel incidents; a Splunk Enterprise Security search export with
-the notable event fields `rule_id`, `_time` and `rule_name`, and optionally
-`rule_title`, `security_domain`, `disposition_label`, `src`, `dest` and
-`user`; and meerkat's own columns, those of the GUIDE dataset, `IncidentId`,
-`Timestamp` and `DetectorId`, with `IncidentGrade` for history. A word or
-column meerkat does not know stops the load with its name and row. Devices,
-accounts, addresses, files and URLs feed the similar incident inputs; without
-them the score uses rule and organisation history only.
+Meerkat reads two kinds of file. The first is the JSON that Microsoft Graph
+returns for Defender XDR incidents with their alerts,
+`GET https://graph.microsoft.com/v1.0/security/incidents?$expand=alerts`,
+saved from Graph Explorer or PowerShell. Graph answers in pages; save one
+page, or a JSON list of pages. Each alert brings its rule, its verdict and its
+evidence: devices, accounts, addresses, files and URLs. The second is a CSV in
+meerkat's own columns, those of the GUIDE dataset, `IncidentId`, `Timestamp`
+and `DetectorId`, with `IncidentGrade` for history. A word or field meerkat
+does not know stops the load with its name.
 
 ```bash
-meerkat queue incidents-queue-20261125.csv
+meerkat queue incidents.json
 ```
 
 ## How it works
@@ -87,10 +86,10 @@ reproduces both figures.
   criticality.
 - It was measured on GUIDE, one vendor's data from 2024, and not in a live SOC.
 - The sample is small at a small budget, so the interval is wide.
-- The Defender reader was written from the portal's code and one real export
-  with no classified incident. The Splunk reader was tested on rows built in a
-  local Splunk without Enterprise Security. Neither has read a classified export
-  from a live SOC. The Defender export lists devices and accounts only.
+- The Graph reader was written from Microsoft's documentation and tested on
+  GUIDE incidents rewritten in Graph's format. It has not read a file from a
+  live tenant. A file where an open or classified incident has no alert with a
+  `detectorId` is refused.
 
 ## Scripts
 
@@ -143,7 +142,7 @@ meerkat classify --file examples/classifications.csv
 | Command | What it does |
 | --- | --- |
 | `meerkat serve [FILE]` | Opens the queue as a web page on 127.0.0.1. With FILE it loads the file first. |
-| `meerkat queue [FILE]` | Scores an incident CSV and saves it as a run. Without FILE it lists the open incidents of every saved run. |
+| `meerkat queue [FILE]` | Scores an incident file and saves it as a run. Without FILE it lists the open incidents of every saved run. |
 | `meerkat details INCIDENT` | Shows one incident: score, entities, group, classification history and similar incidents. |
 | `meerkat classify INCIDENT CLASSIFICATION` | Records a classification: `tp`, `bp` or `fp`. |
 | `meerkat classify --file FILE` | Records every classification in a CSV. |
@@ -170,7 +169,6 @@ Colour is used on a terminal only. Set `NO_COLOR` to turn it off.
 | --- | --- | --- |
 | `budget` | Number of rows the team plans to read. | none |
 | `sample_share` | Share of the budget drawn at random from below it. | 0.1 |
-| `defender_tenant` | Microsoft Entra tenant id. Defender incidents loaded after it is set link to their page in the Defender portal. | none |
 
 ```bash
 meerkat config
