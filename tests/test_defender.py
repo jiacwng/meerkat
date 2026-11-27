@@ -156,20 +156,33 @@ class DefenderTests(unittest.TestCase):
         self.assertEqual(table["IncidentGrade"].to_dict(), {"1": "closed", "2": "closed"})
         self.assertEqual(table.loc["1", "Timestamp"], "2024-06-01T07:00:00Z")
 
-    def test_a_classification_counts_once_the_incident_is_resolved(self):
+    def test_a_classification_counts_as_soon_as_it_is_set_whatever_the_status(self):
         cases = (("resolved", "truePositive", "TruePositive"),
                  ("resolved", "informationalExpectedActivity", "BenignPositive"),
                  ("resolved", "falsePositive", "FalsePositive"),
+                 ("active", "truePositive", "TruePositive"),
+                 ("inProgress", "falsePositive", "FalsePositive"),
+                 ("awaitingAction", "informationalExpectedActivity", "BenignPositive"),
+                 ("redirected", "truePositive", "TruePositive"),
                  ("resolved", "unknown", "closed"),
                  ("resolved", None, "closed"),
                  ("redirected", "unknown", "closed"),
                  ("active", "unknown", ""),
                  ("inProgress", "unknown", ""),
                  ("awaitingAction", "unknownFutureValue", ""),
-                 ("active", "truePositive", ""))
-        table = self._read(*(graph_incident(str(n), status, given)
+                 ("unknownFutureValue", None, ""))
+        table = self._read(*(graph_incident(f"i{n}", status, given)
                              for n, (status, given, _) in enumerate(cases)))
         self.assertEqual(table["IncidentGrade"].tolist(), [want for *_, want in cases])
+
+    def test_an_incident_classified_while_still_active_leaves_the_queue_and_counts(self):
+        later = graph_incident("2", alerts=[graph_alert(time="2024-06-02T08:00:00Z")])
+        self._run("queue", str(self._write({"value": [graph_incident("1"), later]})))
+        self._run("queue", str(self._write({"value": [graph_incident("1", "active",
+                                                                     "truePositive")]})))
+        self.assertEqual(list(self._ranked(self.runs_dir)), ["2"])
+        record = json.loads(self._run("details", "2", "--json")[1])
+        self.assertEqual((record["rule_true_positives"], record["rule_classified"]), (1, 1))
 
     def test_a_later_file_brings_the_classification_and_closes_incidents(self):
         monday = [graph_incident(str(number)) for number in range(1, 5)]

@@ -61,8 +61,9 @@ returns for Defender XDR incidents with their alerts,
 `GET https://graph.microsoft.com/v1.0/security/incidents?$expand=alerts`,
 saved from Graph Explorer or PowerShell. Graph answers in pages; save one
 page, or a JSON list of pages. Each alert brings its rule, its verdict and its
-evidence: devices, accounts, addresses, files and URLs. The second is a CSV in
-meerkat's own columns, those of the GUIDE dataset, `IncidentId`, `Timestamp`
+evidence: devices, accounts, addresses, files and URLs. A classification
+counts as soon as it is set, and a resolved incident with no classification
+leaves the queue. The second is a CSV in meerkat's own columns, those of the GUIDE dataset, `IncidentId`, `Timestamp`
 and `DetectorId`, with `IncidentGrade` for history. A word or field meerkat
 does not know stops the load with its name.
 
