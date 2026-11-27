@@ -13,7 +13,7 @@ from pathlib import Path
 
 from meerkat import web
 from meerkat.cli import main
-from tests.fixtures import ROWS, use_weights, write_csv
+from tests.fixtures import ROWS, graph_incident, use_weights, write_csv
 
 HOSTILE = "<img src=x onerror=alert(1)>"
 
@@ -186,6 +186,24 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self._request("POST", "/api/load", self.source.read_bytes(),
                                        headers=sent)[0], 200)
         self.assertEqual(len(list(self.empty_dir.glob("*/meta.json"))), 1)
+
+    def test_the_page_loads_a_graph_json_file_and_refuses_a_broken_one_by_name(self):
+        self.server = self._serve(self.empty_dir)
+        answer = {"value": [graph_incident("7", "resolved", "truePositive"),
+                            graph_incident("8")]}
+        body = json.dumps(answer).encode("utf-16")
+        sent = {web.FILE_HEADER: "graph.json"}
+        status, _, text = self._request("POST", "/api/load", body, headers=sent)
+        self.assertEqual(status, 200, text)
+        record = json.loads(self._request("GET", "/api/queue")[2])
+        self.assertEqual(([row["IncidentId"] for row in record["queue"]], record["file"]),
+                         (["8"], "graph.json"))
+        for broken in (b"", b"{", b'{"value": [{"id": "9", "status": "closed"}]}'):
+            with self.subTest(broken):
+                status, _, text = self._request("POST", "/api/load", broken, headers=sent)
+                self.assertEqual(status, 400, text)
+                self.assertTrue(json.loads(text)["error"].startswith("graph.json: "))
+        self.assertIn('accept=".json,', self._request("GET", "/")[2])
 
     def test_a_file_that_cannot_be_read_is_refused_under_its_own_name(self):
         self.server = self._serve(self.empty_dir)

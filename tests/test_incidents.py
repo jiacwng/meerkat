@@ -169,17 +169,12 @@ class ReadIncidentsTests(unittest.TestCase):
     def test_header_missing_a_column_names_it(self):
         self.path.write_text("IncidentId,DetectorId\n1,7\n")
         self.assertEqual(self._refusal(), f"{self.path}: missing column Timestamp")
-        self.path.write_text("Incident Id,Status\n1,Active\n")
-        self.assertIn("missing column Creation time", self._refusal())
 
-    def test_a_header_of_no_known_layout_names_the_three_layouts(self):
-        for text in ("a,b\n1,2\n", "Incident name,Status\nx,Active\n"):
-            with self.subTest(text):
-                self.path.write_text(text)
-                self.assertEqual(self._refusal(),
-                                 f"{self.path}: not a Defender queue export, a Splunk search "
-                                 "export or a file with meerkat's columns IncidentId, Timestamp "
-                                 "and DetectorId")
+    def test_a_header_of_no_known_layout_names_both_layouts(self):
+        self.path.write_text("a,b\n1,2\n")
+        self.assertEqual(self._refusal(),
+                         f"{self.path}: not a Microsoft Graph incidents answer in JSON, nor a "
+                         "CSV with meerkat's columns IncidentId, Timestamp and DetectorId")
 
     def test_a_classification_word_outside_meerkats_three_is_refused(self):
         write_csv(self.path, (self._row(IncidentGrade="truePositive"),))

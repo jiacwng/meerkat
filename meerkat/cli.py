@@ -62,8 +62,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     queue = sub.add_parser("queue", help="score a file of incidents, or reopen a run")
     queue.add_argument("file", nargs="?", type=Path, metavar="FILE",
-                       help="incident CSV to score and save as a new run: a Defender queue "
-                            "export, a Splunk search export or meerkat's columns")
+                       help="incident file to score and save as a new run: the JSON "
+                            "Microsoft Graph answers for Defender incidents, or a CSV in "
+                            "meerkat's columns")
     shown = queue.add_mutually_exclusive_group()
     shown.add_argument("--limit", type=_positive, metavar="N", help="only the first N rows")
     shown.add_argument("--all", action="store_true",
@@ -104,11 +105,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     config = sub.add_parser("config", help="show the settings, or change one")
     config.add_argument("setting", nargs="?", choices=tuple(SETTINGS), metavar="SETTING",
-                        help="budget, sample_share or defender_tenant")
+                        help="budget or sample_share")
     config.add_argument("value", nargs="?", metavar="VALUE",
                         help="a whole number above 0 or none for budget, a number from 0 "
-                             "up to 1 for sample_share, the Microsoft Entra tenant id or none "
-                             "for defender_tenant")
+                             "up to 1 for sample_share")
     _add_runs_dir(config)
     config.set_defaults(handler=_config)
 
@@ -120,7 +120,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     serve = sub.add_parser("serve", help="open the queue as a web page on this machine")
     serve.add_argument("file", nargs="?", type=Path, metavar="FILE",
-                       help="incident CSV to score and save as a new run first")
+                       help="incident file to score and save as a new run first")
     serve.add_argument("--max-file-mb", type=_positive, default=200, metavar="N",
                        help="largest file the page may load, in megabytes (default 200)")
     serve.add_argument("--no-browser", action="store_true",
@@ -179,19 +179,7 @@ def _share(text: str) -> float:
     return value
 
 
-def _tenant(text: str) -> str | None:
-    from core.store import tenant_id
-
-    if text == "none":
-        return None
-    found = tenant_id(text)
-    if found is None:
-        raise argparse.ArgumentTypeError("expected a tenant id like "
-                                         "cfcdbe43-297b-4c6b-ac7e-8d7f6befb514, or none")
-    return found
-
-
-SETTINGS = {"budget": _budget, "sample_share": _share, "defender_tenant": _tenant}
+SETTINGS = {"budget": _budget, "sample_share": _share}
 
 
 def _queue(args: argparse.Namespace) -> None:
@@ -326,7 +314,7 @@ def _config(args: argparse.Namespace) -> None:
     print(_setting_line(args.setting, args.value))
 
 
-def _setting_line(name: str, value: float | str | None) -> str:
+def _setting_line(name: str, value: float | None) -> str:
     return f"{name}={str(value).lower()}"
 
 

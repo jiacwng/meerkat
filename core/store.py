@@ -4,7 +4,6 @@ import csv
 import json
 import math
 import os
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -125,19 +124,9 @@ def read_settings(runs_dir: Path) -> dict:
                     or not math.isfinite(value) or not 0 <= value < 1):
                 raise StoreError(f"{settings_file}: sample_share must be a number from 0 "
                                  "up to 1")
-        elif key == "defender_tenant":
-            if not isinstance(value, str) or tenant_id(value) != value:
-                raise StoreError(f"{settings_file}: defender_tenant must be a tenant id")
         else:
             raise StoreError(f"{settings_file}: unknown setting {key!r}")
     return settings
-
-
-def tenant_id(text: str) -> str | None:
-    try:
-        return str(uuid.UUID(text))
-    except ValueError:
-        return None
 
 
 def write_settings(runs_dir: Path, settings: dict) -> None:
