@@ -21,18 +21,6 @@ CLASSIFICATION = {
     "informationalExpectedActivity": CLASSIFICATIONS[1],
     "falsePositive": CLASSIFICATIONS[2],
 }
-EVIDENCE = {
-    "#microsoft.graph.security.deviceEvidence": {
-        "DeviceId": ("mdeDeviceId",), "DeviceName": ("deviceDnsName",)},
-    "#microsoft.graph.security.userEvidence": {
-        "AccountObjectId": ("userAccount", "azureAdUserId"),
-        "AccountSid": ("userAccount", "userSid"),
-        "AccountUpn": ("userAccount", "userPrincipalName"),
-        "AccountName": ("userAccount", "accountName")},
-    "#microsoft.graph.security.ipEvidence": {"IpAddress": ("ipAddress",)},
-    "#microsoft.graph.security.fileEvidence": {"Sha256": ("fileDetails", "sha256")},
-    "#microsoft.graph.security.urlEvidence": {"Url": ("url",)},
-}
 
 
 def read_graph(path) -> pd.DataFrame:
@@ -104,8 +92,8 @@ def _rows(incident: dict) -> list[dict]:
             if not isinstance(evidence, list):
                 raise TypeError("evidence is not a list")
             for found in evidence:
-                for column, keys in EVIDENCE.get(found.get("@odata.type"), {}).items():
-                    value = _nested(found, keys)
+                for column, value in _entities(found).items():
+                    value = value.replace(SEPARATOR, "%7C")
                     if value:
                         row[column] = SEPARATOR.join(filter(None, (row[column], value)))
             rows.append(row)
@@ -150,7 +138,23 @@ def _texts(found: dict, key: str) -> list[str]:
     return [value.strip() for value in values if value.strip()]
 
 
-def _nested(found: dict, keys: tuple[str, ...]) -> str:
-    for key in keys[:-1]:
-        found = found.get(key) or {}
-    return _text(found, keys[-1]).replace(SEPARATOR, "%7C")
+# a host and an account are compared case blind, and a host by its name without the DNS domain
+def _entities(found: dict) -> dict[str, str]:
+    match found.get("@odata.type"):
+        case "#microsoft.graph.security.deviceEvidence":
+            host = _text(found, "hostName") or _text(found, "deviceDnsName").split(".")[0]
+            return {"DeviceId": _text(found, "mdeDeviceId"), "DeviceName": host.lower()}
+        case "#microsoft.graph.security.userEvidence":
+            account = found.get("userAccount") or {}
+            return {"AccountObjectId": _text(account, "azureAdUserId"),
+                    "AccountSid": _text(account, "userSid"),
+                    "AccountUpn": _text(account, "userPrincipalName").lower(),
+                    "AccountName": _text(account, "accountName").lower()}
+        case "#microsoft.graph.security.ipEvidence":
+            return {"IpAddress": _text(found, "ipAddress")}
+        case "#microsoft.graph.security.fileEvidence":
+            return {"Sha256": _text(found.get("fileDetails") or {}, "sha256")}
+        case "#microsoft.graph.security.urlEvidence":
+            return {"Url": _text(found, "url")}
+        case _:
+            return {}
