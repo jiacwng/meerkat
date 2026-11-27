@@ -52,7 +52,7 @@ Earlier classifications count for it.
 Part of the budget is drawn at random from below it and tagged `Sample`.
 Once sample rows are classified, the page gives a 95% interval for the true
 positives left unread. In the example, one classified sample gives 0 to 31
-of 35.
+of 34.
 
 ## Your own data
 
@@ -73,7 +73,7 @@ meerkat queue incidents.json
 
 ## How it works
 
-The score is a logistic regression on eight inputs, all taken from incidents
+The score is a logistic regression on seven inputs, all taken from incidents
 earlier in time: how often the rule and the organisation were classified true
 positive, and how often the incidents sharing an entity were. The weights ship
 with the package and were fitted on Microsoft's GUIDE dataset. On the later
@@ -107,7 +107,7 @@ This prints the queue in the picture above. It ends with a summary:
 
 ```text
 OPEN           47 incidents in 46 rows, 10 listed
-BELOW BUDGET   36 rows, 1 similar TP, 7 unclassified rule
+BELOW BUDGET   36 rows, 1 similar TP, 9 unclassified rule
 ```
 
 Look at one incident:
@@ -182,12 +182,13 @@ the page:
 
 ```text
 BUDGET                10 rows
-BELOW BUDGET          35 rows, 35 incidents
+BELOW BUDGET          35 rows, 36 incidents
   similar TP          1
-  unclassified rule   4
+  unclassified rule   9
   oldest below        06-12 21:10
 SAMPLE                1 drawn, 1 classified, 0 TP
-TP BELOW BUDGET       0 to 31 of 35, 95% interval, from 1 classified
+  not sampled         2
+TP BELOW BUDGET       0 to 31 of 34, 95% interval, from 1 classified
 ```
 
 ## License
