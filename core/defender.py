@@ -23,7 +23,6 @@ CLASSIFICATION = {
 }
 
 
-
 def read_graph(path) -> pd.DataFrame:
     try:
         with open(path, "rb") as handle:
