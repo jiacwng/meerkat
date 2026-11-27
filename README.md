@@ -78,8 +78,10 @@ earlier in time: how often the rule and the organisation were classified true
 positive, and how often the incidents sharing an entity were. The weights ship
 with the package and were fitted on Microsoft's GUIDE dataset. On the later
 40% of GUIDE, the mean average precision over 718 organisations is 0.72,
-against 0.65 for rule and organisation history alone. `bench/train.py`
-reproduces both figures.
+against 0.65 for rule and organisation history alone. That gain assumes a
+verdict is known as soon as the incident starts. With verdicts a day late it
+is 0.65 against 0.62, and the median organisation gains nothing.
+`bench/train.py` and `bench/delay.py` reproduce these figures.
 
 ## Limits
 
