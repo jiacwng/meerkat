@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.incidents import CLOSED, COLUMNS, collapse
+from core.incidents import CLASSIFICATIONS, CLOSED, COLUMNS, collapse
 
 CLASSIFICATIONS_FILE = "classifications.csv"
 SETTINGS_FILE = "settings.json"
@@ -95,14 +95,14 @@ def load_history(runs_dir: Path) -> pd.DataFrame:
     newest = rows.drop_duplicates("IncidentId", keep="last").set_index("IncidentId")
     linked = rows[rows["IncidentUrl"] != ""].drop_duplicates("IncidentId", keep="last")
     links = linked.set_index("IncidentId")["IncidentUrl"]
-    closed = rows["IncidentId"].map(newest["IncidentGrade"]) == CLOSED
+    grades = _apply_classifications(runs_dir, rows, newest["IncidentGrade"])
+    closed = rows["IncidentId"].map(grades) == CLOSED
     rows = rows.loc[~closed & (rows["DetectorId"] != ""), list(COLUMNS)]
     repeated = rows["IncidentId"].duplicated(keep=False)
     if repeated.any():
         rows = pd.concat([rows[~repeated], collapse(rows[repeated])], ignore_index=True)
-    history = rows.assign(IncidentGrade=rows["IncidentId"].map(newest["IncidentGrade"]),
-                          IncidentUrl=rows["IncidentId"].map(links).fillna("").astype(str))
-    return _apply_classifications(runs_dir, history, history["IncidentId"].map(newest["loaded"]))
+    return rows.assign(IncidentGrade=rows["IncidentId"].map(grades),
+                       IncidentUrl=rows["IncidentId"].map(links).fillna("").astype(str))
 
 
 def read_settings(runs_dir: Path) -> dict:
@@ -206,17 +206,19 @@ def _read_run(runs_dir: Path, run_id: str) -> pd.DataFrame:
     return incidents
 
 
-def _apply_classifications(runs_dir: Path, incidents: pd.DataFrame,
-                           loaded: pd.Series) -> pd.DataFrame:
-    # a classification given here holds until a later file names the incident again
+def _apply_classifications(runs_dir: Path, rows: pd.DataFrame,
+                           grades: pd.Series) -> pd.Series:
+    # a classification given here holds until a later file gives the incident a verdict
     classifications = read_classifications(runs_dir)
     if classifications.empty:
-        return incidents
+        return grades
     latest = classifications.drop_duplicates("IncidentId", keep="last").set_index("IncidentId")
-    given = incidents["IncidentId"].map(latest["classification"])
-    since = incidents["IncidentId"].map(latest["time"]).fillna("")
-    return incidents.assign(
-        IncidentGrade=given.where(since >= loaded).fillna(incidents["IncidentGrade"]))
+    verdicts = rows[rows["IncidentGrade"].isin(CLASSIFICATIONS)]
+    last_verdict = verdicts.groupby("IncidentId")["loaded"].max().reindex(grades.index)
+    given = latest["classification"].reindex(grades.index)
+    since = latest["time"].reindex(grades.index)
+    held = since >= last_verdict.fillna("")
+    return given.where(held).fillna(grades)
 
 
 def _now() -> str:

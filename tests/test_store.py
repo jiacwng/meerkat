@@ -147,29 +147,62 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self._classification_of("200"), "")
         self.assertEqual(self._classification_of("103"), "FalsePositive")
 
-    def test_a_classification_given_here_holds_until_a_later_file_names_the_incident(self):
-        times = [datetime(2026, 1, day, tzinfo=UTC) for day in (1, 2, 3, 4)]
-        with mock.patch.object(store, "datetime") as clock:
-            clock.now.side_effect = times
-            store.save_run(self.runs_dir, self.incidents, "monday.csv", "defender")
-            for incident in ("200", "201"):
-                store.append_classification(self.runs_dir, incident, "TruePositive", "", 0.5,
-                                            "to read")
-            only = self.incidents[self.incidents["IncidentId"] == "200"]
-            store.save_run(self.runs_dir, only, "tuesday.csv", "defender")
-        self.assertEqual(self._classification_of("200"), "")
-        self.assertEqual(self._classification_of("201"), "TruePositive")
+    def _graded(self, grades: dict) -> pd.DataFrame:
+        incidents = self.incidents[self.incidents["IncidentId"].isin(grades)]
+        return incidents.assign(IncidentGrade=incidents["IncidentId"].map(grades))
 
-    def test_the_newer_of_a_classification_and_a_file_wins_within_one_second(self):
-        times = [datetime(2026, 1, 1, 9, 0, 0, tick, tzinfo=UTC) for tick in (1, 2, 3, 4)]
-        only = self.incidents[self.incidents["IncidentId"].isin(["200", "201"])]
+    def test_a_classification_given_here_holds_until_a_later_file_gives_a_verdict(self):
+        times = [datetime(2026, 1, day, tzinfo=UTC) for day in (1, 2, 3, 4, 5)]
         with mock.patch.object(store, "datetime") as clock:
             clock.now.side_effect = times
             store.save_run(self.runs_dir, self.incidents, "monday.csv", "defender")
             store.append_classification(self.runs_dir, "200", "TruePositive", "", 0.5, "to read")
-            store.save_run(self.runs_dir, only, "tuesday.csv", "defender")
-            store.append_classification(self.runs_dir, "201", "TruePositive", "", 0.5, "to read")
+            store.append_classification(self.runs_dir, "201", "BenignPositive", "", 0.5,
+                                        "to read")
+            store.append_classification(self.runs_dir, "202", "FalsePositive", "", 0.5,
+                                        "to read")
+            tuesday = self._graded({"100": "TruePositive", "200": "", "201": "FalsePositive"})
+            store.save_run(self.runs_dir, tuesday, "tuesday.csv", "defender")
+        self.assertEqual(self._classification_of("200"), "TruePositive")
+        self.assertEqual(self._classification_of("201"), "FalsePositive")
+        self.assertEqual(self._classification_of("202"), "FalsePositive")
+        self.assertEqual(self._classification_of("100"), "TruePositive")
+        self.assertEqual(self._classification_of("103"), "FalsePositive")
+
+    def test_a_classification_given_here_keeps_an_incident_closed_without_a_verdict(self):
+        times = [datetime(2026, 1, day, tzinfo=UTC) for day in (1, 2, 3)]
+        with mock.patch.object(store, "datetime") as clock:
+            clock.now.side_effect = times
+            store.save_run(self.runs_dir, self.incidents, "monday.csv", "defender")
+            store.append_classification(self.runs_dir, "200", "TruePositive", "", 0.5, "to read")
+            store.save_run(self.runs_dir, self._graded({"200": CLOSED, "201": CLOSED}),
+                           "tuesday.csv", "defender")
+        history = store.load_history(self.runs_dir).set_index("IncidentId")
+        self.assertEqual(history.loc["200", "IncidentGrade"], "TruePositive")
+        self.assertNotIn("201", history.index)
+
+    def test_a_verdict_after_a_classification_given_here_is_reopened_by_a_blank(self):
+        times = [datetime(2026, 1, day, tzinfo=UTC) for day in (1, 2, 3, 4)]
+        with mock.patch.object(store, "datetime") as clock:
+            clock.now.side_effect = times
+            store.save_run(self.runs_dir, self.incidents, "monday.csv", "defender")
+            store.append_classification(self.runs_dir, "200", "TruePositive", "", 0.5, "to read")
+            store.save_run(self.runs_dir, self._graded({"200": "FalsePositive"}), "tuesday.csv",
+                           "defender")
+            store.save_run(self.runs_dir, self._graded({"200": "", "201": ""}), "wednesday.csv",
+                           "defender")
         self.assertEqual(self._classification_of("200"), "")
+
+    def test_the_newer_of_a_classification_and_a_verdict_wins_within_one_second(self):
+        times = [datetime(2026, 1, 1, 9, 0, 0, tick, tzinfo=UTC) for tick in (1, 2, 3, 4)]
+        with mock.patch.object(store, "datetime") as clock:
+            clock.now.side_effect = times
+            store.save_run(self.runs_dir, self.incidents, "monday.csv", "defender")
+            store.append_classification(self.runs_dir, "200", "TruePositive", "", 0.5, "to read")
+            tuesday = self._graded({"200": "FalsePositive", "201": "FalsePositive"})
+            store.save_run(self.runs_dir, tuesday, "tuesday.csv", "defender")
+            store.append_classification(self.runs_dir, "201", "TruePositive", "", 0.5, "to read")
+        self.assertEqual(self._classification_of("200"), "FalsePositive")
         self.assertEqual(self._classification_of("201"), "TruePositive")
 
     def test_an_incident_in_one_run_comes_out_unchanged(self):
