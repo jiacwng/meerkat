@@ -223,7 +223,9 @@ class DefenderTests(unittest.TestCase):
                    graph_incident("3", "resolved", "unknown"),
                    graph_incident("4", "redirected", alerts=[], redirectIncidentId="1")]
         self._run("queue", str(self._write({"value": monday})))
-        self.assertEqual(sorted(self._ranked(self.runs_dir)), ["1", "2", "3", "4"])
+        ranked = self._ranked(self.runs_dir)
+        self.assertEqual(sorted(incident for lead, (*_, members) in ranked.items()
+                                for incident in (lead, *members)), ["1", "2", "3", "4"])
         self._run("queue", str(self._write({"value": tuesday})))
         self.assertEqual(sorted(self._ranked(self.runs_dir)), ["1"])
         record = json.loads(self._run("details", "2", "--json")[1])

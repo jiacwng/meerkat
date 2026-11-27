@@ -1,4 +1,4 @@
-# The shipped example files read, carry no placeholder ids and score through the CLI.
+# The shipped example files read and score through the CLI.
 
 import contextlib
 import io
@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from core import features, store
-from core.incidents import CLASSIFICATIONS, LINKS, SEPARATOR
+from core import store
+from core.incidents import CLASSIFICATIONS
 from meerkat.cli import main
 from tests.fixtures import read_file
 
@@ -32,13 +32,6 @@ class ExampleTests(unittest.TestCase):
         self.assertEqual(set(classifications["IncidentId"]), set(opened))
         self.assertEqual(len(classifications), len(opened))
         self.assertTrue(classifications["IncidentGrade"].isin(CLASSIFICATIONS).all())
-
-    def test_no_link_value_is_a_placeholder(self):
-        for column in LINKS:
-            values = self.incidents[column].str.split(SEPARATOR).explode()
-            counts = values[values != ""].value_counts()
-            self.assertTrue((counts / len(self.incidents)
-                             <= features.PLACEHOLDER_SHARE).all(), column)
 
     def test_incidents_split_by_alert_day_merge_back_into_the_single_file(self):
         rows = pd.read_csv(EXAMPLES / "incidents.csv", dtype=str, keep_default_na=False)

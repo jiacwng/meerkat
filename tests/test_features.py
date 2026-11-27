@@ -1,4 +1,4 @@
-# The eight inputs on hand computed histories: strictly earlier only, placeholders and the cap.
+# The eight inputs on hand computed histories: strictly earlier only, busy hosts and the cap.
 
 import math
 import unittest
@@ -102,22 +102,18 @@ class LinkTests(unittest.TestCase):
             _incident("c", 2, AccountName="alice"),
             _incident("now", 3, AccountName="alice", IpAddress="10.0.0.2"),
             _incident("later", 4, "TruePositive", AccountName="alice"),
-            _incident("x", 5), _incident("y", 6), _incident("z", 7),
         )
         self.assertEqual(similar_to(frame, "now")["IncidentId"].tolist(), ["b", "a"])
         self.assertEqual(similar_to(frame, "a")["IncidentId"].tolist(), [])
         shuffled = frame.iloc[::-1]
         self.assertEqual(similar_to(shuffled, "now")["IncidentId"].tolist(), ["b", "a"])
 
-    def test_a_value_in_more_than_half_the_incidents_is_ignored(self):
-        common = [_incident(str(i), i, "TruePositive", Url="x") for i in range(3)]
-        inputs = compute(_frame(*common, _incident("3", 3)), PRIOR)
-        self.assertEqual(inputs["similar"].tolist(), [0, 0, 0, 0])
-        self.assertEqual(inputs["has_link"].tolist(), [0.0] * 4)
-        half = [_incident(str(i), i, "TruePositive", Url="x") for i in range(2)]
-        inputs = compute(_frame(*half, _incident("2", 2), _incident("3", 3)), PRIOR)
-        self.assertEqual(inputs["similar"].tolist(), [0, 1, 0, 0])
-        self.assertEqual(inputs["has_link"].tolist(), [1.0, 1.0, 0.0, 0.0])
+    def test_a_host_on_every_incident_links_them_all(self):
+        busy = [_incident(str(i), i, "TruePositive", DeviceName="dc01") for i in range(5)]
+        inputs = compute(_frame(*busy, _incident("now", 5, DeviceName="dc01")), PRIOR)
+        self.assertEqual(inputs["similar"].tolist(), [0, 1, 2, 3, 4, 5])
+        self.assertEqual(inputs["similar_true_positive"].tolist(), [0, 1, 2, 3, 4, 5])
+        self.assertEqual(inputs["has_link"].tolist(), [1.0] * 6)
 
     def test_each_value_counts_only_the_most_recent_earlier_incidents(self):
         sharing = [_incident(f"s{i}", i, "FalsePositive", Sha256="h", Url="u")
@@ -136,11 +132,9 @@ class LinkTests(unittest.TestCase):
                       DeviceName="alice"),
             _incident("b", 1, AccountName="alice", IpAddress="10.0.0.1|10.0.0.2",
                       DeviceName="alice"),
-            _incident("c", 2),
-            _incident("d", 3),
         ), PRIOR)
-        self.assertEqual(inputs["similar"].tolist(), [0, 1, 0, 0])
-        self.assertEqual(inputs["similar_true_positive"].tolist(), [0, 1, 0, 0])
+        self.assertEqual(inputs["similar"].tolist(), [0, 1])
+        self.assertEqual(inputs["similar_true_positive"].tolist(), [0, 1])
 
     def test_a_frame_without_link_values(self):
         inputs = compute(_frame(_incident("a", 0, "TruePositive"), _incident("b", 1)), PRIOR)
@@ -153,11 +147,11 @@ class LinkTests(unittest.TestCase):
     def test_inputs_keep_the_index_and_order_of_the_frame(self):
         frame = _frame(_incident("late", 5, "TruePositive", AccountName="a"),
                        _incident("early", 1, "TruePositive", AccountName="a"),
-                       _incident("x", 2), _incident("y", 3))
-        frame.index = [10, 20, 30, 40]
+                       _incident("x", 2))
+        frame.index = [10, 20, 30]
         inputs = compute(frame, PRIOR)
-        self.assertEqual(list(inputs.index), [10, 20, 30, 40])
-        self.assertEqual(inputs["similar"].tolist(), [1, 0, 0, 0])
+        self.assertEqual(list(inputs.index), [10, 20, 30])
+        self.assertEqual(inputs["similar"].tolist(), [1, 0, 0])
         self.assertEqual(list(inputs.columns), [*INPUTS, *SIMILAR, *RULE])
 
 

@@ -15,7 +15,6 @@ SIMILAR = ("similar", "similar_true_positive", "similar_benign_positive",
 RULE = ("rule_classified", "rule_true_positives", "rule_benign_positives")
 SMOOTH = 5.0
 LINK_SMOOTH = 1.0
-PLACEHOLDER_SHARE = 0.5
 CAP = 50
 
 
@@ -105,8 +104,6 @@ def _pairs(incidents: pd.DataFrame,
            rank: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     count = len(incidents)
     entries = _entries(incidents, rank)
-    share = entries.groupby("value")["owner"].transform("size") / count
-    entries = entries[share <= PLACEHOLDER_SHARE]
     has_link = np.zeros(count, bool)
     has_link[entries["owner"]] = True
 
