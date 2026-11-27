@@ -84,7 +84,8 @@ def _rows(incident: dict) -> list[dict]:
             row.update(
                 IncidentId=number, Timestamp=_required(alert, "createdDateTime"),
                 DetectorId=_text(alert, "detectorId"), IncidentGrade=state,
-                AlertTitle=_text(alert, "title"), Category=", ".join(_texts(alert, "categories")),
+                AlertTitle=_text(alert, "title"),
+                Category=", ".join(_texts(alert, "categories")) or _text(alert, "category"),
                 Severity=_text(incident, "severity"),
                 IncidentUrl=_text(incident, "incidentWebUrl"),
                 MitreTechniques=SEPARATOR.join(_texts(alert, "mitreTechniques")))
@@ -154,6 +155,8 @@ def _entities(found: dict) -> dict[str, str]:
             return {"IpAddress": _text(found, "ipAddress")}
         case "#microsoft.graph.security.fileEvidence":
             return {"Sha256": _text(found.get("fileDetails") or {}, "sha256")}
+        case "#microsoft.graph.security.processEvidence":
+            return {"Sha256": _text(found.get("imageFile") or {}, "sha256")}
         case "#microsoft.graph.security.urlEvidence":
             return {"Url": _text(found, "url")}
         case _:
