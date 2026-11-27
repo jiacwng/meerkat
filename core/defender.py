@@ -122,13 +122,9 @@ def _state(incident: dict) -> str:
     if classification not in CLASSIFICATION:
         raise ValueError(f"classification {classification!r} is not one of "
                          f"{', '.join(CLASSIFICATION)}")
-    match status:
-        case "redirected":
-            return CLOSED
-        case "resolved":
-            return CLASSIFICATION[classification] or CLOSED
-        case _:
-            return ""
+    if CLASSIFICATION[classification]:
+        return CLASSIFICATION[classification]
+    return CLOSED if status in ("resolved", "redirected") else ""
 
 
 def _text(found: dict, key: str) -> str:
