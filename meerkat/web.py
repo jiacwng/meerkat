@@ -127,7 +127,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _keep(self, body: bytes, name: str) -> dict:
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "incidents.csv"
+            path = Path(folder) / ("incidents.json" if name.lower().endswith(".json")
+                                   else "incidents.csv")
             path.write_bytes(body)
             try:
                 _, run = records.load(self.server.runs_dir, path, name)

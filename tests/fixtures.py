@@ -1,4 +1,4 @@
-# A small incident CSV in GUIDE's column names, shared by the tests.
+# A small incident CSV in GUIDE's column names and Microsoft Graph incidents, shared by the tests.
 
 import csv
 import json
@@ -69,6 +69,27 @@ def budget_rows() -> tuple:
     rows += [plain_row(f"h{i}", "3", time=f"2024-06-10T00:{i:02d}:00Z") for i in range(3)]
     rows += [plain_row(f"l{i}", "9", time=f"2024-06-10T01:{i:02d}:00Z") for i in range(8)]
     return tuple(rows)
+
+
+def graph_alert(detector: str | None = "7", time: str = "2024-06-01T08:00:00.1234567Z",
+                **extra) -> dict:
+    return {"id": "da637", "incidentId": "1", "detectorId": detector, "createdDateTime": time,
+            "firstActivityDateTime": time, "title": "Suspicious sign in",
+            "categories": ["InitialAccess"], "severity": "medium",
+            "mitreTechniques": ["T1078"], "classification": None, "status": "new",
+            "evidence": [{"@odata.type": "#microsoft.graph.security.userEvidence",
+                          "userAccount": {"accountName": "alice", "userSid": None}}],
+            **extra}
+
+
+def graph_incident(number: str, status: str = "active", classification: str | None = "unknown",
+                   alerts: list | None = None, **extra) -> dict:
+    return {"id": number, "displayName": "Sign in from an unusual place",
+            "createdDateTime": "2024-06-01T07:00:00Z", "status": status,
+            "classification": classification, "determination": "unknown",
+            "severity": "medium",
+            "incidentWebUrl": f"https://security.microsoft.com/incidents/{number}",
+            "alerts": [graph_alert()] if alerts is None else alerts, **extra}
 
 
 def read_file(path: Path):
