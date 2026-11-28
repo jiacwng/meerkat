@@ -14,6 +14,7 @@ from meerkat.cli import main
 from tests.fixtures import graph_alert, graph_incident, use_weights
 
 EXAMPLE = Path(__file__).parent.parent / "examples" / "incidents.csv"
+GRAPH_EXAMPLE = Path(__file__).parent / "graph_example.json"
 WORDS = {name: word for word, name in defender.CLASSIFICATION.items() if name}
 ENTITIES = {
     "DeviceId": ("deviceEvidence", "mdeDeviceId", None),
@@ -136,6 +137,26 @@ class DefenderTests(unittest.TestCase):
              "AccountSid": "S-1-5-21-1", "AccountUpn": "bob@contoso.com",
              "AccountName": "alice|bob", "IpAddress": "10.0.0.5", "Sha256": "ab" * 32,
              "Url": "https://x.example/a"})
+
+    def test_microsofts_documented_answer_reads_every_column(self):
+        row = defender.read_graph(GRAPH_EXAMPLE).set_index("IncidentId").loc["29"]
+        self.assertEqual(
+            row.to_dict(),
+            {"Timestamp": "2026-01-22T12:09:22Z",
+             "DetectorId": "da88ec89-31c5-4864-8609-dce36e65bbc4",
+             "IncidentGrade": "TruePositive",
+             "AlertTitle": "A WMI event filter was bound to a suspicious event consumer",
+             "Category": "Persistence", "Severity": "high",
+             "IncidentUrl": "https://security.microsoft.com/incident2/29/overview"
+                            "?tid=cfcdbe43-297b-4c6b-ac7e-8d7f6befb514",
+             "MitreTechniques": "T1546.003",
+             "DeviceId": "335b3ef544f5d3690b6c75c776dc3e52bb3485c4",
+             "DeviceName": "w11pro-test", "AccountObjectId": "",
+             "AccountSid": "S-1-5-21-2144799004-2815524614-4183675894-1001",
+             "AccountUpn": "", "AccountName": "adminlocal",
+             "IpAddress": "fe80::8505:87aa:de7a:4c9f",
+             "Sha256": "0ff6f2c94bc7e2833a5f7e16de1622e5dba70396f31c7d5f56381870317e8c46",
+             "Url": ""})
 
     def test_a_host_and_an_account_link_across_case_and_dns_domain(self):
         device = "#microsoft.graph.security.deviceEvidence"

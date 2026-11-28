@@ -17,3 +17,14 @@ second, and GUIDE's placeholder ids for missing values are left blank.
   Paper    https://arxiv.org/abs/2407.09017
   License  Community Data License Agreement, Permissive, Version 2.0
            https://cdla.dev/permissive-2-0/
+
+Microsoft Graph documentation
+-----------------------------
+
+`tests/graph_example.json` is the example response of "List incidents",
+example 2, copied unchanged from the Microsoft Graph documentation
+(api-reference/v1.0/api/security-list-incidents.md).
+
+  Source   https://github.com/microsoftgraph/microsoft-graph-docs-contrib
+  License  Creative Commons Attribution 4.0 International
+           https://creativecommons.org/licenses/by/4.0/
